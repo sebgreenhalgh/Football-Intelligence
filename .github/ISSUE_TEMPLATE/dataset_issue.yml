@@ -1,0 +1,47 @@
+name: Dataset issue
+description: Bad annotation, missing match, wrong metadata, or suspected ground-truth error.
+title: "[dataset] "
+labels: ["dataset"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please **do not** open a PR that edits annotation files directly — dataset fixes land as batched re-releases. File the issue here with enough detail for us to reproduce and validate.
+        For privacy / consent concerns (identifiable player, etc.), please email <atom.james.scott@gmail.com> instead.
+  - type: input
+    id: match_id
+    attributes:
+      label: Match ID
+      description: e.g. `117093`
+    validations:
+      required: true
+  - type: dropdown
+    id: annotation_type
+    attributes:
+      label: Annotation type
+      options:
+        - GSR
+        - BAS
+        - MOT
+        - Video / raw
+        - Metadata (pitch, calibration, etc.)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-is-wrong
+    attributes:
+      label: What is wrong?
+      description: Be concrete — frame index, event timestamp, field name, expected vs actual value.
+      placeholder: |
+        File: gsr/117093/117093_1st.json
+        Frame 12480, track_id 7: `role = "goalkeeper"`, should be `"player"` (this track is the striker wearing #9).
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshot, video frame range, or reasoning. Best-effort is fine.
+    validations:
+      required: false

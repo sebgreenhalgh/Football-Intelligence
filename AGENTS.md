@@ -6,11 +6,13 @@ The **journal paper** lives in a separate private repo, [`AtomScott/soccertrack-
 
 ## What this repo is
 
-Three things:
+Five things:
 
 1. **Dataset tooling** — `src/`, `scripts/`, `notebooks/`. Pipelines that build the SoccerTrack v2 ground truth from raw BePro panoramic recordings.
-2. **Public landing page + developer docs** — `docs/`. Served via GitHub Pages at <https://atomscott.github.io/SoccerTrack-v2/>.
-3. **Public release artefacts** — eventually: download scripts, dataset card, baselines, evaluation utilities. See [`docs/TODO.md`](docs/TODO.md).
+2. **Public landing page + developer docs** — `docs/`. Served via GitHub Pages at <https://atomscott.github.io/SoccerTrack-v2/>. Includes [`docs/leaderboard.html`](docs/leaderboard.html), [`docs/format-gsr.md`](docs/format-gsr.md), [`docs/format-bas.md`](docs/format-bas.md).
+3. **Dataset loader + evaluation CLIs** — `src/data_utils/soccertrack_v2.py`, `src/evaluation/{gs_hota,bas_map,mot_hota}.py`. Zero-ceremony access to annotations + reference metrics.
+4. **Baseline starter kits** — `baselines/{gsr,bas,mot}/`. Thin scaffolds (config + train + eval) that define the submission flow.
+5. **Public release artefacts** — LICENSE / LICENSE-DATA, CONTRIBUTING.md, CI under `.github/workflows/`, issue templates. See [`docs/TODO.md`](docs/TODO.md) for what remains.
 
 ## Working in public
 

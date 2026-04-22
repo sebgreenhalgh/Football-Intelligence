@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Paper questions
+    url: https://arxiv.org/abs/2508.01802
+    about: Questions about methodology or results — please cite the paper when filing a related issue.
+  - name: Dataset download help
+    url: https://huggingface.co/datasets/atomscott/soccertrack-v2
+    about: Dataset access issues — check the Hugging Face page first.
+  - name: SoccerTrack Challenge 2025 (MOT)
+    url: https://sites.google.com/g.sp.m.is.nagoya-u.ac.jp/stc2025
+    about: Challenge-specific questions — use the challenge site.
+  - name: Private disclosure (ethics / privacy)
+    url: mailto:atom.james.scott@gmail.com
+    about: For privacy or consent concerns about data contents, email the maintainer rather than opening a public issue.

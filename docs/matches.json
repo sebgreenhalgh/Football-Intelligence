@@ -1,0 +1,17 @@
+{
+  "description": "Per-match metadata for SoccerTrack v2. Populated as matches are released. Fields: match_id, date (ISO YYYY-MM-DD), weather, location, kickoff_local, duration_min, team_left, team_right (anonymised labels), gsr_frames, bas_events.",
+  "schema_version": 1,
+  "updated": "2026-04-22",
+  "matches": [
+    { "match_id": "117091", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "A1", "team_right": "A2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117092", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "B1", "team_right": "B2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117093", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "C1", "team_right": "C2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117094", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "D1", "team_right": "D2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117095", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "E1", "team_right": "E2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117096", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "F1", "team_right": "F2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117097", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "G1", "team_right": "G2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117098", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "H1", "team_right": "H2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117099", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "I1", "team_right": "I2", "gsr_frames": null, "bas_events": null },
+    { "match_id": "117100", "date": null, "weather": null, "location": null, "kickoff_local": null, "duration_min": null, "team_left": "J1", "team_right": "J2", "gsr_frames": null, "bas_events": null }
+  ]
+}

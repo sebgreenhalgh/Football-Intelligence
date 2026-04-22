@@ -13,17 +13,21 @@ A full-pitch, multi-view soccer dataset for **Game State Reconstruction (GSR)**,
 
 ```
 .
-├── docs/          # public landing page (GitHub Pages) + developer docs
-├── src/           # core Python modules (calibration, tracking, data utils, ...)
+├── docs/          # public landing page (GitHub Pages) + developer docs + leaderboards
+├── src/           # core Python modules (calibration, tracking, data_utils, evaluation, ...)
 ├── scripts/       # shell pipeline + one-off Python scripts
 ├── shell_scripts/ # additional shell helpers
+├── baselines/     # minimal starter kits for GSR / BAS / MOT
 ├── configs/       # configuration files
-├── notebooks/     # Jupyter notebooks
+├── notebooks/     # Jupyter notebooks (quickstart + analyses)
 ├── diagrams/      # architecture / pipeline diagrams
 ├── pyproject.toml # dependencies (managed by uv)
 ├── uv.lock        # pinned lockfile
 ├── Makefile       # serve docs, format
 ├── AGENTS.md      # working rules (workflow, conventions, commands)
+├── CONTRIBUTING.md# how external contributors land a change
+├── LICENSE        # MIT (code)
+├── LICENSE-DATA   # CC BY 4.0 (dataset)
 └── TODO.md        # → docs/TODO.md
 ```
 
@@ -64,6 +68,11 @@ Stage-by-stage scripts live under `scripts/` (`trim_video_into_halves.sh`, `conv
 
 | Topic | Doc |
 |---|---|
+| Quickstart notebook | [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) |
+| GSR annotation format | [`docs/format-gsr.md`](docs/format-gsr.md) |
+| BAS annotation format | [`docs/format-bas.md`](docs/format-bas.md) |
+| Baseline starter kits | [`baselines/README.md`](baselines/README.md) |
+| Leaderboards | [`docs/leaderboard.html`](docs/leaderboard.html) |
 | Project setup | [`docs/setup.md`](docs/setup.md) |
 | CLI reference | [`docs/cli.md`](docs/cli.md) |
 | Configuration | [`docs/configuration.md`](docs/configuration.md) |
@@ -85,7 +94,7 @@ Live checklist: [`docs/TODO.md`](docs/TODO.md) (dataset release, format docs, la
 
 ## Contributing
 
-PRs welcome. Please skim [`AGENTS.md`](AGENTS.md) first — it covers the git workflow and conventions.
+PRs welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and skim [`AGENTS.md`](AGENTS.md) — together they cover the git workflow, issue triage, and code conventions.
 
 ## Citation
 
@@ -105,7 +114,10 @@ The journal version (Pattern Analysis and Applications) is in preparation; bibte
 
 ## License
 
-To be added (currently unset — tracked in [`docs/TODO.md`](docs/TODO.md)). Until a `LICENSE` file is committed, treat the contents as **all rights reserved**.
+- **Code** (this repo's source code, landing page, scripts, loaders, baselines): [MIT](LICENSE).
+- **Dataset** (videos + GSR / BAS / MOT annotations, distributed via Hugging Face and Google Drive): [CC BY 4.0](LICENSE-DATA).
+
+Both permit commercial use. Please cite the paper if you use the dataset in research.
 
 ## Contact
 

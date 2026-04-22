@@ -1,0 +1,37 @@
+name: Bug report
+description: Code, loader, or evaluation script is broken.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you run, what did you expect, and what actually happened?
+      placeholder: |
+        I ran `python -m src.evaluation.gs_hota --pred pred.json --gt gt.json` expecting a score, and got:
+        Traceback ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Smallest command or snippet that reproduces the issue. If it needs a specific match, tell us which match_id.
+      render: bash
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit / version
+      description: Output of `git rev-parse --short HEAD` or the tag/release.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Python version, OS, GPU (if relevant). `uv run python -VV` output is fine.
+    validations:
+      required: false

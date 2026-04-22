@@ -1,0 +1,7 @@
+{
+  "task": "BAS",
+  "metric": "mAP@1s",
+  "description": "Ball Action Spotting across 12 classes. Primary metric is tight (1s) mAP; loose (5s) mAP reported as secondary.",
+  "updated": "2026-04-22",
+  "entries": []
+}

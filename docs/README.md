@@ -14,6 +14,9 @@ This directory holds two things:
 | [`task-gsr.html`](task-gsr.html) | Game State Reconstruction task description. |
 | [`task-bas.html`](task-bas.html) | Ball Action Spotting task description. |
 | [`task-mot.html`](task-mot.html) | Multi-Object Tracking task description (SoccerTrack Challenge 2025). |
+| [`leaderboard.html`](leaderboard.html) | Public leaderboards for GSR / BAS / MOT (JSON-driven, client-side rendered). |
+| [`leaderboards/*.json`](leaderboards/) | Per-task leaderboard data. Edit these to submit results via PR. |
+| [`matches.json`](matches.json) | Per-match metadata table (date, weather, stats). |
 | [`assets/`](assets/) | Images and demo MP4s referenced from the HTML. |
 
 ### View locally
@@ -40,8 +43,8 @@ Pipeline references for ground-truth creation and processing:
 
 ## Format specifications
 
-- `format-gsr.md` — *to be written* ([dataset TODO](TODO.md#annotation-format-docs))
-- `format-bas.md` — *to be written*
+- [`format-gsr.md`](format-gsr.md) — GSR JSON schema, pitch coordinate system, time alignment.
+- [`format-bas.md`](format-bas.md) — BAS JSON schema, 12-class label set, time alignment.
 
 ## Open work
 

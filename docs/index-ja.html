@@ -279,8 +279,9 @@
             <div class="badges">
                 <a href="https://arxiv.org/abs/2508.01802" class="badge">📄 Paper (arXiv)</a>
                 <a href="https://github.com/AtomScott/SoccerTrack-v2" class="badge">📦 GitHub</a>
-                <a href="https://sites.google.com/g.sp.m.is.nagoya-u.ac.jp/stc2025" class="badge">🏆 Challenge (STC
-                    2025)</a>
+                <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" class="badge">🤗 Hugging Face</a>
+                <a href="leaderboard.html" class="badge">🏁 リーダーボード</a>
+                <a href="https://sites.google.com/g.sp.m.is.nagoya-u.ac.jp/stc2025" class="badge">🏆 Challenge (STC 2025)</a>
                 <a href="https://drive.google.com/drive/folders/1N2Qx2qkFgRtpbHitl2Vh6sLVYGgqkWwn?usp=sharing"
                     class="badge">💾 Google Drive</a>
             </div>
@@ -542,29 +543,52 @@ pip install -r requirements-dev.txt</code></pre>
             <section id="license">
                 <h2>ライセンス & 利用規約</h2>
                 <p>
-                    SoccerTrack v2は<strong>MITライセンス</strong>の下で公開されています。本データセットは大学倫理委員会の承認を得て収集され、すべてのデータは匿名化されています。
+                    GitHub リポジトリ内の<strong>コード</strong>は
+                    <a href="https://github.com/AtomScott/SoccerTrack-v2/blob/main/LICENSE" style="color: #10b981;">MIT ライセンス</a>、
+                    <strong>データセット</strong>（映像および各種アノテーション）は
+                    <a href="https://github.com/AtomScott/SoccerTrack-v2/blob/main/LICENSE-DATA" style="color: #10b981;">CC BY 4.0</a>
+                    で公開されています。いずれも帰属表示のもと、学術利用・商用利用ともに自由です。
                 </p>
                 <ul style="margin-left: 2rem; margin-top: 1rem;">
                     <li>選手名は含まれておらず、背番号ベースの識別のみです</li>
                     <li>すべての試合は、インフォームドコンセントを得た大学レベルのアマチュア選手によるものです</li>
-                    <li>学術研究および商用利用のいずれも自由に利用可能です</li>
+                    <li>大学倫理委員会の承認を得て収集</li>
                 </ul>
-                <p style="margin-top: 1rem;">
-                    詳細については<a href="https://github.com/AtomScott/SoccerTrack-v2/blob/main/LICENSE"
-                        style="color: #10b981;">LICENSE</a>ファイルをご覧ください。
-                </p>
             </section>
 
             <section id="citation">
                 <h2>引用</h2>
                 <p>本データセットを研究で使用する場合は、以下を引用してください：</p>
-                <pre><code>@article{soccertrack_v2_2025,
-  title={SoccerTrack v2: A Full-Pitch Multi-View Soccer Dataset for Game State Reconstruction},
-  author={Scott, Atom and others},
-  journal={arXiv preprint arXiv:2508.01802},
-  year={2025},
-  url={https://arxiv.org/abs/2508.01802}
+                <pre id="bibtex-ja"><code>@article{scott2025soccertrackv2,
+  title   = {{SoccerTrack v2}: A Full-Pitch Multi-View Soccer Dataset for Game State Reconstruction},
+  author  = {Scott, Atom and Uchida, Ikuma and Kuroda, Kento and Kim, Yufi and Fujii, Keisuke},
+  journal = {arXiv preprint arXiv:2508.01802},
+  year    = {2025},
+  url     = {https://arxiv.org/abs/2508.01802}
 }</code></pre>
+                <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button id="bibtex-copy-ja" class="btn" style="padding: 0.6rem 1.2rem; cursor: pointer;">BibTeX をコピー</button>
+                    <a href="https://arxiv.org/abs/2508.01802" class="btn btn-secondary" style="padding: 0.6rem 1.2rem;">arXiv</a>
+                </div>
+                <p style="margin-top: 0.75rem; font-size: 0.9rem; color: #666;">
+                    Pattern Analysis and Applications 投稿版は準備中です。採択後に BibTeX を更新します。
+                </p>
+                <script>
+                    (function () {
+                        var btn = document.getElementById('bibtex-copy-ja');
+                        var src = document.getElementById('bibtex-ja');
+                        if (!btn || !src) return;
+                        btn.addEventListener('click', function () {
+                            var text = src.innerText;
+                            var done = function () { btn.textContent = 'コピーしました'; setTimeout(function () { btn.textContent = 'BibTeX をコピー'; }, 1500); };
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(text).then(done, function () { var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done(); });
+                            } else {
+                                var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done();
+                            }
+                        });
+                    })();
+                </script>
             </section>
 
             <section id="acknowledgements">

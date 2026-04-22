@@ -1,0 +1,38 @@
+SoccerTrack v2 Dataset Licence
+==============================
+
+The SoccerTrack v2 *dataset* — comprising the panoramic 4K videos and the
+associated GSR, BAS, and MOT annotation files distributed via Hugging Face
+(https://huggingface.co/datasets/atomscott/soccertrack-v2) and Google Drive —
+is released under the Creative Commons Attribution 4.0 International licence
+(CC BY 4.0).
+
+Full licence text: https://creativecommons.org/licenses/by/4.0/legalcode
+
+In short, you are free to:
+  - Share   — copy and redistribute the material in any medium or format
+  - Adapt   — remix, transform, and build upon the material
+  for any purpose, even commercially, **under the following terms**:
+
+  - Attribution — you must give appropriate credit, provide a link to the
+    licence, and indicate if changes were made. When you use the dataset in
+    academic work, please cite the SoccerTrack v2 paper (see README.md).
+
+No additional restrictions — you may not apply legal terms or technological
+measures that legally restrict others from doing anything the licence permits.
+
+Ethics & consent
+----------------
+
+SoccerTrack v2 was collected with approval from the university ethics board,
+covering university-level amateur matches under informed consent. No player
+names are included; identification is jersey-number based only. If you
+identify a privacy, ethics, or consent issue with any released match, please
+open an issue on the public GitHub repository so the maintainers can respond.
+
+Source code
+-----------
+
+The *source code* in this repository (loaders, baselines, evaluation scripts,
+landing page, etc.) is licensed separately under the MIT License — see the
+LICENSE file.

@@ -1,0 +1,36 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  link-check:
+    name: link check (docs/*.md, README.md)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Only check markdown files (HTML pages pull in a lot of third-party links that rate-limit CI).
+          args: >-
+            --no-progress
+            --accept '200..=299,429'
+            --exclude 'localhost'
+            --exclude '127.0.0.1'
+            './docs/**/*.md'
+            './README.md'
+            './CONTRIBUTING.md'
+          fail: true

@@ -1,0 +1,7 @@
+{
+  "task": "MOT",
+  "metric": "HOTA",
+  "description": "Multi-Object Tracking on panoramic video. Lead metric HOTA; IDF1, MOTA reported.",
+  "updated": "2026-04-22",
+  "entries": []
+}

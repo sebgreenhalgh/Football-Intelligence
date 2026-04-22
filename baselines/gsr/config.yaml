@@ -1,0 +1,29 @@
+# GSR baseline config — edit paths, leave structure.
+data:
+  root: ./data                         # SoccerTrack v2 snapshot root
+  train_matches: [117091, 117092, 117093, 117094, 117095, 117096, 117097]
+  val_matches:   [117098]
+  test_matches:  [117099, 117100]      # held out for the paper
+
+detector:
+  name: yolov8s
+  weights: null                        # set to a path to fine-tuned weights
+  conf_thresh: 0.35
+  iou_thresh: 0.55
+  imgsz: 1280
+
+tracker:
+  name: bytetrack
+  match_thresh: 0.8
+  track_buffer: 30
+
+reid:
+  name: clip-reid
+  weights: null
+
+homography:
+  source: per_match_mapxy              # use raw/<match>/<match>_mapx.npy + mapy.npy
+
+eval:
+  metric: gs-hota                      # via src.evaluation.gs_hota
+  out: ./outputs/gsr_baseline/scores.json

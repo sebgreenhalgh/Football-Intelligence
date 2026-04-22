@@ -270,8 +270,9 @@
             <div class="badges">
                 <a href="https://arxiv.org/abs/2508.01802" class="badge">📄 Paper (arXiv)</a>
                 <a href="https://github.com/AtomScott/SoccerTrack-v2" class="badge">📦 GitHub</a>
-                <a href="https://sites.google.com/g.sp.m.is.nagoya-u.ac.jp/stc2025" class="badge">🏆 Challenge (STC
-                    2025)</a>
+                <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" class="badge">🤗 Hugging Face</a>
+                <a href="leaderboard.html" class="badge">🏁 Leaderboards</a>
+                <a href="https://sites.google.com/g.sp.m.is.nagoya-u.ac.jp/stc2025" class="badge">🏆 Challenge (STC 2025)</a>
                 <a href="https://drive.google.com/drive/folders/1N2Qx2qkFgRtpbHitl2Vh6sLVYGgqkWwn?usp=sharing"
                     class="badge">💾 Google Drive</a>
             </div>
@@ -552,44 +553,83 @@
 cd SoccerTrack-v2
 pip install -r requirements-dev.txt</code></pre>
 
-                <h3 style="color: #10b981; margin-top: 1.5rem; margin-bottom: 0.5rem;">3. Visualize Tracking Data</h3>
-                <pre><code>python -m src.main command=plot-coordinates-on-video \
-  plot_coordinates_on_video.match_id=117093</code></pre>
+                <h3 style="color: #10b981; margin-top: 1.5rem; margin-bottom: 0.5rem;">3. Load + plot one frame</h3>
+                <pre><code>from src.data_utils.soccertrack_v2 import load_match
+match = load_match("./data", match_id="117093")
+for p in match.gsr_frames(half=1)[0].entities:
+    print(p.track_id, p.role, p.jersey_number, p.x, p.y)</code></pre>
+                <p style="margin-top: 0.75rem;">
+                    Full runnable example:
+                    <a href="https://github.com/AtomScott/SoccerTrack-v2/blob/main/notebooks/quickstart.ipynb"
+                        style="color: #10b981;">notebooks/quickstart.ipynb</a>.
+                    Format reference:
+                    <a href="format-gsr.md" style="color: #10b981;">format-gsr.md</a>,
+                    <a href="format-bas.md" style="color: #10b981;">format-bas.md</a>.
+                </p>
 
-                <p style="margin-top: 1rem;">
-                    See the <code>scripts/</code> directory for data preprocessing pipelines, feature extraction,
-                    model training configurations, and evaluation benchmarks. All experiments are fully reproducible.
+                <h3 style="color: #10b981; margin-top: 1.5rem; margin-bottom: 0.5rem;">4. Evaluate</h3>
+                <pre><code>python -m src.evaluation.gs_hota  --pred preds/gsr --gt data/gsr --matches 117099 117100
+python -m src.evaluation.bas_map  --pred preds/bas --gt data/bas --matches 117099 117100
+python -m src.evaluation.mot_hota --pred preds/mot --gt data/mot --matches 117099 117100</code></pre>
+                <p style="margin-top: 0.75rem;">
+                    Starter kits:
+                    <a href="https://github.com/AtomScott/SoccerTrack-v2/tree/main/baselines"
+                        style="color: #10b981;">baselines/{gsr,bas,mot}/</a>.
+                    Submit numbers to the <a href="leaderboard.html" style="color: #10b981;">leaderboard</a>.
                 </p>
             </section>
 
             <section id="license">
                 <h2>License & Terms of Use</h2>
                 <p>
-                    SoccerTrack v2 is released under the <strong>MIT License</strong>. The dataset has been collected
-                    with approval from the university ethics board, and all data has been de-identified.
+                    <strong>Code</strong> in the GitHub repository is released under the
+                    <a href="https://github.com/AtomScott/SoccerTrack-v2/blob/main/LICENSE" style="color: #10b981;">MIT License</a>.
+                    The <strong>dataset</strong> (videos and annotations) is released under
+                    <a href="https://github.com/AtomScott/SoccerTrack-v2/blob/main/LICENSE-DATA" style="color: #10b981;">CC BY 4.0</a>.
+                    Both permit academic and commercial use, with attribution.
                 </p>
                 <ul style="margin-left: 2rem; margin-top: 1rem;">
                     <li>No player names are included; identification is jersey-number based only</li>
                     <li>All matches feature university-level amateur players with informed consent</li>
-                    <li>Free for both academic research and commercial use</li>
+                    <li>Collected with approval from the university ethics board</li>
                 </ul>
-                <p style="margin-top: 1rem;">
-                    Please see the <a href="https://github.com/AtomScott/SoccerTrack-v2/blob/main/LICENSE"
-                        style="color: #10b981;">LICENSE</a>
-                    file for full details.
-                </p>
             </section>
 
             <section id="citation">
                 <h2>Citation</h2>
                 <p>If you use this dataset in your research, please cite:</p>
-                <pre><code>@article{soccertrack_v2_2025,
-  title={SoccerTrack v2: A Full-Pitch Multi-View Soccer Dataset for Game State Reconstruction},
-  author={Scott, Atom and others},
-  journal={arXiv preprint arXiv:2508.01802},
-  year={2025},
-  url={https://arxiv.org/abs/2508.01802}
+                <pre id="bibtex"><code>@article{scott2025soccertrackv2,
+  title   = {{SoccerTrack v2}: A Full-Pitch Multi-View Soccer Dataset for Game State Reconstruction},
+  author  = {Scott, Atom and Uchida, Ikuma and Kuroda, Kento and Kim, Yufi and Fujii, Keisuke},
+  journal = {arXiv preprint arXiv:2508.01802},
+  year    = {2025},
+  url     = {https://arxiv.org/abs/2508.01802}
 }</code></pre>
+                <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button id="bibtex-copy" class="btn" style="padding: 0.6rem 1.2rem; cursor: pointer;">Copy BibTeX</button>
+                    <a href="https://arxiv.org/abs/2508.01802" class="btn btn-secondary" style="padding: 0.6rem 1.2rem;">arXiv</a>
+                </div>
+                <p style="margin-top: 0.75rem; font-size: 0.9rem; color: #666;">
+                    Journal version (Pattern Analysis and Applications) in preparation. BibTeX will be updated on acceptance.
+                </p>
+                <script>
+                    (function () {
+                        var btn = document.getElementById('bibtex-copy');
+                        var src = document.getElementById('bibtex');
+                        if (!btn || !src) return;
+                        btn.addEventListener('click', function () {
+                            var text = src.innerText;
+                            var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy BibTeX'; }, 1500); };
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(text).then(done, function () {
+                                    var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done();
+                                });
+                            } else {
+                                var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); done();
+                            }
+                        });
+                    })();
+                </script>
             </section>
 
             <section id="acknowledgements">

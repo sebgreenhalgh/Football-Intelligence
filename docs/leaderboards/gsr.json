@@ -1,0 +1,7 @@
+{
+  "task": "GSR",
+  "metric": "GS-HOTA",
+  "description": "Game State Reconstruction. Lead metric is GS-HOTA (SoccerNet). DetA, AssA, LocA reported for decomposition.",
+  "updated": "2026-04-22",
+  "entries": []
+}

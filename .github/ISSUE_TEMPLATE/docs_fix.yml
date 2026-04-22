@@ -1,0 +1,24 @@
+name: Docs fix
+description: Broken link, outdated instruction, or unclear explanation in docs/ or the landing page.
+title: "[docs] "
+labels: ["docs"]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page / file
+      description: URL or path (e.g. `docs/setup.md`, `docs/index.html`, `docs/format-gsr.md`).
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested fix (optional)
+    validations:
+      required: false
