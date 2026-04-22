@@ -56,11 +56,17 @@ python -m src.main command=<command-name> [options]
 
 The project includes shell scripts for common operations:
 
-1. **Create Ground Truth with Fixed Bounding Boxes**
+1. **Create ground truth end-to-end**
    ```bash
-   ./scripts/create_ground_truth_fixed_bboxes.sh <match_id> [--no-ids]
+   ./scripts/create_ground_truth.sh <match_id> [<match_id> ...]
    ```
-   Create and visualize ground truth MOT files.
+   Runs the full ground-truth pipeline (video trim → coord conversion → calibration → detection → bbox generation) for one or more matches. See [`data_processing.md`](data_processing.md) for the per-step scripts.
+
+2. **Download the dataset from Hugging Face**
+   ```bash
+   ./scripts/download.sh --dest ./data --match 117099 --match 117100
+   ```
+   Thin wrapper around `huggingface-cli` / `hf` with per-match filtering and revision pinning.
 
 ## Configuration Options
 

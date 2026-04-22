@@ -168,6 +168,37 @@
             text-decoration: underline;
         }
         
+        .kit-box {
+            background: #ecfdf5;
+            border-left: 4px solid #10b981;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+
+        .kit-box .btn-row {
+            margin-top: 0.75rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .kit-box a.btn-kit {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: #10b981;
+            color: white;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .kit-box a.btn-kit.alt {
+            background: #fff;
+            color: #10b981;
+            border: 1px solid #10b981;
+        }
+
         .action-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -266,53 +297,49 @@
             
             <section id="layout">
                 <h2>File Layout</h2>
-                <pre><code>production/
+                <pre><code>SoccerTrack-v2/
 ├── videos/
-│   ├── 117093.mp4
+│   ├── 117093/
+│   │   ├── 117093_panorama_1st_half.mp4
+│   │   └── 117093_panorama_2nd_half.mp4
 │   └── ...
 ├── gsr/
 ├── bas/
 │   ├── 117093/
-│   │   └── 117093.json
-│   ├── 117094/
-│   │   └── 117094.json
+│   │   └── 117093_12_class_events.json
 │   └── ...
 ├── mot/
 └── raw/
-    ├── 117093/
-    │   ├── 117093_12_class_events.json    # Original BePro events
-    │   └── ...
     └── ...</code></pre>
-                
+
                 <p>
-                    Each match has <strong>one annotation file</strong> in its own directory containing all ball action events. 
-                    Original BePro event files are preserved in <code>raw/</code> for reference.
+                    Each match ships <strong>one BAS annotation file covering both halves</strong>. The <code>gameTime</code> field encodes which half each event belongs to.
+                </p>
+                <p>
+                    See <a href="format-bas.md">format-bas.md</a> for the full schema reference.
                 </p>
             </section>
             
             <section id="schema">
                 <h2>Schema & SoccerNet Mapping</h2>
-                
+
                 <h3>Example JSON Structure</h3>
                 <pre><code>{
-  "match_id": "117093",
-  "fps": 25.0,
-  "actions": [
+  "UrlLocal": "117093",
+  "UrlYoutube": null,
+  "annotations": [
     {
-      "time": 12.5,
-      "event_class": "Pass",
+      "gameTime": "1 - 12:30",
+      "position": "750000",
+      "label": "Pass",
       "team": "left",
-      "player_id": 10
-    },
-    {
-      "time": 45.2,
-      "event_class": "Shot",
-      "team": "right",
-      "player_id": 7
+      "player_id": "117093_L_9",
+      "visibility": "visible"
     },
     ...
   ]
 }</code></pre>
+                <p><code>position</code> is milliseconds from kickoff of the half encoded in <code>gameTime</code>, not from match start. Convert to a frame index with <code>round(int(position) / 40)</code> at 25&nbsp;fps.</p>
 
                 <h3>SoccerNet BAS Correspondence</h3>
                 <table>
@@ -351,16 +378,28 @@
             <section id="evaluation">
                 <h2>Evaluation / Metrics</h2>
                 <p>
-                    Evaluation uses <strong>Average-mAP</strong> at various temporal tolerances (e.g., ±1s, ±2s), 
-                    following the SoccerNet Ball Action Spotting Challenge.
+                    Evaluation uses tolerant <strong>mean Average Precision</strong>, following the
+                    SoccerNet Ball Action Spotting Challenge. Report two tolerances:
                 </p>
                 <ul>
-                    <li><strong>Tight tolerance:</strong> ±0.5s (precise detection)</li>
-                    <li><strong>Loose tolerance:</strong> ±2s (event detection)</li>
+                    <li><strong>mAP@1s</strong> — tight (precise temporal localisation)</li>
+                    <li><strong>mAP@5s</strong> — loose (event-level detection)</li>
                 </ul>
-                <p>
-                    <em>Official devkit: Coming soon</em>
-                </p>
+                <p>Reference CLI:</p>
+                <pre><code>python -m src.evaluation.bas_map \
+    --pred preds/bas --gt data/bas --matches 117099 117100 \
+    --tolerances 1 5</code></pre>
+            </section>
+
+            <section id="starter-kit">
+                <h2>Starter Kit</h2>
+                <div class="kit-box">
+                    <strong>Get running fast.</strong> The BAS starter kit scaffolds clip features (MViT/I3D/CLIP) + a temporal spotter (T-DEED / ASTRA) with tolerant-mAP evaluation wired in.
+                    <div class="btn-row">
+                        <a class="btn-kit" href="https://github.com/AtomScott/SoccerTrack-v2/tree/main/baselines/bas">📦 baselines/bas/</a>
+                        <a class="btn-kit alt" href="leaderboard.html">🏁 Leaderboard</a>
+                    </div>
+                </div>
             </section>
             
             <section id="differences">

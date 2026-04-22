@@ -512,10 +512,59 @@
             <section id="download">
                 <h2>データセットのダウンロード</h2>
                 <div class="download-section">
-                    <p><strong>お好みのプラットフォームを選択してください：</strong></p>
-                    <div style="text-align: center; margin-top: 1.5rem;">
+                    <p><strong>メイン：</strong> Hugging Face が正規の配布元です。Google Drive はミラーで、反映が遅れる場合があります。</p>
+                    <div style="text-align: center; margin-top: 1rem; margin-bottom: 1.5rem;">
+                        <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" class="btn">🤗 Hugging Face</a>
                         <a href="https://drive.google.com/drive/folders/1N2Qx2qkFgRtpbHitl2Vh6sLVYGgqkWwn?usp=sharing"
-                            class="btn">💾 Google Drive</a>
+                            class="btn btn-secondary">💾 Google Drive（ミラー）</a>
+                    </div>
+                    <p style="margin-top: 1rem;"><strong>コマンドライン：</strong> リポジトリをクローンして、リビジョン固定・試合ID指定が可能なヘルパーを利用できます。</p>
+                    <pre><code># 全試合をダウンロード
+./scripts/download.sh --dest ./data
+
+# 評価用試合のみ
+./scripts/download.sh --dest ./data --match 117099 --match 117100</code></pre>
+                </div>
+            </section>
+
+            <section id="developer-docs">
+                <h2>開発者向けドキュメント</h2>
+                <p>ローダー・パイプライン・フォーマット仕様のドキュメント：</p>
+                <div class="features">
+                    <div class="feature">
+                        <h3>フォーマット</h3>
+                        <ul>
+                            <li><a href="format-gsr.md">format-gsr.md</a> — GSR JSON スキーマとピッチ座標系</li>
+                            <li><a href="format-bas.md">format-bas.md</a> — BAS JSON スキーマと12クラスラベル</li>
+                        </ul>
+                    </div>
+                    <div class="feature">
+                        <h3>タスク</h3>
+                        <ul>
+                            <li><a href="task-gsr.html">Game State Reconstruction</a></li>
+                            <li><a href="task-bas.html">Ball Action Spotting</a></li>
+                            <li><a href="task-mot.html">Multi-Object Tracking</a></li>
+                        </ul>
+                    </div>
+                    <div class="feature">
+                        <h3>パイプライン</h3>
+                        <ul>
+                            <li><a href="setup.md">setup.md</a> — 環境構築</li>
+                            <li><a href="cli.md">cli.md</a> — コマンドライン</li>
+                            <li><a href="configuration.md">configuration.md</a> — 設定リファレンス</li>
+                            <li><a href="data_processing.md">data_processing.md</a></li>
+                            <li><a href="ground_truth_creation.md">ground_truth_creation.md</a></li>
+                            <li><a href="visualization.md">visualization.md</a></li>
+                            <li><a href="calibration.md">calibration.md</a></li>
+                        </ul>
+                    </div>
+                    <div class="feature">
+                        <h3>問題の報告</h3>
+                        <ul>
+                            <li><a href="https://github.com/AtomScott/SoccerTrack-v2/issues/new?template=dataset_issue.yml&labels=dataset">データセットの問題</a>（アノテーション・メタデータ）</li>
+                            <li><a href="https://github.com/AtomScott/SoccerTrack-v2/issues/new?template=bug.yml">コードのバグ</a></li>
+                            <li><a href="https://github.com/AtomScott/SoccerTrack-v2/issues/new?template=docs_fix.yml">ドキュメントの修正</a></li>
+                        </ul>
                     </div>
                 </div>
             </section>

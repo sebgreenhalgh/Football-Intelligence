@@ -11,9 +11,9 @@ Paper tasks live in the private companion repo [`AtomScott/soccertrack-v2-paper`
   - [x] **Data**: CC BY 4.0 — see [`LICENSE-DATA`](../LICENSE-DATA).
   - [x] **Code**: MIT — see [`LICENSE`](../LICENSE).
 - [x] Add a top-level `LICENSE` file in the repo ([`LICENSE`](../LICENSE) + [`LICENSE-DATA`](../LICENSE-DATA)).
-- [ ] Provide a `download.sh` (or HF snapshot script) that fetches all matches with checksums.
+- [x] Provide a `download.sh` (or HF snapshot script) that fetches all matches — [`scripts/download.sh`](../scripts/download.sh) (wraps `hf` / `huggingface-cli`, supports `--match` filter + `--revision` pin).
 - [ ] Publish per-match SHA256 checksums (`docs/checksums.txt` or in the dataset card).
-- [ ] Document the canonical train/val/test split (or note "no canonical split"). *Note: baseline starter kits currently use `[91..97] / 98 / 99,100]` — promote this into prose once confirmed.*
+- [ ] Document the canonical train/val/test split (or note "no canonical split"). *Note: baseline starter kits currently use `[91..97] / 98 / 99,100]` — promote this into prose once confirmed. Provisional split now committed in the paper's `02_dataset.tex`.*
 - [x] Add a per-match metadata table skeleton ([`docs/matches.json`](matches.json)) — fields still to be filled in for each match.
 
 ## Annotation format docs
@@ -30,7 +30,7 @@ Paper tasks live in the private companion repo [`AtomScott/soccertrack-v2-paper`
 - [x] Quickstart notebook — [`notebooks/quickstart.ipynb`](../notebooks/quickstart.ipynb).
 - [x] Baseline starter kits — [`baselines/{gsr,bas,mot}/`](../baselines/).
 - [x] Evaluation CLIs — `python -m src.evaluation.{gs_hota,bas_map,mot_hota}`.
-- [ ] Hugging Face `datasets` loader script (alongside the Python loader).
+- [~] Hugging Face snapshot helper — [`src/data_utils/load_from_hf.py`](../src/data_utils/load_from_hf.py) (wraps `snapshot_download`; good enough for most users). A full `datasets.load_dataset(...)` loading script is still wanted.
 - [ ] Fill in real GSR baseline numbers (train + eval + commit to [`docs/leaderboards/gsr.json`](leaderboards/gsr.json)).
 - [ ] Fill in real BAS baseline numbers (commit to [`docs/leaderboards/bas.json`](leaderboards/bas.json)).
 - [ ] Fill in a real MOT baseline (commit to [`docs/leaderboards/mot.json`](leaderboards/mot.json)).
@@ -38,30 +38,35 @@ Paper tasks live in the private companion repo [`AtomScott/soccertrack-v2-paper`
 ## Landing page (`docs/index.html`, `docs/index-ja.html`)
 
 - [ ] Confirm GitHub Pages is enabled on the **public** `AtomScott/SoccerTrack-v2` repo and that `https://atomscott.github.io/SoccerTrack-v2/` serves the current `docs/`.
-- [ ] Replace Google Drive link with the canonical Hugging Face download once the HF dataset is live.
+- [x] Promote Hugging Face as primary, Google Drive as mirror; added `scripts/download.sh` snippet (EN + JA).
 - [ ] Replace arXiv badge link with the published DOI badge once PAA accepts.
 - [ ] Confirm `assets/og-image.jpg` matches the v2 brand (currently a 117 KB JPG).
 - [ ] Sanity-check JA translations against the latest EN copy (drift will accumulate as we update).
 - [x] Add a "Cite" widget with copy-to-clipboard BibTeX (both EN + JA pages).
 - [x] Add per-task leaderboard placeholders — [`docs/leaderboard.html`](leaderboard.html).
+- [x] Cross-link developer markdown docs and issue templates from both EN + JA landing pages.
 
 ## Task pages (`docs/task-{gsr,bas,mot}.html`)
 
-- [ ] Verify each task page links back to `index.html` and to the relevant external challenge.
-- [ ] Add a "Download starter kit" link per task — point to `baselines/{gsr,bas,mot}/`.
+- [x] Verify each task page links back to `index.html` and to the relevant external challenge.
+- [x] Add a "Download starter kit" link per task — point to `baselines/{gsr,bas,mot}/`. Also added a "Reference CLI" eval snippet on each.
+- [x] Fix stale schema examples on `task-gsr.html` and `task-bas.html` (now match `format-{gsr,bas}.md`; file layout corrected to per-half GSR JSONs).
 - [ ] Mirror task pages in Japanese (currently EN-only).
 
 ## Markdown docs (`docs/*.md`)
 
 - [x] Update `docs/README.md` to list landing-page entry points — EN/JA index, task pages, leaderboard, format specs.
-- [ ] Confirm `setup.md`, `cli.md`, `configuration.md`, `data_processing.md`, `ground_truth_creation.md`, `visualization.md`, `calibration.md` are all accurate against the current code in `src/` and `scripts/`.
-- [ ] Cross-link the markdown docs from `index.html` (right now they're orphaned from the landing page).
+- [~] Accuracy audit of dev-docs against current code:
+  - [x] `setup.md` rewritten to match uv + pyproject.toml workflow; removed references to non-existent `requirements.txt`, `.env.example`, `download_sample_data.py`, `verify_setup.py`.
+  - [x] `cli.md`: replaced stale `create_ground_truth_fixed_bboxes.sh` reference with real `create_ground_truth.sh`; added `download.sh` entry.
+  - [ ] `configuration.md`, `data_processing.md`, `ground_truth_creation.md`, `visualization.md`, `calibration.md` — still need a spot-check pass against `src/` and `scripts/`.
+- [x] Cross-link the markdown docs from `index.html` and `index-ja.html` (dedicated "Developer Docs" / "開発者向けドキュメント" section).
 
 ## Issue / community handling
 
 - [x] Add issue templates under `.github/ISSUE_TEMPLATE/` (bug, dataset issue, docs fix, feature request).
 - [x] Add a `CONTRIBUTING.md` linking to the relevant TODO files.
-- [ ] Add a "report a problem with the dataset" channel (issue label or a Google Form linked from `docs/index.html`). *Partial: `dataset` label is suggested by the dataset-issue template; still need to surface it from the landing page.*
+- [x] Add a "report a problem with the dataset" channel — dedicated "Report a problem" cards (EN + JA) on the landing page deep-link to the `dataset_issue.yml` template with the `dataset` label pre-applied.
 
 ## Local dev / CI
 

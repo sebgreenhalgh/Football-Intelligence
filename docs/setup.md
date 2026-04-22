@@ -1,134 +1,101 @@
 # Project Setup
 
-This guide walks through the setup process for SoccerTrack-V2.
+This guide walks through the setup process for SoccerTrack v2.
 
 ## Prerequisites
 
 - Python 3.12 or higher
+- [`uv`](https://docs.astral.sh/uv/) (used to manage the virtualenv and lockfile)
 - Git
 - FFmpeg (for video processing)
-- OpenCV dependencies
 
-## Installation Steps
+## Installation
 
-1. **Clone the Repository**
+1. **Clone the repository**
+
    ```bash
-   git clone https://github.com/YourUsername/SoccerTrack-V2.git
-   cd SoccerTrack-V2
+   git clone https://github.com/AtomScott/SoccerTrack-v2.git
+   cd SoccerTrack-v2
    ```
 
-2. **Create a Virtual Environment**
+2. **Create the environment and install dependencies**
+
+   The project is uv-managed. `uv sync` creates a `.venv/` and installs the
+   pinned dependencies from `pyproject.toml` + `uv.lock`.
+
    ```bash
-   python -m venv env
-   source env/bin/activate  # On Windows: env\Scripts\activate
+   uv sync
+   source .venv/bin/activate  # macOS / Linux
+   # .venv\Scripts\activate   # Windows
    ```
 
-3. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+   Alternatively, run commands without activating: `uv run python -m src.main ...`.
 
-## Project Structure Setup
+## Download the dataset
 
-1. **Create Required Directories**
-   ```bash
-   mkdir -p data/{raw,interim,processed}
-   mkdir -p data/interim/{events,tracking,calibrated_video}
-   mkdir -p models
-   ```
+Use the helper script to fetch from Hugging Face (`atomscott/soccertrack-v2`):
 
-2. **Configure Environment**
-   ```bash
-   # Copy example environment file
-   cp .env.example .env
-   
-   # Edit .env with your settings
-   nano .env
-   ```
-
-## Data Setup
-
-1. **Download Sample Data**
-   ```bash
-   # Download sample match data
-   python scripts/download_sample_data.py
-   ```
-
-2. **Verify Installation**
-   ```bash
-   # Run test command
-   python -m src.main command=process-raw-data match_id=117093
-   ```
-
-## Development Setup
-
-1. **Install Development Dependencies**
-   ```bash
-   pip install -r requirements-dev.txt
-   ```
-
-2. **Configure Pre-commit Hooks**
-   ```bash
-   pre-commit install
-   ```
-
-3. **Setup Ruff**
-   ```bash
-   # Install ruff
-   pip install ruff
-   
-   # Run formatter
-   ruff format .
-   ```
-
-## Common Issues
-
-### FFmpeg Installation
-
-#### Ubuntu/Debian
 ```bash
-sudo apt update
-sudo apt install ffmpeg
+./scripts/download.sh --dest ./data                                    # full dataset
+./scripts/download.sh --dest ./data --match 117099 --match 117100      # subset
 ```
 
-#### macOS
-```bash
-brew install ffmpeg
+`--revision` pins a dataset tag / commit; see `scripts/download.sh --help` for
+full usage. The Hugging Face CLI (installed with `huggingface_hub`) is
+required.
+
+## Verify installation
+
+Run a quick load against the freshly downloaded data:
+
+```python
+from src.data_utils.soccertrack_v2 import load_match
+m = load_match("./data", match_id="117099")
+frames = m.gsr_frames(half=1)
+print(len(frames), "GSR frames in 1st half")
+print(len(m.bas_events()), "BAS events")
 ```
 
-#### Windows
-Download from [FFmpeg website](https://ffmpeg.org/download.html)
+See [`../notebooks/quickstart.ipynb`](../notebooks/quickstart.ipynb) for a
+fuller runnable example.
 
-### OpenCV Dependencies
+## Development setup
 
-#### Ubuntu/Debian
+Dev dependencies (lint, test, notebooks) are declared in the `dev` optional
+group:
+
 ```bash
-sudo apt update
-sudo apt install python3-opencv
+uv sync --group dev
 ```
 
-#### macOS
+Format and lint with ruff (wrapper in the Makefile):
+
 ```bash
-brew install opencv
+make format   # ruff autofix on src/
 ```
 
-## Verification
+## Common issues
 
-Run the verification script to check your setup:
-```bash
-python scripts/verify_setup.py
+### FFmpeg installation
+
+- **Ubuntu / Debian**: `sudo apt install ffmpeg`
+- **macOS**: `brew install ffmpeg`
+- **Windows**: download from <https://ffmpeg.org/download.html>
+
+### Accessing the dataset from code
+
+If you prefer to let the loader fetch from Hugging Face on demand rather than
+running `download.sh` first:
+
+```python
+from src.data_utils.load_from_hf import load_match_from_hf
+m = load_match_from_hf("117099")
 ```
 
-This will check:
-- Python version
-- Required dependencies
-- Directory structure
-- FFmpeg installation
-- OpenCV installation
-- Environment configuration
+`snapshot_download` caches under `HF_HOME` so repeat calls are free.
 
-## Next Steps
+## Next steps
 
-1. Read the [Configuration Guide](configuration.md)
-2. Try the [Quick Start](../README.md#quick-start) examples
-3. Explore the [Command Line Interface](cli.md) 
+1. Read the [Configuration Guide](configuration.md).
+2. Browse [`../notebooks/quickstart.ipynb`](../notebooks/quickstart.ipynb).
+3. Explore the [CLI reference](cli.md).

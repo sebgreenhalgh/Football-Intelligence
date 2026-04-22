@@ -141,6 +141,37 @@
             margin: 1rem 0;
             border-radius: 4px;
         }
+
+        .kit-box {
+            background: #ecfdf5;
+            border-left: 4px solid #10b981;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+
+        .kit-box .btn-row {
+            margin-top: 0.75rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .kit-box a.btn-kit {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: #10b981;
+            color: white;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .kit-box a.btn-kit.alt {
+            background: #fff;
+            color: #10b981;
+            border: 1px solid #10b981;
+        }
         
         ul {
             margin-left: 2rem;
@@ -251,16 +282,16 @@
             
             <section id="layout">
                 <h2>File Layout</h2>
-                <pre><code>production/
+                <pre><code>SoccerTrack-v2/
 ├── videos/
-│   ├── 117093.mp4
-│   ├── 117094.mp4
+│   ├── 117093/
+│   │   ├── 117093_panorama_1st_half.mp4
+│   │   └── 117093_panorama_2nd_half.mp4
 │   └── ...
 ├── gsr/
 │   ├── 117093/
-│   │   └── 117093.json
-│   ├── 117094/
-│   │   └── 117094.json
+│   │   ├── 117093_1st.json
+│   │   └── 117093_2nd.json
 │   └── ...
 ├── bas/
 ├── mot/
@@ -271,39 +302,31 @@
     │   ├── 117093_mapy.npy
     │   └── ...
     └── ...</code></pre>
-                
+
                 <p>
-                    Each match has <strong>one annotation file</strong> in its own directory. 
-                    Unlike SoccerNet-GSR which uses <code>img1/</code> for image frames, we reference the video directly 
-                    from <code>videos/</code> to save storage space.
+                    Each match ships <strong>one GSR annotation file per half</strong>. Unlike SoccerNet-GSR which stores image frames under <code>img1/</code>, we reference the trimmed half videos directly from <code>videos/</code> to save storage space.
+                </p>
+                <p>
+                    See <a href="format-gsr.md">format-gsr.md</a> for the full schema reference and pitch coordinate system.
                 </p>
             </section>
             
             <section id="schema">
                 <h2>Schema & SoccerNet Mapping</h2>
-                
-                <h3>Example JSON Structure</h3>
+
+                <h3>Example JSON Record</h3>
+                <p>Each half's file is a flat JSON array of per-entity-per-frame records. One record:</p>
                 <pre><code>{
-  "match_id": "117093",
-  "fps": 25.0,
-  "annotations": [
-    {
-      "frame": 0,
-      "time": 0.0,
-      "objects": [
-        {
-          "player_id": 1,
-          "x": 52.5,
-          "y": 34.0,
-          "role": "player",
-          "team_side": "left",
-          "jersey_number": 10
-        },
-        ...
-      ]
-    },
-    ...
-  ]
+  "image_id": 12480,
+  "track_id": 7,
+  "player_id": "117092_L_9",
+  "role": "player",
+  "jersey_number": 9,
+  "team_side": "left",
+  "x": 48.21,
+  "y": 34.07,
+  "bbox_image": [1840, 710, 108, 242],
+  "bbox_pitch":  [46.8, 33.1, 1.4, 2.0]
 }</code></pre>
 
                 <h3>SoccerNet-GSR Correspondence</h3>
@@ -348,12 +371,32 @@
             <section id="evaluation">
                 <h2>Evaluation / Metrics</h2>
                 <p>
-                    Evaluation uses <strong>GS-HOTA</strong> (Game State Higher Order Tracking Accuracy), 
-                    following the SoccerNet-GSR Challenge definition.
+                    Evaluation uses <strong>GS-HOTA</strong> (Game State Higher Order Tracking Accuracy),
+                    following the SoccerNet-GSR Challenge definition. Report GS-HOTA plus the
+                    DetA / AssA / LocA decomposition.
                 </p>
                 <p>
-                    <em>Official devkit: Coming soon</em>
+                    Reference CLI:
                 </p>
+                <pre><code>python -m src.evaluation.gs_hota \
+    --pred preds/gsr --gt data/gsr --matches 117099 117100</code></pre>
+                <p>
+                    The module is a thin wrapper over the upstream
+                    <a href="https://github.com/SoccerNet/sn-gamestate">sn-gamestate</a> scorer.
+                </p>
+            </section>
+
+            <section id="starter-kit">
+                <h2>Starter Kit</h2>
+                <div class="kit-box">
+                    <strong>Get running fast.</strong> The GSR starter kit scaffolds
+                    detection → tracking → jersey/role tagging → pitch projection into a runnable
+                    pipeline on one GPU. Fill in the model calls, then run eval.
+                    <div class="btn-row">
+                        <a class="btn-kit" href="https://github.com/AtomScott/SoccerTrack-v2/tree/main/baselines/gsr">📦 baselines/gsr/</a>
+                        <a class="btn-kit alt" href="leaderboard.html">🏁 Leaderboard</a>
+                    </div>
+                </div>
             </section>
             
             <section id="differences">

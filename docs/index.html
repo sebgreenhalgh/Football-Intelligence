@@ -534,10 +534,59 @@
             <section id="download">
                 <h2>Download Dataset</h2>
                 <div class="download-section">
-                    <p><strong>Choose your preferred platform:</strong></p>
-                    <div style="text-align: center; margin-top: 1.5rem;">
+                    <p><strong>Primary:</strong> Hugging Face. Mirrors may lag — HF is the canonical source.</p>
+                    <div style="text-align: center; margin-top: 1rem; margin-bottom: 1.5rem;">
+                        <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" class="btn">🤗 Hugging Face</a>
                         <a href="https://drive.google.com/drive/folders/1N2Qx2qkFgRtpbHitl2Vh6sLVYGgqkWwn?usp=sharing"
-                            class="btn">💾 Google Drive</a>
+                            class="btn btn-secondary">💾 Google Drive (mirror)</a>
+                    </div>
+                    <p style="margin-top: 1rem;"><strong>Scripted:</strong> clone the repo and run the helper, which pins a revision and can filter by match.</p>
+                    <pre><code># full dataset
+./scripts/download.sh --dest ./data
+
+# held-out test matches only
+./scripts/download.sh --dest ./data --match 117099 --match 117100</code></pre>
+                </div>
+            </section>
+
+            <section id="developer-docs">
+                <h2>Developer Docs</h2>
+                <p>In-repo documentation for loaders, pipelines, and task formats:</p>
+                <div class="features">
+                    <div class="feature">
+                        <h3>Formats</h3>
+                        <ul>
+                            <li><a href="format-gsr.md">format-gsr.md</a> — GSR JSON schema, pitch coordinate system</li>
+                            <li><a href="format-bas.md">format-bas.md</a> — BAS JSON schema, 12-class label set</li>
+                        </ul>
+                    </div>
+                    <div class="feature">
+                        <h3>Tasks</h3>
+                        <ul>
+                            <li><a href="task-gsr.html">Game State Reconstruction</a></li>
+                            <li><a href="task-bas.html">Ball Action Spotting</a></li>
+                            <li><a href="task-mot.html">Multi-Object Tracking</a></li>
+                        </ul>
+                    </div>
+                    <div class="feature">
+                        <h3>Pipelines</h3>
+                        <ul>
+                            <li><a href="setup.md">setup.md</a> — environment setup</li>
+                            <li><a href="cli.md">cli.md</a> — command-line interface</li>
+                            <li><a href="configuration.md">configuration.md</a> — config reference</li>
+                            <li><a href="data_processing.md">data_processing.md</a></li>
+                            <li><a href="ground_truth_creation.md">ground_truth_creation.md</a></li>
+                            <li><a href="visualization.md">visualization.md</a></li>
+                            <li><a href="calibration.md">calibration.md</a></li>
+                        </ul>
+                    </div>
+                    <div class="feature">
+                        <h3>Report a problem</h3>
+                        <ul>
+                            <li><a href="https://github.com/AtomScott/SoccerTrack-v2/issues/new?template=dataset_issue.yml&labels=dataset">Dataset issue</a> (annotation / metadata)</li>
+                            <li><a href="https://github.com/AtomScott/SoccerTrack-v2/issues/new?template=bug.yml">Code bug</a></li>
+                            <li><a href="https://github.com/AtomScott/SoccerTrack-v2/issues/new?template=docs_fix.yml">Docs fix</a></li>
+                        </ul>
                     </div>
                 </div>
             </section>
