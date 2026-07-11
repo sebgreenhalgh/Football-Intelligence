@@ -1,0 +1,38 @@
+schema_version: m5.match.v1
+match_id: "128058"
+match_root_uri: matches/128058
+legacy_roots:
+  step1g_root_uri: matches/128058/calibration/step1_visual_reconstruction/step1g1_visual_reconstruction_validation
+  m3t_root_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets
+  m4_root_uri: matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package
+  raw_video_root_uri: matches/128058/videos
+  manual_decision_root_uri: matches/128058/manual_review
+safety:
+  visual_only_warning: VISUAL_ONLY_NOT_METRIC
+  production_ready: false
+  no_auto_promotion: true
+  human_approved: false
+  match_local_only: true
+  safe_to_apply_globally: false
+  requires_future_match_validation: true
+  no_identity_tracking_performed: true
+  no_player_slots_assigned: true
+  no_goalkeeper_slots_assigned: true
+  no_expected_22_role_states: true
+  no_exact_count_forcing: true
+  no_metric_event_tactical_or_physical_performance_analysis: true
+  official_referee_exclusion_performed: false
+  bad_detection_rows_deleted: false
+  do_not_use_for_metrics: true
+  sandbox_only: true
+  identity_tracking_performed: false
+  player_slots_assigned: false
+  goalkeeper_slots_assigned: false
+  expected_22_role_states_created: false
+  exact_22_forcing_performed: false
+  exact_two_goalkeeper_forcing_performed: false
+  metric_analysis_performed: false
+  event_analysis_performed: false
+  tactical_analysis_performed: false
+  physical_performance_analysis_performed: false
+  auto_promoted: false

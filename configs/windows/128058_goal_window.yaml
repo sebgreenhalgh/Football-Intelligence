@@ -1,0 +1,41 @@
+schema_version: m5.window.v1
+match_id: "128058"
+window_id: goal_window
+source_clip_id: 128058_h1_1882_2062
+source_artifact_uri: matches/128058/clips/128058_half1_1882s_2062s_720p.mp4
+period: first_half
+start_timestamp_seconds: 25.0
+end_timestamp_seconds: 70.0
+start_frame: 625
+end_frame: 1748
+sampling_rate_hz: 10.0
+window_artifact_uri: matches/128058/frames/goal_window_stage3c_hq_short
+safety:
+  visual_only_warning: VISUAL_ONLY_NOT_METRIC
+  production_ready: false
+  no_auto_promotion: true
+  human_approved: false
+  match_local_only: true
+  safe_to_apply_globally: false
+  requires_future_match_validation: true
+  no_identity_tracking_performed: true
+  no_player_slots_assigned: true
+  no_goalkeeper_slots_assigned: true
+  no_expected_22_role_states: true
+  no_exact_count_forcing: true
+  no_metric_event_tactical_or_physical_performance_analysis: true
+  official_referee_exclusion_performed: false
+  bad_detection_rows_deleted: false
+  do_not_use_for_metrics: true
+  sandbox_only: true
+  identity_tracking_performed: false
+  player_slots_assigned: false
+  goalkeeper_slots_assigned: false
+  expected_22_role_states_created: false
+  exact_22_forcing_performed: false
+  exact_two_goalkeeper_forcing_performed: false
+  metric_analysis_performed: false
+  event_analysis_performed: false
+  tactical_analysis_performed: false
+  physical_performance_analysis_performed: false
+  auto_promoted: false

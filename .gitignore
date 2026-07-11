@@ -26,7 +26,7 @@ Thumbs.db
 *.pfx
 
 # Large/generated football artifacts
-matches/
+/matches/
 data/
 outputs/
 overlays/

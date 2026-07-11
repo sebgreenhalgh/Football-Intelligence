@@ -53,6 +53,16 @@ make serve-docs      # serve docs/ at http://localhost:8000
 make format          # ruff autofix on src/
 ```
 
+## M5 visual-only infrastructure
+
+The M5 macro-stage begins with read-only infrastructure for safe replay and validation. It separates the repository root from the external artifact root, then writes canonical baseline captures under `matches/128058/runs/step_m5/02_infrastructure_hardening/runs`. This stage does not rebuild Step1G, M3T, M4, raw-video, or manual-decision artifacts, and it keeps the baseline `VISUAL_ONLY_NOT_METRIC`, `production_ready=false`, `no_auto_promotion=true`, and `human_approved=false`.
+
+```bash
+fi-pipeline config validate --config configs/pipeline/visual_only_v1.yaml --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence>
+fi-pipeline baseline capture --config configs/pipeline/visual_only_v1.yaml --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence> --legacy-m4-root <artifact-root>/matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package
+fi-pipeline baseline validate --run-dir <artifact-root>/matches/128058/runs/step_m5/02_infrastructure_hardening/runs/<generated_m5_baseline_run_id> --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence>
+```
+
 ## Ground-truth pipeline
 
 The toolkit produces per-match ground truth from raw BePro panoramic recordings. Full details in [`docs/ground_truth_creation.md`](docs/ground_truth_creation.md). One-shot:

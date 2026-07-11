@@ -1,0 +1,128 @@
+schema_version: m5.replay.m4.v1
+replay_id: 128058_goal_window_m4_replay_v1
+match_id: "128058"
+window_id: goal_window
+pipeline_config_uri: configs/pipeline/visual_only_v1.yaml
+match_config_uri: configs/matches/128058.yaml
+window_config_uri: configs/windows/128058_goal_window.yaml
+stage_uri: matches/128058/runs/step_m5/03_m4_repeatability
+run_parent_uri: matches/128058/runs/step_m5/03_m4_repeatability/runs
+canonical_baseline_run_uri: matches/128058/runs/step_m5/02_infrastructure_hardening/runs/m5_baseline_20260711T125508Z_325fa715
+control_baseline_run_uri: matches/128058/runs/step_m5/02_infrastructure_hardening/runs/m5_baseline_20260711T125442Z_9ffc1b65
+preserved_m4_root_uri: matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package
+expected_headline_semantic_hash: dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e
+expected_structured_content_hash: 6b7db49e662a39eab7c860c4d0c36dc5617d80b7f8cd7a4a63ad2037e3ca3149
+expected_baseline_config_set_hash: 7e87ac30ce1ee514995985644d8925edde714a1c33aa1277bab21c371f5e5e9a
+output_package_relative_uri: reconstructed_m4
+frozen_inputs:
+  - artifact_id: m3t.handoff_manifest
+    kind: m3t_governance
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_handoff_manifest.json
+    parser: json
+    ordering_policy: document
+    source_stage: step2m3t
+    reason_required_by_m4: M4 freeze gate validates future-handoff readiness.
+  - artifact_id: m3t.review_progress_summary
+    kind: m3t_governance
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_review_progress_summary.json
+    parser: json
+    ordering_policy: document
+    source_stage: step2m3t
+    reason_required_by_m4: M4 requires completed persisted sparse-pathlet review state.
+  - artifact_id: m3t.validation_summary
+    kind: m3t_governance
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_validation_summary.json
+    parser: json
+    ordering_policy: document
+    source_stage: step2m3t
+    reason_required_by_m4: M4 propagates M3T validation and safety gates.
+  - artifact_id: m3t.reviewed_sparse_pathlet_decisions
+    kind: m3t_human_decisions
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_reviewed_sparse_pathlet_decisions.json
+    parser: json
+    ordering_policy: rows
+    source_stage: step2m3t
+    reason_required_by_m4: M4 binds exactly the 40 persisted M3T human decisions.
+  - artifact_id: m3t.sparse_pathlets
+    kind: m3t_structured_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_sparse_visual_continuity_pathlets.json
+    parser: json
+    ordering_policy: rows
+    source_stage: step2m3t
+    reason_required_by_m4: M4 handoff pathlets are derived from sparse pathlet rows.
+  - artifact_id: m3t.selected_sparse_edges
+    kind: m3t_structured_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_selected_sparse_visual_continuity_edges.jsonl.gz
+    parser: jsonl.gz
+    ordering_policy: jsonl_gzip_rows
+    source_stage: step2m3t
+    reason_required_by_m4: M4 handoff edge rows are derived from selected sparse edges.
+  - artifact_id: m3t.topology_quarantined_edges
+    kind: m3t_structured_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_topology_quarantined_edges.jsonl.gz
+    parser: jsonl.gz
+    ordering_policy: jsonl_gzip_rows
+    source_stage: step2m3t
+    reason_required_by_m4: M4 summary records topology-quarantined edge count.
+  - artifact_id: m1.human_corrected_edge_rows
+    kind: m1_structured_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m1_visual_continuity_sandbox/step2m1_human_corrected_visual_continuity_edge_rows.jsonl.gz
+    parser: jsonl.gz
+    ordering_policy: jsonl_gzip_rows
+    source_stage: step2m1
+    reason_required_by_m4: Current artifact tree has no M1 node-row file; this existing M1 structured source is tracked to prevent silent substitution.
+  - artifact_id: preserved_m4.pathlets
+    kind: preserved_m4_structured_baseline
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package/step2m4_sparse_handoff_pathlets.json
+    parser: json
+    ordering_policy: rows
+    source_stage: step2m4
+    reason_required_by_m4: Isolated current-package reconstruction source for legacy-format pathlets.
+  - artifact_id: preserved_m4.edges
+    kind: preserved_m4_structured_baseline
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package/step2m4_sparse_handoff_edges.jsonl.gz
+    parser: jsonl.gz
+    ordering_policy: jsonl_gzip_rows
+    source_stage: step2m4
+    reason_required_by_m4: Isolated current-package reconstruction source for legacy-format edges.
+  - artifact_id: preserved_m4.summary
+    kind: preserved_m4_governance
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package/step2m4_sparse_handoff_summary.json
+    parser: json
+    ordering_policy: document
+    source_stage: step2m4
+    reason_required_by_m4: Isolated current-package reconstruction source for summary and expected counts.
+media_comparison_policy:
+  compare_decoded_pixels: true
+  allow_container_metadata_differences: true
+  require_no_missing_assets: true
+  require_no_extra_assets: true
+safety:
+  visual_only_warning: VISUAL_ONLY_NOT_METRIC
+  production_ready: false
+  no_auto_promotion: true
+  human_approved: false
+  match_local_only: true
+  safe_to_apply_globally: false
+  requires_future_match_validation: true
+  no_identity_tracking_performed: true
+  no_player_slots_assigned: true
+  no_goalkeeper_slots_assigned: true
+  no_expected_22_role_states: true
+  no_exact_count_forcing: true
+  no_metric_event_tactical_or_physical_performance_analysis: true
+  official_referee_exclusion_performed: false
+  bad_detection_rows_deleted: false
+  do_not_use_for_metrics: true
+  sandbox_only: true
+  identity_tracking_performed: false
+  player_slots_assigned: false
+  goalkeeper_slots_assigned: false
+  expected_22_role_states_created: false
+  exact_22_forcing_performed: false
+  exact_two_goalkeeper_forcing_performed: false
+  metric_analysis_performed: false
+  event_analysis_performed: false
+  tactical_analysis_performed: false
+  physical_performance_analysis_performed: false
+  auto_promoted: false
