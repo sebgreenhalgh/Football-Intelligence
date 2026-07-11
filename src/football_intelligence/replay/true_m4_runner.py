@@ -461,6 +461,7 @@ def build_true_m4_reconstruction(
     try:
         logger.log("true_replay_build_started", run_id=ctx.run_id)
         write_json(ctx.path("environment.json"), environment_payload(roots.repo_root))
+        ctx.path("config/true_replay.source.yaml").parent.mkdir(parents=True, exist_ok=True)
         ctx.path("config/true_replay.source.yaml").write_text(source_text, encoding="utf-8")
         ctx.path("config/true_replay.resolved.yaml").write_text(
             dump_yaml(config.model_dump(mode="json")),
