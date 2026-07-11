@@ -39,11 +39,14 @@ def reconcile_decision_fingerprint(
     review_candidates: list[dict[str, Any]],
     m3t_pathlets: list[dict[str, Any]],
     selected_edges: list[dict[str, Any]],
+    quarantined_edges: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     decision_rows = rows_from_payload(decision_payload)
     candidate_ids = {str(row.get("step2m3t_review_candidate_id", "")) for row in review_candidates}
     pathlet_ids = {str(row.get("pathlet_id", "")) for row in m3t_pathlets}
-    edge_ids = {str(row.get("continuity_edge_id", "")) for row in selected_edges}
+    selected_edge_ids = {str(row.get("continuity_edge_id", "")) for row in selected_edges}
+    quarantined_edge_ids = {str(row.get("continuity_edge_id", "")) for row in (quarantined_edges or [])}
+    edge_ids = selected_edge_ids | quarantined_edge_ids
     decision_candidate_ids = [str(row.get("step2m3t_review_candidate_id", "")) for row in decision_rows]
     duplicate_decision_ids = sorted(
         {item for item in decision_candidate_ids if decision_candidate_ids.count(item) > 1 and item}
@@ -107,6 +110,8 @@ def reconcile_decision_fingerprint(
         "missing_pathlet_refs": missing_pathlet_refs,
         "missing_edge_refs": missing_edge_refs,
         "accepted_edge_reference_count": len(accepted_edge_references),
+        "selected_edge_reference_count": len((edge_references | accepted_edge_references) & selected_edge_ids),
+        "quarantined_edge_reference_count": len((edge_references | accepted_edge_references) & quarantined_edge_ids),
         "version_mismatches": version_mismatches,
         "invalid_decisions": invalid_decisions,
         "approval_flag_violations": approval_flag_violations,

@@ -559,6 +559,7 @@ def build_true_m4_reconstruction(
             review_candidates=review_candidates,
             m3t_pathlets=m3t_pathlets,
             selected_edges=selected_edges,
+            quarantined_edges=quarantined_edges,
         )
         if not decision_report["passed"]:
             raise RuntimeError("M3T decision fingerprint or referential integrity failed")
