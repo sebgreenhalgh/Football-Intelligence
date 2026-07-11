@@ -1,0 +1,101 @@
+schema_version: m5.true_replay.m4.v1
+replay_id: 128058_goal_window_true_m4_replay_v1
+match_id: "128058"
+window_id: goal_window_1882_2062
+pipeline_config_uri: configs/pipeline/visual_only_v1.yaml
+match_config_uri: configs/matches/128058.yaml
+window_config_uri: configs/windows/128058_goal_window.yaml
+stage_uri: matches/128058/runs/step_m5/04_true_m4_reconstruction
+run_parent_uri: matches/128058/runs/step_m5/04_true_m4_reconstruction/runs
+canonical_baseline_run_uri: matches/128058/runs/step_m5/02_infrastructure_hardening/runs/m5_baseline_20260711T125508Z_325fa715
+expected_headline_semantic_hash: dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e
+expected_structured_content_hash: 6b7db49e662a39eab7c860c4d0c36dc5617d80b7f8cd7a4a63ad2037e3ca3149
+expected_evidence_inventory_hash: 85c1f57d1383753ea4851355e47d1c49ea8658b9bd1e656147d5638583f779dc
+expected_viewer_semantic_hash: 58d0e7be84180dda14072291f91a4d13d39ae31a425597e1c7e7364d8ae3f539
+expected_m3t_decision_canonical_hash: 9873c7a097d4ada4d4d7da9e2d67b50b5294b68c5b767fc9756f598ace0ad018
+frozen_inputs:
+  - artifact_id: step1f3.final_visual_role_rows
+    kind: json_rows
+    relative_uri: matches/128058/calibration/step1_visual_reconstruction/step1f3_human_corrected_fused_visual_role_state/step1f3_human_corrected_fused_visual_role_state_rows.json
+    parser: json.rows
+    ordering_policy: preserve_file_row_order
+    source_stage: step1f3
+    reason_required_by_m4: Regenerate run-local Step2.M1 visual-continuity nodes.
+  - artifact_id: step1g.freeze_manifest
+    kind: json_document
+    relative_uri: matches/128058/calibration/step1_visual_reconstruction/step1g1_visual_reconstruction_validation/step1g1_freeze_candidate_manifest.json
+    parser: json.document
+    ordering_policy: document_semantic
+    source_stage: step1g
+    reason_required_by_m4: Verify F3 is allowed to seed Step2 visual-continuity candidacy.
+  - artifact_id: frame_manifest.stage3c_hq_short
+    kind: json_document
+    relative_uri: matches/128058/frames/goal_window_stage3c_hq_short/frame_manifest.json
+    parser: json.document
+    ordering_policy: frame_sequence_order
+    source_stage: frame_extraction
+    reason_required_by_m4: Resolve source frames for M4 evidence rendering.
+  - artifact_id: frame_root.stage3c_hq_short
+    kind: frame_directory
+    relative_uri: matches/128058/frames/goal_window_stage3c_hq_short
+    parser: directory.frames
+    ordering_policy: manifest_declared_frame_sequence
+    source_stage: frame_extraction
+    reason_required_by_m4: Read real source frame bytes for rendering.
+    path_kind: directory
+  - artifact_id: step2m3t.handoff_manifest
+    kind: json_document
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_handoff_manifest.json
+    parser: json.document
+    ordering_policy: document_semantic
+    source_stage: step2m3t
+    reason_required_by_m4: Validate future handoff readiness.
+  - artifact_id: step2m3t.review_progress
+    kind: json_document
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_review_progress_summary.json
+    parser: json.document
+    ordering_policy: document_semantic
+    source_stage: step2m3t
+    reason_required_by_m4: Validate sparse-pathlet review completion.
+  - artifact_id: step2m3t.validation_summary
+    kind: json_document
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_validation_summary.json
+    parser: json.document
+    ordering_policy: document_semantic
+    source_stage: step2m3t
+    reason_required_by_m4: Validate source M3T guardrails.
+  - artifact_id: step2m3t.review_candidates
+    kind: json_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_review_candidate_rows.json
+    parser: json.rows
+    ordering_policy: preserve_file_row_order
+    source_stage: step2m3t
+    reason_required_by_m4: Validate decision referential integrity.
+  - artifact_id: step2m3t.reviewed_decisions
+    kind: json_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_reviewed_sparse_pathlet_decisions.json
+    parser: json.rows
+    ordering_policy: preserve_file_row_order
+    source_stage: step2m3t
+    reason_required_by_m4: Bind persisted human sparse-pathlet decisions into M4 rows.
+  - artifact_id: step2m3t.sparse_pathlets
+    kind: json_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_sparse_visual_continuity_pathlets.json
+    parser: json.rows
+    ordering_policy: pathlet_id_order
+    source_stage: step2m3t
+    reason_required_by_m4: Rebuild M4 handoff pathlets.
+  - artifact_id: step2m3t.selected_sparse_edges
+    kind: jsonl_gzip_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_selected_sparse_visual_continuity_edges.jsonl.gz
+    parser: jsonl.gzip.rows
+    ordering_policy: preserve_jsonl_order
+    source_stage: step2m3t
+    reason_required_by_m4: Rebuild M4 handoff edges.
+  - artifact_id: step2m3t.topology_quarantined_edges
+    kind: jsonl_gzip_rows
+    relative_uri: matches/128058/calibration/step2_visual_continuity/step2m3t_sparse_pathlets/step2m3t_topology_quarantined_edges.jsonl.gz
+    parser: jsonl.gzip.rows
+    ordering_policy: preserve_jsonl_order
+    source_stage: step2m3t
+    reason_required_by_m4: Preserve topology quarantine counts in summaries.

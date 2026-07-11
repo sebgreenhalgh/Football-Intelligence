@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from football_intelligence.step1_visual_reconstruction.official_context_review_s
     ordered_review_candidates,
     review_bucket,
 )
+import football_intelligence.step1_visual_reconstruction.official_context_review_state as d1b_state  # noqa: E402
 
 
 def candidate(index: int, **overrides: object) -> dict:
@@ -48,7 +50,20 @@ def feature(base_id: str) -> dict:
     }
 
 
-def test_loads_expected_d1_review_candidate_count_from_artifact() -> None:
+def test_loads_expected_d1_review_candidate_count_from_artifact(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "step1d1_official_context_review_candidate_rows.json"
+    feature_path = tmp_path / "step1d1_official_context_feature_rows.json"
+    rows = [candidate(index) for index in range(1846)]
+    path.write_text(
+        json.dumps({"artifact": "test_candidates", "rows": rows}),
+        encoding="utf-8",
+    )
+    feature_path.write_text(
+        json.dumps({"artifact": "test_features", "rows": [feature(row["visible_person_base_id"]) for row in rows]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(d1b_state, "STEP1D1_OFFICIAL_CONTEXT_REVIEW_CANDIDATE_ROWS_PATH", path)
+    monkeypatch.setattr(d1b_state, "STEP1D1_OFFICIAL_CONTEXT_FEATURE_ROWS_PATH", feature_path)
     assert len(ordered_review_candidates()) == 1846
 
 

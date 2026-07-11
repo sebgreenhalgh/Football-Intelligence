@@ -7,6 +7,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from football_intelligence.step1_visual_reconstruction.schema import VISUAL_ONLY_WARNING, visual_stamp  # noqa: E402
+import football_intelligence.step1_visual_reconstruction.visible_person_base_eval as b4_eval  # noqa: E402
 from football_intelligence.step1_visual_reconstruction.visible_person_base_eval import evaluate_b4_against_gold8  # noqa: E402
 
 
@@ -54,7 +55,7 @@ def labels_payload() -> dict[str, Any]:
     }
 
 
-def test_b4_eval_uses_visible_person_base_rows_and_remains_visual_only() -> None:
+def test_b4_eval_uses_visible_person_base_rows_and_remains_visual_only(monkeypatch) -> None:
     b3_summary = {
         "gold_visible_person_rows": 1,
         "b2_observed_visible_rows": 1,
@@ -74,8 +75,10 @@ def test_b4_eval_uses_visible_person_base_rows_and_remains_visual_only() -> None
         "player_or_gk_gold_rows": 1,
         "b3_player_or_gk_matched_rows": 1,
     }
+    base_payload = {"rows": [base_row("det_1", 10.0)]}
+    monkeypatch.setattr(b4_eval, "load_person_states", lambda: {"frames": []})
     summary, _errors = evaluate_b4_against_gold8(
-        {"rows": [base_row("det_1", 10.0)]},
+        base_payload,
         b3_summary=b3_summary,
         labels_payload=labels_payload(),
     )

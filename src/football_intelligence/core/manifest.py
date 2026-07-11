@@ -10,7 +10,7 @@ from football_intelligence.core.config import RootRelativeUri, SafetyConfig, Str
 class RunManifest(StrictModel):
     schema_version: Literal["m5.run_manifest.v1"] = "m5.run_manifest.v1"
     run_id: str = Field(pattern=r"^[A-Za-z0-9_.:-]+$")
-    run_kind: Literal["legacy_m4_baseline_capture", "isolated_m4_replay"]
+    run_kind: Literal["legacy_m4_baseline_capture", "isolated_m4_replay", "true_m4_reconstruction"]
     match_id: str = Field(pattern=r"^[0-9]+$")
     window_id: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
     stage_uri: RootRelativeUri

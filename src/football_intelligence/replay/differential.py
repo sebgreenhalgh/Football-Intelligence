@@ -22,6 +22,17 @@ RUNTIME_PATH_POLICY = SemanticFingerprintPolicy(
     )
 )
 
+TRUE_REPLAY_RUNTIME_PATH_POLICY = SemanticFingerprintPolicy(
+    excluded_json_paths=RUNTIME_PATH_POLICY.excluded_json_paths
+    | frozenset(
+        {
+            "$.step2_visual_continuity_root",
+            "$.m3t_read_root",
+            "$.m4_write_root",
+        }
+    )
+)
+
 
 def _relative_or_absolute(path: Path, root: Path) -> str:
     try:
@@ -45,7 +56,14 @@ def read_artifact(path: Path, mode: str) -> tuple[Any, list[Any] | None]:
     return data, None
 
 
-def m4_structured_fingerprints(m4_root: Path, m3t_decision_path: Path, artifact_root: Path) -> dict[str, Any]:
+def m4_structured_fingerprints(
+    m4_root: Path,
+    m3t_decision_path: Path,
+    artifact_root: Path,
+    *,
+    policy: SemanticFingerprintPolicy | None = None,
+) -> dict[str, Any]:
+    active_policy = policy or RUNTIME_PATH_POLICY
     records: list[dict[str, Any]] = []
     for artifact_name, (filename, mode, _key) in M4_STRUCTURED_FILES.items():
         path = m4_root / filename
@@ -57,10 +75,10 @@ def m4_structured_fingerprints(m4_root: Path, m3t_decision_path: Path, artifact_
                 "source_byte_hash": sha256_file(path),
                 "row_count": len(rows) if rows is not None else None,
                 "schema_or_artifact_name": artifact_name,
-                "semantic_content_hash": semantic_hash(payload, policy=RUNTIME_PATH_POLICY),
+                "semantic_content_hash": semantic_hash(payload, policy=active_policy),
                 "ordering_policy": mode,
-                "excluded_runtime_fields": sorted(RUNTIME_PATH_POLICY.excluded_field_names),
-                "excluded_json_paths": sorted(RUNTIME_PATH_POLICY.excluded_json_paths),
+                "excluded_runtime_fields": sorted(active_policy.excluded_field_names),
+                "excluded_json_paths": sorted(active_policy.excluded_json_paths),
                 "parse_status": "ok",
             }
         )
@@ -72,10 +90,10 @@ def m4_structured_fingerprints(m4_root: Path, m3t_decision_path: Path, artifact_
             "source_byte_hash": sha256_file(m3t_decision_path),
             "row_count": len(decision_rows or []),
             "schema_or_artifact_name": "m3t_reviewed_decisions",
-            "semantic_content_hash": semantic_hash(decision_payload, policy=RUNTIME_PATH_POLICY),
+            "semantic_content_hash": semantic_hash(decision_payload, policy=active_policy),
             "ordering_policy": "rows",
-            "excluded_runtime_fields": sorted(RUNTIME_PATH_POLICY.excluded_field_names),
-            "excluded_json_paths": sorted(RUNTIME_PATH_POLICY.excluded_json_paths),
+            "excluded_runtime_fields": sorted(active_policy.excluded_field_names),
+            "excluded_json_paths": sorted(active_policy.excluded_json_paths),
             "parse_status": "ok",
         }
     )
@@ -95,15 +113,21 @@ def _keyed(rows: list[Any], key: str) -> dict[str, Any]:
     return {str(row.get(key, index)): row for index, row in enumerate(rows) if isinstance(row, dict)}
 
 
-def structured_diff(baseline_root: Path, replay_root: Path) -> dict[str, Any]:
+def structured_diff(
+    baseline_root: Path,
+    replay_root: Path,
+    *,
+    policy: SemanticFingerprintPolicy | None = None,
+) -> dict[str, Any]:
+    active_policy = policy or RUNTIME_PATH_POLICY
     reports = []
     for artifact_name, (filename, mode, key) in M4_STRUCTURED_FILES.items():
         left = baseline_root / filename
         right = replay_root / filename
         left_payload, left_rows = read_artifact(left, mode)
         right_payload, right_rows = read_artifact(right, mode)
-        left_hash = semantic_hash(left_payload, policy=RUNTIME_PATH_POLICY)
-        right_hash = semantic_hash(right_payload, policy=RUNTIME_PATH_POLICY)
+        left_hash = semantic_hash(left_payload, policy=active_policy)
+        right_hash = semantic_hash(right_payload, policy=active_policy)
         missing: list[str] = []
         extra: list[str] = []
         changed: list[str] = []
@@ -114,14 +138,14 @@ def structured_diff(baseline_root: Path, replay_root: Path) -> dict[str, Any]:
             missing = sorted(set(left_map) - set(right_map))
             extra = sorted(set(right_map) - set(left_map))
             for row_key in sorted(set(left_map) & set(right_map)):
-                if semantic_hash(left_map[row_key], policy=RUNTIME_PATH_POLICY) != semantic_hash(
-                    right_map[row_key], policy=RUNTIME_PATH_POLICY
+                if semantic_hash(left_map[row_key], policy=active_policy) != semantic_hash(
+                    right_map[row_key], policy=active_policy
                 ):
                     changed.append(row_key)
                     if len(sample) < 5:
                         sample.append({"row_key": row_key})
-        ordering_match = semantic_hash(left_payload, policy=RUNTIME_PATH_POLICY) == semantic_hash(
-            right_payload, policy=RUNTIME_PATH_POLICY
+        ordering_match = semantic_hash(left_payload, policy=active_policy) == semantic_hash(
+            right_payload, policy=active_policy
         )
         passed = left_hash == right_hash and not missing and not extra and not changed and ordering_match
         reports.append(
@@ -207,7 +231,13 @@ def _viewer_payload(path: Path) -> dict[str, Any]:
     return {"text": text, "payload": payload}
 
 
-def viewer_diff(baseline_root: Path, replay_root: Path) -> dict[str, Any]:
+def viewer_diff(
+    baseline_root: Path,
+    replay_root: Path,
+    *,
+    policy: SemanticFingerprintPolicy | None = None,
+) -> dict[str, Any]:
+    active_policy = policy or RUNTIME_PATH_POLICY
     baseline = _viewer_payload(baseline_root / "step2m4_sparse_handoff_viewer.html")
     replay = _viewer_payload(replay_root / "step2m4_sparse_handoff_viewer.html")
     rows = replay["payload"].get("rows", [])
@@ -222,8 +252,8 @@ def viewer_diff(baseline_root: Path, replay_root: Path) -> dict[str, Any]:
             escapes.append(link)
         resolved.append({"link": link, "exists": path.exists()})
     summary = replay["payload"].get("summary", {})
-    normalized_match = semantic_hash(baseline["payload"], policy=RUNTIME_PATH_POLICY) == semantic_hash(
-        replay["payload"], policy=RUNTIME_PATH_POLICY
+    normalized_match = semantic_hash(baseline["payload"], policy=active_policy) == semantic_hash(
+        replay["payload"], policy=active_policy
     )
     return {
         "schema_version": "m5.replay.viewer_diff.v1",
@@ -239,7 +269,7 @@ def viewer_diff(baseline_root: Path, replay_root: Path) -> dict[str, Any]:
             "m4_handoff_edge_count": summary.get("m4_handoff_edge_count"),
             "overlay_asset_count": summary.get("overlay_asset_count"),
         },
-        "normalized_embedded_json_semantic_hash": semantic_hash(replay["payload"], policy=RUNTIME_PATH_POLICY),
+        "normalized_embedded_json_semantic_hash": semantic_hash(replay["payload"], policy=active_policy),
         "normalized_embedded_json_matches_preserved": normalized_match,
         "links_to_preserved_m4_root": [link for link in links if "step2_visual_continuity/step2m4" in link],
         "link_escapes": escapes,
@@ -269,6 +299,39 @@ def compare_replay_runs(left_run: Path, right_run: Path) -> dict[str, Any]:
     )
     return {
         "schema_version": "m5.replay.run_comparison.v1",
+        "left_run": str(left_run),
+        "right_run": str(right_run),
+        "comparisons": comparisons,
+        "passed": all(comparisons.values()),
+    }
+
+
+def compare_true_replay_runs(left_run: Path, right_run: Path) -> dict[str, Any]:
+    left_summary = json.loads((left_run / "validation/true_replay_validation_summary.json").read_text(encoding="utf-8"))
+    right_summary = json.loads(
+        (right_run / "validation/true_replay_validation_summary.json").read_text(encoding="utf-8")
+    )
+    keys = [
+        "true_input_closure_hash",
+        "replay_config_hash",
+        "code_commit",
+        "recovered_m1_semantic_hash",
+        "reconstructed_structured_content_hash",
+        "evidence_inventory_hash",
+        "viewer_semantic_hash",
+        "canonical_m3t_decision_semantic_hash",
+    ]
+    comparisons = {f"{key}_equal": left_summary.get(key) == right_summary.get(key) for key in keys}
+    comparisons["counts_equal"] = left_summary.get("counts") == right_summary.get("counts")
+    comparisons["guardrails_passed"] = left_summary.get("guardrail_passed") and right_summary.get("guardrail_passed")
+    comparisons["source_mutation_passed"] = left_summary.get("source_mutation_passed") and right_summary.get(
+        "source_mutation_passed"
+    )
+    comparisons["source_access_passed"] = left_summary.get("source_access_passed") and right_summary.get(
+        "source_access_passed"
+    )
+    return {
+        "schema_version": "m5.true_replay.run_comparison.v1",
         "left_run": str(left_run),
         "right_run": str(right_run),
         "comparisons": comparisons,

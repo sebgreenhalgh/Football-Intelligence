@@ -51,16 +51,26 @@ from football_intelligence.replay.runner import (
 )
 from football_intelligence.replay.differential import structured_diff
 from football_intelligence.replay.review_pack import build_review_pack as build_m4_replay_review_pack
+from football_intelligence.replay.true_m4_runner import (
+    build_true_m4_reconstruction,
+    build_true_m4_review_pack,
+    compare_and_write_true_runs,
+    compare_true_m4_to_baseline,
+    true_replay_plan_preview,
+    validate_true_replay_build,
+)
 
 app = typer.Typer(no_args_is_help=True)
 config_app = typer.Typer(no_args_is_help=True)
 baseline_app = typer.Typer(no_args_is_help=True)
 registry_app = typer.Typer(no_args_is_help=True)
 replay_app = typer.Typer(no_args_is_help=True)
+true_replay_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
 app.add_typer(replay_app, name="replay")
+app.add_typer(true_replay_app, name="true-replay")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -836,6 +846,90 @@ def replay_build_review_pack(
     prompt = Path(r"C:\Users\sebgr\.codex\attachments\9a5a4b60-30cf-4398-b3a6-8e005ff98dd2\pasted-text.txt")
     repo_root = Path(__file__).resolve().parents[3]
     review_pack = build_m4_replay_review_pack(
+        stage_root=stage_root.resolve(),
+        left_run=left_run.resolve(),
+        right_run=right_run.resolve(),
+        artifact_root=artifact_root.resolve(),
+        repo_root=repo_root,
+        prompt_path=prompt,
+    )
+    typer.echo(review_pack.as_posix())
+
+
+@true_replay_app.command("plan")
+def true_replay_plan(
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = true_replay_plan_preview(config, repo_root.resolve(), artifact_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@true_replay_app.command("build-m4")
+def true_replay_build_m4(
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    run_id: str | None = typer.Option(None, "--run-id"),
+) -> None:
+    run_dir = build_true_m4_reconstruction(
+        config,
+        repo_root.resolve(),
+        artifact_root.resolve(),
+        explicit_run_id=run_id,
+    )
+    typer.echo(run_dir.as_posix())
+
+
+@true_replay_app.command("validate-build")
+def true_replay_validate_build(
+    run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = validate_true_replay_build(run_dir.resolve(), repo_root.resolve(), artifact_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo("true replay build valid")
+
+
+@true_replay_app.command("compare-m4")
+def true_replay_compare_m4(
+    run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, dir_okay=True),
+    baseline_m4_root: Path = typer.Option(..., "--baseline-m4-root", exists=True, file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = compare_true_m4_to_baseline(run_dir.resolve(), baseline_m4_root.resolve(), artifact_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@true_replay_app.command("compare-runs")
+def true_replay_compare_runs(
+    left_run: Path = typer.Option(..., "--left-run", exists=True, file_okay=False, dir_okay=True),
+    right_run: Path = typer.Option(..., "--right-run", exists=True, file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = compare_and_write_true_runs(left_run.resolve(), right_run.resolve(), artifact_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@true_replay_app.command("build-review-pack")
+def true_replay_build_review_pack(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    left_run: Path = typer.Option(..., "--left-run", exists=True, file_okay=False, dir_okay=True),
+    right_run: Path = typer.Option(..., "--right-run", exists=True, file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+) -> None:
+    prompt = Path(r"C:\Users\sebgr\.codex\attachments\393cd97b-041b-44af-8099-47b197a3a7b7\pasted-text.txt")
+    repo_root = Path(__file__).resolve().parents[3]
+    review_pack = build_true_m4_review_pack(
         stage_root=stage_root.resolve(),
         left_run=left_run.resolve(),
         right_run=right_run.resolve(),

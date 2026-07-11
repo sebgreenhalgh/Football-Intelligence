@@ -5,6 +5,8 @@ from typing import Any
 
 M5_2_STAGE_URI = "matches/128058/runs/step_m5/03_m4_repeatability"
 M5_2_RUN_PARENT_URI = f"{M5_2_STAGE_URI}/runs"
+M5_2R_STAGE_URI = "matches/128058/runs/step_m5/04_true_m4_reconstruction"
+M5_2R_RUN_PARENT_URI = f"{M5_2R_STAGE_URI}/runs"
 M5_1_CANONICAL_BASELINE_URI = (
     "matches/128058/runs/step_m5/02_infrastructure_hardening/runs/" "m5_baseline_20260711T125508Z_325fa715"
 )
@@ -15,6 +17,10 @@ PRESERVED_M4_ROOT_URI = "matches/128058/calibration/step2_visual_continuity/step
 EXPECTED_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 EXPECTED_STRUCTURED_CONTENT_HASH = "6b7db49e662a39eab7c860c4d0c36dc5617d80b7f8cd7a4a63ad2037e3ca3149"
 EXPECTED_BASELINE_CONFIG_SET_HASH = "7e87ac30ce1ee514995985644d8925edde714a1c33aa1277bab21c371f5e5e9a"
+EXPECTED_EVIDENCE_INVENTORY_HASH = "85c1f57d1383753ea4851355e47d1c49ea8658b9bd1e656147d5638583f779dc"
+EXPECTED_VIEWER_SEMANTIC_HASH = "58d0e7be84180dda14072291f91a4d13d39ae31a425597e1c7e7364d8ae3f539"
+M5_1_CANONICAL_M3T_DECISION_SEMANTIC_HASH = "9873c7a097d4ada4d4d7da9e2d67b50b5294b68c5b767fc9756f598ace0ad018"
+M5_2_RAW_M3T_DECISION_SEMANTIC_HASH = "3ffd7d2907769eba74bafa06dce08f23ffbb6b8c189a90efff86eced531de014"
 
 M4_STRUCTURED_FILES = {
     "m4_pathlets": ("step2m4_sparse_handoff_pathlets.json", "rows", "m4_handoff_pathlet_id"),
@@ -74,6 +80,7 @@ def run_root(artifact_root: Path, run_id: str) -> Path:
 
 def expected_counts() -> dict[str, Any]:
     return {
+        "recovered_m1_node_count": 10418,
         "m4_handoff_pathlet_count": 795,
         "m4_handoff_edge_count": 7393,
         "overlay_asset_count": 857,

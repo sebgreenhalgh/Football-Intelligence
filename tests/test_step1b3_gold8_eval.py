@@ -10,6 +10,7 @@ from football_intelligence.step1_visual_reconstruction.gold8_visual_eval import 
     gold_visible_person_rows,
     strict_one_to_one_match,
 )
+import football_intelligence.step1_visual_reconstruction.reconciliation_eval as b3_eval  # noqa: E402
 from football_intelligence.step1_visual_reconstruction.reconciliation_eval import (  # noqa: E402
     b3_counted_state_payload,
     evaluate_b3_against_gold8,
@@ -78,7 +79,7 @@ def test_b3_counted_state_payload_uses_b3_count_flag() -> None:
     assert [row["detection_id"] for row in payload["rows"]] == ["det_counted"]
 
 
-def test_b3_eval_remains_visual_only_and_does_not_evaluate_roles_or_slots() -> None:
+def test_b3_eval_remains_visual_only_and_does_not_evaluate_roles_or_slots(monkeypatch) -> None:
     b2_summary = {
         "gold_visible_person_rows": 1,
         "step1_observed_visible_rows": 2,
@@ -100,6 +101,7 @@ def test_b3_eval_remains_visual_only_and_does_not_evaluate_roles_or_slots() -> N
             candidate("det_shadow", 10.5, counted=False),
         ]
     }
+    monkeypatch.setattr(b3_eval, "load_person_states", lambda: {"frames": []})
     summary, _errors = evaluate_b3_against_gold8(count_policy_payload, b2_summary=b2_summary)
     assert summary["visual_only_warning"] == VISUAL_ONLY_WARNING
     assert summary["production_ready"] is False

@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import football_intelligence.step1_visual_reconstruction.official_context_review_eval as d1b_eval  # noqa: E402
 from football_intelligence.step1_visual_reconstruction.official_context_review_eval import (  # noqa: E402
     progress_summary_payload,
     review_decision_summary_payload,
@@ -48,9 +49,10 @@ def test_no_forbidden_keys_in_candidate_or_review_rows() -> None:
     assert review["production_ready"] is False
 
 
-def test_no_exclusion_or_slot_approval_in_progress_and_decision_payloads() -> None:
+def test_no_exclusion_or_slot_approval_in_progress_and_decision_payloads(monkeypatch) -> None:
     rows = [candidate()]
     review_by_id = {rows[0]["step1d1_review_candidate_id"]: reviewed_decision_row(rows[0], "accept_d1_belief")}
+    monkeypatch.setattr(d1b_eval, "ordered_review_candidates", lambda: rows)
     progress = progress_summary_payload(rows, review_by_id)
     decision = review_decision_summary_payload(rows, review_by_id)
     reviewed_payload = reviewed_decision_payload(review_by_id)

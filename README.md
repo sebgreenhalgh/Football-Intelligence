@@ -57,6 +57,8 @@ make format          # ruff autofix on src/
 
 The M5 macro-stage begins with read-only infrastructure for safe replay and validation. It separates the repository root from the external artifact root, then writes canonical baseline captures under `matches/128058/runs/step_m5/02_infrastructure_hardening/runs`. This stage does not rebuild Step1G, M3T, M4, raw-video, or manual-decision artifacts, and it keeps the baseline `VISUAL_ONLY_NOT_METRIC`, `production_ready=false`, `no_auto_promotion=true`, and `human_approved=false`.
 
+M5.2 is preserved as package-clone parity verification: it proved isolation, integrity, comparison, and immutability, but it did not prove algorithmic M4 reconstruction. M5.2R is the corrective true reconstruction stage under `matches/128058/runs/step_m5/04_true_m4_reconstruction`; it regenerates run-local M1 nodes from frozen F3/G inputs, rebuilds M4 rows from M3T pathlets/edges/decisions, rerenders visual evidence from source frames, and only then compares to the preserved M4 oracle.
+
 ```bash
 fi-pipeline config validate --config configs/pipeline/visual_only_v1.yaml --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence>
 fi-pipeline baseline capture --config configs/pipeline/visual_only_v1.yaml --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence> --legacy-m4-root <artifact-root>/matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package
