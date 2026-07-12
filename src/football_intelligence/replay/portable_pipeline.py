@@ -338,16 +338,37 @@ def dependency_records(context: PortableVisualRunContext) -> list[dict[str, Any]
     for artifact_id, path, role, consumers in direct:
         records.append(_artifact_record(artifact_id, path, role=role, stage_consumers=consumers))
     for relative in [
+        "src/football_intelligence/cli/app.py",
         "src/football_intelligence/replay/portable_context.py",
+        "src/football_intelligence/replay/portable_pipeline.py",
         "src/football_intelligence/replay/portable_step1.py",
         "src/football_intelligence/replay/portable_step1_validation.py",
         "src/football_intelligence/replay/portable_step2.py",
         "src/football_intelligence/replay/portable_step2_validation.py",
+        "src/football_intelligence/step1_visual_reconstruction/colour_features.py",
+        "src/football_intelligence/step1_visual_reconstruction/count_policy.py",
+        "src/football_intelligence/step1_visual_reconstruction/fused_visual_role_state.py",
+        "src/football_intelligence/step1_visual_reconstruction/fused_visual_role_state_human_corrections.py",
+        "src/football_intelligence/step1_visual_reconstruction/fused_visual_role_state_review_validation.py",
+        "src/football_intelligence/step1_visual_reconstruction/gold8_visual_eval.py",
+        "src/football_intelligence/step1_visual_reconstruction/io.py",
+        "src/football_intelligence/step1_visual_reconstruction/official_context_beliefs.py",
+        "src/football_intelligence/step1_visual_reconstruction/official_context_features.py",
+        "src/football_intelligence/step1_visual_reconstruction/official_context_human_corrections.py",
+        "src/football_intelligence/step1_visual_reconstruction/official_context_review_schema.py",
         "src/football_intelligence/step1_visual_reconstruction/person_candidates.py",
+        "src/football_intelligence/step1_visual_reconstruction/reconciliation.py",
+        "src/football_intelligence/step1_visual_reconstruction/render_tiers.py",
+        "src/football_intelligence/step1_visual_reconstruction/schema.py",
         "src/football_intelligence/step1_visual_reconstruction/state_model.py",
-        "src/football_intelligence/step2_visual_continuity/nodes.py",
+        "src/football_intelligence/step1_visual_reconstruction/team_colour_beliefs.py",
+        "src/football_intelligence/step1_visual_reconstruction/visible_person_base.py",
         "src/football_intelligence/step2_visual_continuity/edge_candidates.py",
+        "src/football_intelligence/step2_visual_continuity/edge_features.py",
         "src/football_intelligence/step2_visual_continuity/grouping.py",
+        "src/football_intelligence/step2_visual_continuity/nodes.py",
+        "src/football_intelligence/step2_visual_continuity/review_selection.py",
+        "src/football_intelligence/step2_visual_continuity/schema.py",
     ]:
         records.append(
             _artifact_record(
