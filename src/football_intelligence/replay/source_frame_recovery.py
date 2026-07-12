@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,6 +104,7 @@ class ScanState:
     scanned_file_count: int = 0
     scanned_directory_count: int = 0
     truncated: bool = False
+    time_exhausted: bool = False
 
 
 def collect_search_roots(artifact_root: Path) -> list[dict[str, Any]]:
@@ -125,11 +127,20 @@ def collect_search_roots(artifact_root: Path) -> list[dict[str, Any]]:
         if recycle.exists():
             candidates.append((f"recycle_bin_{drive_letter}", recycle))
     quarantine_roots = []
-    for root in [artifact_root, artifact_root / "matches/128058", artifact_root / "matches/128058/runs/step_m5"]:
-        if root.exists():
-            for path in root.rglob("*"):
-                if path.is_dir() and "quarantine" in path.name.lower():
+    for root in [
+        artifact_root,
+        artifact_root / "matches/128058",
+        artifact_root / "matches/128058/runs/step_m5",
+        artifact_root / "matches/128058/runs",
+    ]:
+        if not root.exists():
+            continue
+        try:
+            for path in root.iterdir():
+                if path.is_dir() and ("quarantine" in path.name.lower() or "archive" in path.name.lower()):
                     quarantine_roots.append(path)
+        except OSError:
+            continue
     for path in sorted(set(quarantine_roots)):
         candidates.append(("project_quarantine", path))
     records = []
@@ -262,6 +273,8 @@ def walk_root(
     generation_terms: list[str],
     media_keywords: list[str],
     max_files: int,
+    max_dirs: int,
+    deadline: float,
 ) -> dict[str, Any]:
     if not root.exists():
         return {"role": root_role, "path": str(root), "exists": False, "searched": False, "reason": "missing"}
@@ -271,6 +284,13 @@ def walk_root(
     scanned_here = 0
     directories_here = 0
     while stack:
+        if time.monotonic() > deadline:
+            state.truncated = True
+            state.time_exhausted = True
+            break
+        if state.scanned_directory_count >= max_dirs:
+            state.truncated = True
+            break
         current = stack.pop()
         current_key = str(current.resolve()).lower()
         if current_key in state.seen_dirs:
@@ -385,6 +405,7 @@ def walk_root(
         "scanned_file_count": scanned_here,
         "scanned_directory_count": directories_here,
         "truncated_by_bound": state.truncated,
+        "time_exhausted": state.time_exhausted,
     }
 
 
@@ -394,7 +415,9 @@ def forensic_search(
     repo_root: Path,
     stage_root: Path,
     requirement: dict[str, Any],
-    max_files: int = 300_000,
+    max_files: int = 60_000,
+    max_dirs: int = 20_000,
+    max_seconds: int = 240,
 ) -> dict[str, Any]:
     required_names = set(requirement["required_filename_sequence"])
     frame_root_name = Path(FRAME_ROOT_URI).name
@@ -413,6 +436,7 @@ def forensic_search(
     ]
     generation_terms = [term for term in generation_terms if term]
     search_roots = collect_search_roots(artifact_root)
+    deadline = time.monotonic() + max_seconds
     state = ScanState(
         seen_dirs=set(),
         errors=[],
@@ -438,6 +462,8 @@ def forensic_search(
             generation_terms=generation_terms,
             media_keywords=media_keywords,
             max_files=max_files,
+            max_dirs=max_dirs,
+            deadline=deadline,
         )
         location_results.append(record | result)
     shell_history = Path.home() / "AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt"
@@ -473,9 +499,12 @@ def forensic_search(
         "created_at": utc_now(),
         "read_only": True,
         "max_files_bound": max_files,
+        "max_directories_bound": max_dirs,
+        "max_seconds_bound": max_seconds,
         "scanned_file_count": state.scanned_file_count,
         "scanned_directory_count": state.scanned_directory_count,
         "truncated": state.truncated,
+        "time_exhausted": state.time_exhausted,
         "locations": location_results,
         "scan_errors": state.errors,
         "git_lfs_metadata": git_lfs,
