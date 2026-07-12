@@ -84,6 +84,76 @@ def file_metadata(path: Path, *, hash_file: bool = True) -> dict[str, Any]:
     }
 
 
+def video_metadata(path: Path) -> dict[str, Any]:
+    try:
+        import cv2
+
+        cap = cv2.VideoCapture(str(path))
+        try:
+            if not cap.isOpened():
+                return {"opened": False}
+            fps = float(cap.get(cv2.CAP_PROP_FPS))
+            frame_count = int(round(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            return {
+                "opened": True,
+                "width": int(round(cap.get(cv2.CAP_PROP_FRAME_WIDTH))),
+                "height": int(round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))),
+                "fps": fps,
+                "frame_count": frame_count,
+                "duration_seconds": frame_count / fps if fps else None,
+            }
+        finally:
+            cap.release()
+    except Exception as exc:
+        return {"opened": False, "error": str(exc)}
+
+
+def classify_video_candidate(
+    *,
+    path: Path,
+    source_clip_name: str | None,
+    metadata: dict[str, Any],
+    requirement: dict[str, Any],
+) -> tuple[str, bool, dict[str, Any]]:
+    derived = derived_classification(path)
+    source_indices = [
+        int(row["source_frame_index"])
+        for row in requirement["declared_frames"]
+        if row.get("source_frame_index") is not None
+    ]
+    expected_dimensions = {
+        (row.get("width"), row.get("height"))
+        for row in requirement["declared_frames"]
+        if row.get("width") is not None and row.get("height") is not None
+    }
+    direct_dimensions_match = (metadata.get("width"), metadata.get("height")) in expected_dimensions
+    source_indices_in_range = bool(
+        source_indices
+        and metadata.get("frame_count") is not None
+        and min(source_indices) >= 0
+        and max(source_indices) < int(metadata["frame_count"])
+    )
+    clip_name_matches = bool(source_clip_name and path.name.lower() == source_clip_name.lower())
+    credible_upstream_half_video = (
+        path.name.lower() == "128058_panorama_1st_half.mp4"
+        and metadata.get("opened") is True
+        and source_indices_in_range
+    )
+    compatibility = {
+        "declared_clip_filename_match": clip_name_matches,
+        "source_frame_indices_in_range": source_indices_in_range,
+        "direct_dimensions_match_manifest": direct_dimensions_match,
+        "requires_unrecovered_extraction_transform": credible_upstream_half_video and not direct_dimensions_match,
+    }
+    if derived:
+        return derived, False, compatibility
+    if clip_name_matches:
+        return "original_source_clip", True, compatibility
+    if credible_upstream_half_video:
+        return "original_source_video", False, compatibility
+    return "provenance_uncertain_requires_review", False, compatibility
+
+
 def safe_relative(path: Path, root: Path) -> str:
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
@@ -270,6 +340,7 @@ def walk_root(
     exact_names: set[str],
     frame_root_name: str,
     source_clip_name: str | None,
+    requirement: dict[str, Any],
     generation_terms: list[str],
     media_keywords: list[str],
     max_files: int,
@@ -349,16 +420,21 @@ def walk_root(
             )
             if is_media_candidate:
                 record = file_metadata(path)
+                metadata = video_metadata(path)
+                classification, allowed, compatibility = classify_video_candidate(
+                    path=path,
+                    source_clip_name=source_clip_name,
+                    metadata=metadata,
+                    requirement=requirement,
+                )
                 record.update(
                     {
                         "root_role": root_role,
                         "type": "video",
-                        "classification": (
-                            "original_source_clip"
-                            if source_clip_name and name_lower == source_clip_name.lower()
-                            else "provenance_uncertain_requires_review"
-                        ),
-                        "allowed_for_true_replay": bool(source_clip_name and name_lower == source_clip_name.lower()),
+                        "video_metadata": metadata,
+                        "manifest_compatibility": compatibility,
+                        "classification": classification,
+                        "allowed_for_true_replay": allowed,
                     }
                 )
                 state.video_candidates.append(record)
@@ -459,6 +535,7 @@ def forensic_search(
             exact_names=required_names,
             frame_root_name=frame_root_name,
             source_clip_name=source_clip_name,
+            requirement=requirement,
             generation_terms=generation_terms,
             media_keywords=media_keywords,
             max_files=max_files,
@@ -640,7 +717,9 @@ def summarize_candidates(
                     "filename_coverage": None,
                     "frame_sequence_coverage": None,
                     "dimension_compatibility": "not_applicable",
-                    "manifest_compatibility": record.get("allowed_for_true_replay", False),
+                    "manifest_compatibility": record.get(
+                        "manifest_compatibility", record.get("allowed_for_true_replay", False)
+                    ),
                     "recovery_confidence": "medium" if record.get("allowed_for_true_replay") else "low",
                     "classification": record.get("classification", key),
                     "allowed_for_true_replay": record.get("allowed_for_true_replay", False),
