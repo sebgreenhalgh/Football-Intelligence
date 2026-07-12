@@ -59,6 +59,27 @@ from football_intelligence.replay.true_m4_runner import (
     true_replay_plan_preview,
     validate_true_replay_build,
 )
+from football_intelligence.replay.blind_pipeline import (
+    build_input_closure as build_blind_input_closure,
+    run_blind_pipeline_boundary,
+    write_frozen_configuration_documents,
+)
+from football_intelligence.replay.blind_pipeline_comparison import compare_blind_runs
+from football_intelligence.replay.blind_pipeline_validation import build_blind_generalization_report
+from football_intelligence.replay.blind_retention import build_retention_manifest
+from football_intelligence.replay.blind_review_candidates import build_review_candidates
+from football_intelligence.replay.blind_review_pack import build_blind_review_pack
+from football_intelligence.replay.blind_review_ui import build_review_ui
+from football_intelligence.replay.blind_window_extractor import (
+    build_raw_frame_sanity_report,
+    compare_extractions,
+    extract_blind_window,
+)
+from football_intelligence.replay.blind_window_selection import (
+    read_json as read_blind_json,
+    seal_blind_window_selection,
+)
+from football_intelligence.replay.source_retention import write_source_retention_artifacts
 
 app = typer.Typer(no_args_is_help=True)
 config_app = typer.Typer(no_args_is_help=True)
@@ -66,11 +87,13 @@ baseline_app = typer.Typer(no_args_is_help=True)
 registry_app = typer.Typer(no_args_is_help=True)
 replay_app = typer.Typer(no_args_is_help=True)
 true_replay_app = typer.Typer(no_args_is_help=True)
+blind_window_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
 app.add_typer(replay_app, name="replay")
 app.add_typer(true_replay_app, name="true-replay")
+app.add_typer(blind_window_app, name="blind-window")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -936,5 +959,173 @@ def true_replay_build_review_pack(
         artifact_root=artifact_root.resolve(),
         repo_root=repo_root,
         prompt_path=prompt,
+    )
+    typer.echo(review_pack.as_posix())
+
+
+@blind_window_app.command("select")
+def blind_window_select(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    source_video: Path = typer.Option(..., "--source-video", exists=True, readable=True),
+) -> None:
+    _ = artifact_root
+    result = seal_blind_window_selection(
+        repo_root=repo_root.resolve(),
+        stage_root=stage_root.resolve(),
+        source_video=source_video.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@blind_window_app.command("extract")
+def blind_window_extract(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    source_video: Path = typer.Option(..., "--source-video", exists=True, readable=True),
+) -> None:
+    _ = (repo_root, artifact_root)
+    selection = read_blind_json(stage_root / "selection/blind_window_selection.json")
+    kwargs = {
+        "source_video": source_video.resolve(),
+        "selected_start_seconds": int(selection["selected_start_seconds"]),
+        "duration_seconds": 60,
+        "output_fps": 10,
+        "output_width": 2730,
+        "output_height": 720,
+        "jpeg_quality": 95,
+    }
+    extract_blind_window(output_root=stage_root / "frames/extraction_a", **kwargs)
+    extract_blind_window(output_root=stage_root / "frames/extraction_b", **kwargs)
+    comparison = compare_extractions(
+        stage_root / "frames/extraction_a/frame_manifest.json",
+        stage_root / "frames/extraction_b/frame_manifest.json",
+        stage_root / "validation/frame_extraction_repeatability.json",
+    )
+    sanity = build_raw_frame_sanity_report(
+        stage_root / "frames/extraction_a/frame_manifest.json",
+        stage_root / "validation",
+    )
+    typer.echo(json.dumps({"repeatability": comparison["passed"], "raw_frame_sanity": sanity["passed"]}, indent=2))
+
+
+@blind_window_app.command("validate-source")
+def blind_window_validate_source(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    source_video: Path = typer.Option(..., "--source-video", exists=True, readable=True),
+) -> None:
+    selection = read_blind_json(stage_root / "selection/blind_window_selection.json")
+    contract = write_source_retention_artifacts(
+        stage_root=stage_root.resolve(),
+        source_video=source_video.resolve(),
+        selection=selection,
+        canonical_manifest=stage_root / "frames/extraction_a/frame_manifest.json",
+        control_manifest=stage_root / "frames/extraction_b/frame_manifest.json",
+        repo_commit=_git_environment(repo_root.resolve())["commit"],
+        dirty_state=_git_environment(repo_root.resolve())["dirty"],
+    )
+    _ = artifact_root
+    typer.echo(json.dumps(contract, indent=2, sort_keys=True))
+
+
+@blind_window_app.command("run")
+def blind_window_run(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_id: str = typer.Option(..., "--run-id"),
+) -> None:
+    _ = artifact_root
+    selection = read_blind_json(stage_root / "selection/blind_window_selection.json")
+    write_frozen_configuration_documents(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+        config_path=config.resolve(),
+        selection=selection,
+        reused_artifacts=[config.resolve()],
+    )
+    closure = build_blind_input_closure(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+        config_path=config.resolve(),
+        selection_seal=stage_root / "selection/blind_window_selection_seal.json",
+        source_manifest=stage_root / "source/source_video_manifest.json",
+        frame_manifest=stage_root / "frames/extraction_a/frame_manifest.json",
+        retention_contract=stage_root / "source/artifact_retention_contract.json",
+    )
+    summary = run_blind_pipeline_boundary(
+        run_root=stage_root / "runs" / run_id,
+        repo_root=repo_root.resolve(),
+        frame_manifest=stage_root / "frames/extraction_a/frame_manifest.json",
+        input_closure=closure,
+        run_label=run_id,
+    )
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+
+
+@blind_window_app.command("compare-runs")
+def blind_window_compare_runs(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    left_run: Path = typer.Option(..., "--left-run", exists=True, file_okay=False, dir_okay=True),
+    right_run: Path = typer.Option(..., "--right-run", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    _ = (repo_root, artifact_root)
+    result = compare_blind_runs(
+        left_run=left_run.resolve(),
+        right_run=right_run.resolve(),
+        validation_root=stage_root / "validation",
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@blind_window_app.command("build-review")
+def blind_window_build_review(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_dir: Path = typer.Option(..., "--run-dir", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    _ = (repo_root, artifact_root, config)
+    run_summary = read_blind_json(run_dir / "run_summary.json")
+    summary = build_review_candidates(
+        review_root=stage_root / "review",
+        frame_manifest=stage_root / "frames/extraction_a/frame_manifest.json",
+        run_summary=run_summary,
+    )
+    ui = build_review_ui(stage_root / "review")
+    comparison = read_blind_json(stage_root / "validation/blind_run_comparison.json")
+    selection = read_blind_json(stage_root / "selection/blind_window_selection.json")
+    build_blind_generalization_report(
+        validation_root=stage_root / "validation",
+        selection=selection,
+        frame_manifest=stage_root / "frames/extraction_a/frame_manifest.json",
+        run_summary=run_summary,
+        comparison=comparison,
+        review_summary=summary,
+    )
+    build_retention_manifest(stage_root)
+    typer.echo(json.dumps({"review_summary": summary, "ui": ui}, indent=2, sort_keys=True))
+
+
+@blind_window_app.command("build-review-pack")
+def blind_window_build_review_pack(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    prompt_path: Path = typer.Option(..., "--prompt-path", exists=True, readable=True),
+) -> None:
+    _ = artifact_root
+    review_pack = build_blind_review_pack(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+        prompt_path=prompt_path.resolve(),
     )
     typer.echo(review_pack.as_posix())

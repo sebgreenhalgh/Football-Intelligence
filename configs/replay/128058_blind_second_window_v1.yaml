@@ -1,0 +1,55 @@
+schema_version: m5.blind_window.config.v1
+match_id: "128058"
+blind_window_id: m5_blind_second_window_v1
+visual_only_not_metric: true
+selected_interval:
+  start_seconds: 780
+  end_seconds: 840
+  duration_seconds: 60
+source_video_manifest: matches/128058/runs/step_m5/05_blind_second_window/source/source_video_manifest.json
+canonical_frame_manifest: matches/128058/runs/step_m5/05_blind_second_window/frames/extraction_a/frame_manifest.json
+canonical_frame_root: matches/128058/runs/step_m5/05_blind_second_window/frames/extraction_a
+source_retention_contract: matches/128058/runs/step_m5/05_blind_second_window/source/artifact_retention_contract.json
+output_stage: matches/128058/runs/step_m5/05_blind_second_window
+run_parent: matches/128058/runs/step_m5/05_blind_second_window/runs
+frozen_step1_configuration:
+  source: committed_step1_visual_reconstruction_defaults
+  reuse_without_blind_window_tuning: true
+frozen_visual_role_configuration:
+  source: committed_step1_visual_reconstruction_defaults
+  reuse_without_blind_window_tuning: true
+frozen_match_local_visual_continuity_configuration:
+  source: historical_goal_window_match_local_transfer
+  reuse_allowed_within_match: true
+frozen_m2_m3_m3r_m3s_m3t_settings:
+  source: committed_step2_visual_continuity_defaults
+  reuse_without_blind_window_tuning: true
+review_candidate_policy:
+  maximum_candidates: 32
+  target_completion_minutes: 10
+  expected_average_review_seconds: 15
+safety:
+  production_ready: false
+  no_auto_promotion: true
+  human_approved: false
+  safe_to_apply_globally: false
+  match_local_only: true
+  sandbox_only: true
+  no_identity_tracking: true
+  no_identity_ids: true
+  no_player_slots: true
+  no_goalkeeper_slots: true
+  no_expected_22_states: true
+  no_exact_count_forcing: true
+  no_pitch_metric_truth: true
+  no_speed_distance_fatigue_load_or_physical_analysis: true
+  no_team_shape_event_tactical_conclusions: true
+  do_not_exclude_officials_or_referees: true
+  do_not_delete_bad_detections: true
+  do_not_silently_discard_uncertain_rows: true
+  do_not_use_historical_m4_rows_or_media_as_build_inputs: true
+  do_not_tune_after_blind_output: true
+no_tuning_declaration:
+  no_blind_window_specific_threshold_or_weight: true
+  no_project_wide_default_change: true
+  selection_was_deterministic_without_frame_inspection: true
