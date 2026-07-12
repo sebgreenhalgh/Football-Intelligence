@@ -79,6 +79,23 @@ from football_intelligence.replay.blind_window_selection import (
     read_json as read_blind_json,
     seal_blind_window_selection,
 )
+from football_intelligence.replay.portable_pipeline import (
+    backup_confirmation_status,
+    build_context_from_cli,
+    build_dependency_closure,
+    build_raw_source_sanity_evidence,
+    build_review_artifacts as build_portable_review_artifacts,
+    build_review_pack as build_portable_review_pack,
+    compare_portable_runs,
+    final_classification,
+    no_tuning_audit,
+    run_portable_pipeline,
+    write_portability_audit,
+)
+from football_intelligence.replay.portable_step1 import run_portable_step1
+from football_intelligence.replay.portable_step1_validation import validate_existing_step1_outputs
+from football_intelligence.replay.portable_step2 import run_portable_step2
+from football_intelligence.replay.portable_step2_validation import validate_existing_step2_outputs
 from football_intelligence.replay.source_retention import write_source_retention_artifacts
 
 app = typer.Typer(no_args_is_help=True)
@@ -88,12 +105,14 @@ registry_app = typer.Typer(no_args_is_help=True)
 replay_app = typer.Typer(no_args_is_help=True)
 true_replay_app = typer.Typer(no_args_is_help=True)
 blind_window_app = typer.Typer(no_args_is_help=True)
+portable_blind_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
 app.add_typer(replay_app, name="replay")
 app.add_typer(true_replay_app, name="true-replay")
 app.add_typer(blind_window_app, name="blind-window")
+app.add_typer(portable_blind_app, name="portable-blind")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -1129,3 +1148,201 @@ def blind_window_build_review_pack(
         prompt_path=prompt_path.resolve(),
     )
     typer.echo(review_pack.as_posix())
+
+
+def _portable_context(
+    *,
+    repo_root: Path,
+    artifact_root: Path,
+    config: Path,
+    stage_root: Path,
+    run_root: Path | None = None,
+    run_id: str = "portable_blind_run",
+):
+    return build_context_from_cli(
+        repo_root=repo_root.resolve(),
+        artifact_root=artifact_root.resolve(),
+        config=config.resolve(),
+        stage_root=stage_root.resolve(),
+        run_root=run_root.resolve() if run_root is not None else None,
+        run_id=run_id,
+    )
+
+
+@portable_blind_app.command("audit")
+def portable_blind_audit(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(repo_root=repo_root, artifact_root=artifact_root, config=config, stage_root=stage_root)
+    result = write_portability_audit(context)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("seal-closure")
+def portable_blind_seal_closure(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(repo_root=repo_root, artifact_root=artifact_root, config=config, stage_root=stage_root)
+    closure = build_dependency_closure(context)
+    build_raw_source_sanity_evidence(context)
+    backup_confirmation_status(context)
+    no_tuning_audit(context)
+    typer.echo(json.dumps(closure, indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("run-step1")
+def portable_blind_run_step1(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_root: Path = typer.Option(..., "--run-root", file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(
+        repo_root=repo_root,
+        artifact_root=artifact_root,
+        config=config,
+        stage_root=stage_root,
+        run_root=run_root,
+    )
+    result = run_portable_step1(context)
+    context.write_json("validation/source_access_audit.json", context.source_access_audit())
+    typer.echo(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("validate-step1")
+def portable_blind_validate_step1(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_root: Path = typer.Option(..., "--run-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(
+        repo_root=repo_root,
+        artifact_root=artifact_root,
+        config=config,
+        stage_root=stage_root,
+        run_root=run_root,
+    )
+    result = validate_existing_step1_outputs(context)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("run-step2")
+def portable_blind_run_step2(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_root: Path = typer.Option(..., "--run-root", file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(
+        repo_root=repo_root,
+        artifact_root=artifact_root,
+        config=config,
+        stage_root=stage_root,
+        run_root=run_root,
+    )
+    result = run_portable_step2(context)
+    context.write_json("validation/source_access_audit.json", context.source_access_audit())
+    typer.echo(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("validate-step2")
+def portable_blind_validate_step2(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_root: Path = typer.Option(..., "--run-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(
+        repo_root=repo_root,
+        artifact_root=artifact_root,
+        config=config,
+        stage_root=stage_root,
+        run_root=run_root,
+    )
+    result = validate_existing_step2_outputs(context)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("run")
+def portable_blind_run(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_root: Path = typer.Option(..., "--run-root", file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(
+        repo_root=repo_root,
+        artifact_root=artifact_root,
+        config=config,
+        stage_root=stage_root,
+        run_root=run_root,
+    )
+    summary = run_portable_pipeline(context)
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("compare")
+def portable_blind_compare(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    left_run: Path = typer.Option(..., "--left-run", exists=True, file_okay=False, dir_okay=True),
+    right_run: Path = typer.Option(..., "--right-run", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    _ = (repo_root, artifact_root, config)
+    result = compare_portable_runs(stage_root=stage_root.resolve(), run_a=left_run.resolve(), run_b=right_run.resolve())
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("build-review")
+def portable_blind_build_review(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_root: Path = typer.Option(..., "--run-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    context = _portable_context(
+        repo_root=repo_root,
+        artifact_root=artifact_root,
+        config=config,
+        stage_root=stage_root,
+        run_root=run_root,
+    )
+    result = build_portable_review_artifacts(context)
+    final_classification(stage_root.resolve())
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@portable_blind_app.command("build-review-pack")
+def portable_blind_build_review_pack(
+    repo_root: Path = typer.Option(..., "--repo-root", file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(..., "--artifact-root", file_okay=False, dir_okay=True),
+    config: Path = typer.Option(..., "--config", exists=True, readable=True),
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    run_root: Path = typer.Option(..., "--run-root", exists=True, file_okay=False, dir_okay=True),
+    prompt_path: Path = typer.Option(..., "--prompt-path", exists=True, readable=True),
+) -> None:
+    context = _portable_context(
+        repo_root=repo_root,
+        artifact_root=artifact_root,
+        config=config,
+        stage_root=stage_root,
+        run_root=run_root,
+    )
+    manifest = build_portable_review_pack(context=context, prompt_path=prompt_path.resolve())
+    final_classification(stage_root.resolve())
+    typer.echo(json.dumps(manifest, indent=2, sort_keys=True))
