@@ -795,6 +795,15 @@ def build_review_pack(*, context: PortableVisualRunContext, prompt_path: Path) -
                 "sha256": sha256_file(path) if path.exists() else None,
             }
         )
+    manifest_rows.append(
+        {
+            "filename": files[-1],
+            "byte_size": None,
+            "sha256": None,
+            "self_manifest": True,
+            "note": "Self hash omitted because the manifest cannot contain a stable hash of itself.",
+        }
+    )
     manifest = guardrail_payload(
         {
             "artifact": "portable_review_pack_manifest",
