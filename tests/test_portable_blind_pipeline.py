@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 from football_intelligence.replay.portable_context import build_portable_context
-from football_intelligence.replay.portable_pipeline import compare_portable_runs, no_tuning_audit
+from football_intelligence.replay.portable_pipeline import compare_portable_runs, no_tuning_audit, run_portable_pipeline
 from football_intelligence.replay.portable_step1 import run_portable_step1
 from football_intelligence.replay.portable_step2 import run_portable_step2
 
@@ -101,6 +101,7 @@ def make_context(tmp_path: Path, *, missing_model: bool = False):
                 "matches/128058/runs/step_m5/05_blind_second_window/source/artifact_retention_contract.json",
                 "blind_selection_seal: "
                 "matches/128058/runs/step_m5/05_blind_second_window/selection/blind_window_selection_seal.json",
+                "canonical_control_ordered_inventory_hash: test_inventory_hash",
                 "output_stage: matches/128058/runs/step_m5/06_portable_blind_pipeline",
                 "run_parent: matches/128058/runs/step_m5/06_portable_blind_pipeline/runs",
                 "model_weight_path: models/model=yolov8m-imgsz=2048.pt",
@@ -156,11 +157,13 @@ def test_portable_step1_and_step2_synthetic_flow(tmp_path: Path) -> None:
 
 def test_missing_detection_dependency_blocks_without_placeholder_success(tmp_path: Path) -> None:
     context = make_context(tmp_path, missing_model=True)
-    result = run_portable_step1(context)
-    assert result.completion_status == "blocked_missing_model_or_configuration_dependency"
+    summary = run_portable_pipeline(context)
+    assert summary["completion_status"] == "blocked_missing_model_or_configuration_dependency"
+    assert summary["frame_inventory_hash"] == "test_inventory_hash"
+    result = summary["step1"]
+    assert result["completion_status"] == "blocked_missing_model_or_configuration_dependency"
     assert not context.run_path("step1/step1f3_human_corrected_fused_visual_role_state_rows.json").exists()
-    step2 = run_portable_step2(context)
-    assert step2.completion_status == "blocked_step1_required_output_missing"
+    assert summary["step2"]["completion_status"] == "blocked_step1_required_output_missing"
 
 
 def test_source_ledger_rejects_preserved_m4_input(tmp_path: Path) -> None:

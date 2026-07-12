@@ -552,13 +552,16 @@ def run_portable_pipeline(context: PortableVisualRunContext) -> dict[str, Any]:
         }
     )
     context.write_json("validation/source_mutation_check.json", source_mutation)
+    frame_inventory_hash = context.config.get("canonical_control_ordered_inventory_hash")
+    if not frame_inventory_hash and context.frame_manifest_path.exists():
+        frame_inventory_hash = sha256_file(context.frame_manifest_path)
     summary = guardrail_payload(
         {
             "artifact": "portable_blind_run_summary",
             "created_at": utc_now(),
             "run_root": str(context.run_root),
             "dependency_closure_hash": closure.get("input_closure_hash"),
-            "frame_inventory_hash": closure.get("input_closure_hash"),
+            "frame_inventory_hash": frame_inventory_hash,
             "configuration_hash": sha256_file(context.config_path) if context.config_path.exists() else None,
             "step1": step1_result.as_dict(),
             "step2": step2_result.as_dict(),

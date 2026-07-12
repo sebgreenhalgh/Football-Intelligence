@@ -11,6 +11,7 @@ canonical_frame_manifest: matches/128058/runs/step_m5/05_blind_second_window/fra
 canonical_frame_root: matches/128058/runs/step_m5/05_blind_second_window/frames/extraction_a
 source_retention_contract: matches/128058/runs/step_m5/05_blind_second_window/source/artifact_retention_contract.json
 blind_selection_seal: matches/128058/runs/step_m5/05_blind_second_window/selection/blind_window_selection_seal.json
+canonical_control_ordered_inventory_hash: 0aa965c2ac39025c0b4fa3bb6c12017be9e3be9cb3e8284fb998c187c28d8c98
 output_stage: matches/128058/runs/step_m5/06_portable_blind_pipeline
 run_parent: matches/128058/runs/step_m5/06_portable_blind_pipeline/runs
 model_weight_path: models/model=yolov8m-imgsz=2048.pt
