@@ -14,6 +14,11 @@ from football_intelligence.replay.portable_context import (
     sha256_file,
     utc_now,
 )
+from football_intelligence.replay.portable_detector import (
+    DetectorValidationError,
+    run_detector_inference,
+    run_detector_smoke_test,
+)
 from football_intelligence.step1_visual_reconstruction.colour_features import build_colour_feature_payload
 from football_intelligence.step1_visual_reconstruction.count_policy import build_count_policy_payload
 from football_intelligence.step1_visual_reconstruction.fused_visual_role_state import (
@@ -358,15 +363,82 @@ def _blocked_dependency_result(context: PortableVisualRunContext, missing: list[
     )
 
 
+def _blocked_detector_result(
+    context: PortableVisualRunContext,
+    *,
+    completion_status: str,
+    blocker: str,
+    detector_manifest: dict[str, Any] | None = None,
+) -> PortableStageResult:
+    detection_count = int((detector_manifest or {}).get("person_detection_count", 0) or 0)
+    payload = guardrail_payload(
+        {
+            "artifact": "portable_step1_blocked_detector",
+            "created_at": utc_now(),
+            "completion_status": completion_status,
+            "blocked_reason": blocker,
+            "person_detection_count": detection_count,
+            "step2_allowed_to_run": False,
+        }
+    )
+    path = context.write_json("step1/step1_blocked_detector.json", payload)
+    context.write_json(
+        "validation/step1_portable_validation.json",
+        guardrail_payload(
+            {
+                "artifact": "step1_portable_validation",
+                "created_at": utc_now(),
+                "passed": False,
+                "completion_status": completion_status,
+                "blocking_substage": "step1_real_detector_execution",
+                "blocking_reason": blocker,
+                "person_detection_count": detection_count,
+            }
+        ),
+    )
+    context.write_json(
+        "validation/step1_frame_coverage.json",
+        {"artifact": "step1_frame_coverage", "created_at": utc_now(), "passed": False, "frames_considered": 0},
+    )
+    context.write_json(
+        "validation/step1_guardrail_audit.json",
+        guardrail_payload(
+            {
+                "artifact": "step1_guardrail_audit",
+                "created_at": utc_now(),
+                "passed": False,
+                "blocking_reason": blocker,
+                "forbidden_keys_present": [],
+            }
+        ),
+    )
+    context.write_json(
+        "validation/step1_output_inventory.json",
+        {"artifact": "step1_output_inventory", "created_at": utc_now(), "output_count": 1, "outputs": [str(path)]},
+    )
+    return PortableStageResult(
+        stage="step1",
+        completion_status=completion_status,
+        output_paths={"blocked_detector": str(path)},
+        counts={"f3_row_count": 0, "frame_count": 0, "person_detection_count": detection_count},
+        warnings=[blocker],
+        blocker=blocker,
+    )
+
+
 def _missing_detection_dependencies(context: PortableVisualRunContext) -> list[dict[str, Any]]:
     missing = []
     detection_source = str(context.config.get("step1_detection_source_manifest", "") or "")
     model_path = str(context.config.get("model_weight_path", "") or "")
-    if detection_source:
+    try:
+        mode = _detector_input_mode(context)
+    except DetectorValidationError as exc:
+        return [{"artifact_id": "detector_input_mode", "path": "", "reason": str(exc)}]
+    if mode == "manifest" and detection_source:
         path = (context.artifact_root / detection_source).resolve()
         if not path.exists():
             missing.append({"artifact_id": "step1_detection_source_manifest", "path": str(path), "reason": "missing"})
-    if model_path:
+    if mode == "model" and model_path:
         path = (context.repo_root / model_path).resolve()
         if not path.exists():
             missing.append({"artifact_id": "person_detection_model_weights", "path": str(path), "reason": "missing"})
@@ -381,13 +453,39 @@ def _missing_detection_dependencies(context: PortableVisualRunContext) -> list[d
     return missing
 
 
+def _detector_input_mode(context: PortableVisualRunContext) -> str:
+    source = str(context.config.get("step1_detection_source_manifest", "") or "")
+    model_path = str(context.config.get("model_weight_path", "") or "")
+    mode = str(context.config.get("detector_input_mode", "") or "").strip().lower()
+    if mode:
+        if mode not in {"manifest", "model"}:
+            raise DetectorValidationError(f"unsupported detector_input_mode: {mode}")
+        return mode
+    if source and model_path:
+        raise DetectorValidationError("detector_input_mode is required when both manifest and model are declared")
+    if source:
+        return "manifest"
+    if model_path:
+        return "model"
+    raise DetectorValidationError("no declared detection source manifest or model weight path")
+
+
 def _load_detection_payload(
-    context: PortableVisualRunContext, detection_payload: dict[str, Any] | None
+    context: PortableVisualRunContext,
+    detection_payload: dict[str, Any] | None,
+    *,
+    detector_model_factory: Any | None = None,
 ) -> dict[str, Any] | None:
     if detection_payload is not None:
         return detection_payload
+    mode = _detector_input_mode(context)
+    if mode == "model":
+        smoke = run_detector_smoke_test(context, model_factory=detector_model_factory)
+        if not smoke.get("passed"):
+            raise DetectorValidationError(str(smoke.get("blocking_reason", "detector smoke test failed")))
+        return run_detector_inference(context, model_factory=detector_model_factory)
     source = str(context.config.get("step1_detection_source_manifest", "") or "")
-    if not source:
+    if mode != "manifest" or not source:
         return None
     source_path = (context.artifact_root / source).resolve()
     return context.read_declared_json(
@@ -401,6 +499,7 @@ def run_portable_step1(
     context: PortableVisualRunContext,
     *,
     detection_payload: dict[str, Any] | None = None,
+    detector_model_factory: Any | None = None,
 ) -> PortableStageResult:
     if detection_payload is None:
         missing = _missing_detection_dependencies(context)
@@ -408,13 +507,34 @@ def run_portable_step1(
             return _blocked_dependency_result(context, missing)
 
     manifest_frames = context.canonical_frames()
-    source_payload = normalise_detection_payload(
-        _load_detection_payload(context, detection_payload) or {}, manifest_frames
-    )
+    try:
+        raw_detection_payload = _load_detection_payload(
+            context,
+            detection_payload,
+            detector_model_factory=detector_model_factory,
+        )
+    except DetectorValidationError as exc:
+        return _blocked_detector_result(
+            context,
+            completion_status="blocked_model_load_or_task_validation",
+            blocker=str(exc),
+        )
+    source_payload = normalise_detection_payload(raw_detection_payload or {}, manifest_frames)
+    if detection_payload is None and _detector_input_mode(context) == "model":
+        detector_count = int((raw_detection_payload or {}).get("person_detection_count", 0) or 0)
+        if detector_count == 0:
+            return _blocked_detector_result(
+                context,
+                completion_status="detector_executed_zero_detections",
+                blocker="detector executed successfully but produced zero person detections",
+                detector_manifest=raw_detection_payload,
+            )
     source_name = str(context.config.get("step1_detection_source_name", "player") or "player")
-    source_paths = {
-        source_name: str(context.config.get("step1_detection_source_manifest", "in_memory_detection_payload"))
-    }
+    if detection_payload is None and _detector_input_mode(context) == "model":
+        source_path = context.run_path("step1/detector/detector_source_manifest.json")
+    else:
+        source_path = str(context.config.get("step1_detection_source_manifest", "in_memory_detection_payload"))
+    source_paths = {source_name: str(source_path)}
 
     for frame in manifest_frames:
         if context.source_ledger is not None:

@@ -19,6 +19,10 @@ from football_intelligence.replay.portable_context import (
     write_json_file,
     write_text_file,
 )
+from football_intelligence.replay.portable_detector_validation import (
+    model_validation_summary,
+    write_detector_provenance_artifacts,
+)
 from football_intelligence.replay.portable_step1 import run_portable_step1
 from football_intelligence.replay.portable_step2 import run_portable_step2
 from football_intelligence.step2_visual_continuity.schema import rows_from_payload
@@ -33,6 +37,14 @@ FINAL_CLASSIFICATIONS = {
     "FAIL_PORTABLE_PIPELINE_NONDETERMINISTIC",
     "FAIL_SAFETY_OR_SOURCE_MUTATION",
 }
+
+
+def _is_m5_4a(context: PortableVisualRunContext) -> bool:
+    return str(context.config.get("schema_version", "")).startswith("m5_4a")
+
+
+def _is_m5_4a_stage(stage_root: Path) -> bool:
+    return "06a_detector_dependency_recovery" in str(stage_root)
 
 
 def _repo_file(repo_root: Path, relative: str) -> Path:
@@ -275,6 +287,20 @@ def model_and_calibration_dependency_inventory(context: PortableVisualRunContext
                 "person_detection_model_weights", path, role="Step1 person detector", stage_consumers=["STEP1A"]
             )
         )
+        for artifact_id, key, role in [
+            ("person_detection_model_sha256", "model_sha256_path", "Step1 person detector SHA-256 sidecar"),
+            ("person_detection_model_provenance", "model_provenance_path", "Step1 person detector provenance"),
+        ]:
+            value = str(context.config.get(key, "") or "")
+            if value:
+                records.append(
+                    _artifact_record(
+                        artifact_id,
+                        (context.repo_root / value).resolve(),
+                        role=role,
+                        stage_consumers=["closure", "STEP1A"],
+                    )
+                )
     else:
         records.append(
             {
@@ -340,6 +366,8 @@ def dependency_records(context: PortableVisualRunContext) -> list[dict[str, Any]
     for relative in [
         "src/football_intelligence/cli/app.py",
         "src/football_intelligence/replay/portable_context.py",
+        "src/football_intelligence/replay/portable_detector.py",
+        "src/football_intelligence/replay/portable_detector_validation.py",
         "src/football_intelligence/replay/portable_pipeline.py",
         "src/football_intelligence/replay/portable_step1.py",
         "src/football_intelligence/replay/portable_step1_validation.py",
@@ -383,13 +411,16 @@ def dependency_records(context: PortableVisualRunContext) -> list[dict[str, Any]
 
 
 def build_dependency_closure(context: PortableVisualRunContext) -> dict[str, Any]:
+    is_m5_4a = _is_m5_4a(context)
+    if is_m5_4a:
+        write_detector_provenance_artifacts(context)
     records = dependency_records(context)
     missing = [row for row in records if row.get("required") is True and row.get("present") is not True]
     human_decisions = [row for row in records if row.get("contains_human_decisions") is True]
     closure = guardrail_payload(
         {
-            "schema_version": "m5_4.portable_pipeline_input_closure.v1",
-            "artifact": "portable_pipeline_input_closure",
+            "schema_version": "m5_4a.input_closure.v1" if is_m5_4a else "m5_4.portable_pipeline_input_closure.v1",
+            "artifact": "m5_4a_input_closure" if is_m5_4a else "portable_pipeline_input_closure",
             "created_at": utc_now(),
             "match_id": context.match_id,
             "window_id": context.window_id,
@@ -419,14 +450,16 @@ def build_dependency_closure(context: PortableVisualRunContext) -> dict[str, Any
     )
     closure["closure_status"] = "blocked_missing_dependency" if missing else "sealed"
     manifest = {
-        "schema_version": "m5_4.portable_pipeline_dependency_manifest.v1",
+        "schema_version": "m5_4a.dependency_manifest.v1"
+        if is_m5_4a
+        else "m5_4.portable_pipeline_dependency_manifest.v1",
         "created_at": utc_now(),
         "dependency_count": len(records),
         "records": records,
         "dependency_manifest_hash": semantic_hash(records),
     }
     seal = {
-        "schema_version": "m5_4.portable_pipeline_input_closure_seal.v1",
+        "schema_version": "m5_4a.input_closure_seal.v1" if is_m5_4a else "m5_4.portable_pipeline_input_closure_seal.v1",
         "created_at": utc_now(),
         "input_closure_hash": closure["input_closure_hash"],
         "closure_status": closure["closure_status"],
@@ -453,6 +486,11 @@ def build_dependency_closure(context: PortableVisualRunContext) -> dict[str, Any
     write_json_file(context.stage_path("closure/portable_pipeline_input_closure_seal.json"), seal)
     write_json_file(context.stage_path("closure/model_weight_manifest.json"), model_manifest)
     write_json_file(context.stage_path("closure/match_local_configuration_manifest.json"), match_local_manifest)
+    if is_m5_4a:
+        write_json_file(context.stage_path("closure/m5_4a_dependency_manifest.json"), manifest)
+        write_json_file(context.stage_path("closure/m5_4a_input_closure.json"), closure)
+        write_json_file(context.stage_path("closure/m5_4a_input_closure_seal.json"), seal)
+        write_json_file(context.stage_path("validation/model_validation.json"), model_validation_summary(context))
     return closure
 
 
@@ -599,6 +637,10 @@ def run_portable_pipeline(context: PortableVisualRunContext) -> dict[str, Any]:
 def _run_completion_status(step1_status: str, step2_status: str) -> str:
     if step1_status == "blocked_missing_model_or_configuration_dependency":
         return "blocked_missing_model_or_configuration_dependency"
+    if step1_status == "blocked_model_load_or_task_validation":
+        return "blocked_model_load_or_task_validation"
+    if step1_status == "detector_executed_zero_detections":
+        return "blocked_detector_executed_zero_detections"
     if step1_status != "completed":
         return "blocked_step1_portability"
     if step2_status != "completed":
@@ -631,6 +673,14 @@ def compare_portable_runs(*, stage_root: Path, run_a: Path, run_b: Path) -> dict
     step1_b = _load_rows(run_b / "step1/step1f3_human_corrected_fused_visual_role_state_rows.json")
     step2_a = _load_rows(run_a / "step2/step2m1_visual_continuity_edge_candidate_rows.json")
     step2_b = _load_rows(run_b / "step2/step2m1_visual_continuity_edge_candidate_rows.json")
+    detector_a = _load_rows(run_a / "step1/detector/detection_rows.json")
+    detector_b = _load_rows(run_b / "step1/detector/detection_rows.json")
+    detector_diff = {
+        "artifact": "detector_structured_diff",
+        "equal": detector_a == detector_b,
+        "run_a_rows": len(detector_a),
+        "run_b_rows": len(detector_b),
+    }
     step1_diff = {
         "artifact": "step1_structured_diff",
         "equal": step1_a == step1_b,
@@ -655,11 +705,16 @@ def compare_portable_runs(*, stage_root: Path, run_a: Path, run_b: Path) -> dict
             "run_b_completion_status": summary_b.get("completion_status"),
             "blocked_status_parity_is_not_pipeline_repeatability": not executed and status_equal,
             "real_pipeline_executed_in_both_runs": executed,
+            "detector_rows_equal": detector_diff["equal"],
             "step1_rows_equal": step1_diff["equal"],
             "step2_rows_equal": step2_diff["equal"],
-            "row_level_repeatability_passed": executed and step1_diff["equal"] and step2_diff["equal"],
+            "row_level_repeatability_passed": executed
+            and detector_diff["equal"]
+            and step1_diff["equal"]
+            and step2_diff["equal"],
         }
     )
+    write_json_file(stage_root / "validation/detector_structured_diff.json", detector_diff)
     write_json_file(paths["step1_structured_diff"], step1_diff)
     write_json_file(paths["step2_structured_diff"], step2_diff)
     write_json_file(
@@ -680,6 +735,9 @@ def compare_portable_runs(*, stage_root: Path, run_a: Path, run_b: Path) -> dict
         },
     )
     write_json_file(paths["comparison"], comparison)
+    if _is_m5_4a_stage(stage_root):
+        write_json_file(stage_root / "validation/real_portable_run_comparison.json", comparison)
+        write_json_file(stage_root / "validation/media_diff.json", {"artifact": "media_diff", "not_applicable": True})
     return comparison
 
 
@@ -701,6 +759,41 @@ def build_review_artifacts(context: PortableVisualRunContext) -> dict[str, Any]:
         return summary
     payload = read_json_file(review_source)
     rows = rows_from_payload(payload)
+    ui_path = review_root / "blind_review_ui.html"
+    if rows:
+        rows_json = json.dumps(rows, indent=2, sort_keys=True)
+        html = "\n".join(
+            [
+                "<!doctype html>",
+                '<html lang="en">',
+                '<head><meta charset="utf-8"><title>M5 Blind Review</title>',
+                "<style>body{font-family:Arial,sans-serif;margin:24px;max-width:1200px}"
+                "pre{white-space:pre-wrap;background:#f5f5f5;padding:12px}</style></head>",
+                "<body>",
+                "<h1>Blind Review</h1>",
+                f"<p>{VISUAL_ONLY_WARNING}; no identity, slot, metric, event, tactical, or physical claims.</p>",
+                "<p>Keyboard labels: A accept, U unresolved, R reject. Decisions are not prefilled.</p>",
+                '<pre id="rows"></pre>',
+                "<script>",
+                f"const rows = {rows_json};",
+                "document.getElementById('rows').textContent = JSON.stringify(rows, null, 2);",
+                "</script>",
+                "</body></html>",
+            ]
+        )
+        write_text_file(ui_path, html)
+        write_json_file(
+            review_root / "blind_review_decision_template.json",
+            {
+                "artifact": "blind_review_decision_template",
+                "rows": [],
+                "allowed_states": ["accept", "reject", "unresolved"],
+                "prefilled_acceptance": False,
+            },
+        )
+        write_json_file(
+            review_root / "blind_review_progress.json", {"artifact": "blind_review_progress", "decisions": []}
+        )
     summary = guardrail_payload(
         {
             "artifact": "blind_review_candidate_summary",
@@ -711,6 +804,8 @@ def build_review_artifacts(context: PortableVisualRunContext) -> dict[str, Any]:
             ),
             "candidate_count_at_most_32": len(rows) <= 32,
             "real_candidates_from_blind_outputs": True,
+            "ui_created": bool(rows),
+            "review_ui_path": str(ui_path) if rows else None,
         }
     )
     write_json_file(review_root / "blind_review_candidate_rows.json", payload)
@@ -723,7 +818,10 @@ def build_review_artifacts(context: PortableVisualRunContext) -> dict[str, Any]:
             "artifact": "blind_review_ui_manifest",
             "created_at": utc_now(),
             "candidate_count": len(rows),
-            "ui_created": False,
+            "ui_created": bool(rows),
+            "ui_path": str(ui_path) if rows else None,
+            "prefilled_acceptance": False,
+            "identity_or_metric_interpretation": False,
         },
     )
     return summary
@@ -746,6 +844,8 @@ def _copy_text_or_na(src: Path, dest: Path, *, artifact: str) -> None:
 
 
 def build_review_pack(*, context: PortableVisualRunContext, prompt_path: Path) -> dict[str, Any]:
+    if _is_m5_4a(context):
+        return build_m5_4a_review_pack(context=context, prompt_path=prompt_path)
     pack_root = context.stage_path("review_pack")
     pack_root.mkdir(parents=True, exist_ok=True)
     files = [
@@ -838,8 +938,145 @@ def build_review_pack(*, context: PortableVisualRunContext, prompt_path: Path) -
     return manifest
 
 
+def build_m5_4a_review_pack(*, context: PortableVisualRunContext, prompt_path: Path) -> dict[str, Any]:
+    pack_root = context.stage_path("review_pack")
+    pack_root.mkdir(parents=True, exist_ok=True)
+    files = [
+        "00_REVIEW_GUIDE.md",
+        "01_ORIGINAL_PROMPT.txt",
+        "02_DETECTOR_SEARCH_INVENTORY.json",
+        "03_DETECTOR_RECOVERY_DECISION.json",
+        "04_DETECTOR_PROVENANCE.json",
+        "05_DETECTOR_RUNTIME_CONTRACT.json",
+        "06_DETECTOR_SMOKE_TEST.json",
+        "07_M5_4A_INPUT_CLOSURE.json",
+        "08_MODEL_VALIDATION.json",
+        "09_RUN_A_DETECTOR_SUMMARY.json",
+        "10_RUN_B_DETECTOR_SUMMARY.json",
+        "11_DETECTOR_STRUCTURED_DIFF.json",
+        "12_STEP1_VALIDATION.json",
+        "13_STEP2_VALIDATION.json",
+        "14_REAL_PORTABLE_RUN_COMPARISON.json",
+        "15_REVIEW_CANDIDATE_SUMMARY.json",
+        "16_portable_detector.py",
+        "17_portable_step1.py",
+        "18_test_portable_detector.py",
+        "19_REVIEW_PACK_MANIFEST.json",
+    ]
+    guide = "\n".join(
+        [
+            "# M5.4A Detector Dependency Recovery Review Guide",
+            "",
+            f"- Warning: `{VISUAL_ONLY_WARNING}`.",
+            "- Detector source is a new official YOLOv8m baseline, not a historical checkpoint recovery.",
+            "- Nothing in this pack is production-ready, globally safe, identity tracking, slot assignment, "
+            "metric analysis, event analysis, tactical analysis, or physical-performance analysis.",
+            "",
+        ]
+    )
+    write_text_file(pack_root / files[0], guide)
+    _copy_text_or_na(prompt_path, pack_root / files[1], artifact="original_prompt")
+    run_a = context.stage_path("runs/portable_real_run_a")
+    run_b = context.stage_path("runs/portable_real_run_b")
+    mapping = {
+        files[2]: context.stage_path("provenance/detector_search_inventory.json"),
+        files[3]: context.stage_path("provenance/detector_recovery_decision.json"),
+        files[4]: context.stage_path("provenance/detector_provenance.json"),
+        files[5]: run_a / "step1/detector/detector_runtime_contract.json",
+        files[6]: context.stage_path("validation/detector_smoke_test.json"),
+        files[7]: context.stage_path("closure/m5_4a_input_closure.json"),
+        files[8]: context.stage_path("validation/model_validation.json"),
+        files[9]: run_a / "step1/detector/detection_frame_summary.json",
+        files[10]: run_b / "step1/detector/detection_frame_summary.json",
+        files[11]: context.stage_path("validation/detector_structured_diff.json"),
+        files[12]: run_a / "validation/step1_portable_validation.json",
+        files[13]: run_a / "validation/step2_portable_validation.json",
+        files[14]: context.stage_path("validation/real_portable_run_comparison.json"),
+        files[15]: context.stage_path("review/blind_review_candidate_summary.json"),
+        files[16]: context.repo_root / "src/football_intelligence/replay/portable_detector.py",
+        files[17]: context.repo_root / "src/football_intelligence/replay/portable_step1.py",
+        files[18]: context.repo_root / "tests/test_portable_detector.py",
+    }
+    for filename, src in mapping.items():
+        _copy_or_na(src, pack_root / filename, artifact=filename)
+    manifest_rows = []
+    for filename in files[:-1]:
+        path = pack_root / filename
+        manifest_rows.append(
+            {
+                "filename": filename,
+                "byte_size": path.stat().st_size if path.exists() else 0,
+                "sha256": sha256_file(path) if path.exists() else None,
+            }
+        )
+    manifest_rows.append(
+        {
+            "filename": files[-1],
+            "byte_size": None,
+            "sha256": None,
+            "self_manifest": True,
+            "note": "Self hash omitted because the manifest cannot contain a stable hash of itself.",
+        }
+    )
+    manifest = guardrail_payload(
+        {
+            "artifact": "m5_4a_review_pack_manifest",
+            "created_at": utc_now(),
+            "file_count": len(files),
+            "exactly_20_files": len(files) == 20,
+            "files": manifest_rows,
+        }
+    )
+    write_json_file(pack_root / files[-1], manifest)
+    return manifest
+
+
 def final_classification(stage_root: Path) -> dict[str, Any]:
     stage_root = stage_root.resolve()
+    if _is_m5_4a_stage(stage_root):
+        closure_path = stage_root / "closure/m5_4a_input_closure.json"
+        comparison_path = stage_root / "validation/real_portable_run_comparison.json"
+        review_path = stage_root / "review/blind_review_candidate_summary.json"
+        run_a_path = stage_root / "runs/portable_real_run_a/run_summary.json"
+        closure = read_json_file(closure_path) if closure_path.exists() else {}
+        comparison = read_json_file(comparison_path) if comparison_path.exists() else {}
+        review = read_json_file(review_path) if review_path.exists() else {}
+        run_a = read_json_file(run_a_path) if run_a_path.exists() else {}
+        status = str(run_a.get("completion_status", ""))
+        if closure.get("missing_required_dependency_count", 0) > 0:
+            classification = "BLOCKED_HISTORICAL_WEIGHT_FILE_MISSING"
+            blocker = "M5.4A detector dependency closure is incomplete."
+        elif status == "blocked_model_load_or_task_validation":
+            classification = "BLOCKED_MODEL_LOAD_OR_TASK_VALIDATION"
+            blocker = "Detector model failed load/task/class/hash validation."
+        elif status == "blocked_detector_executed_zero_detections":
+            classification = "BLOCKED_DETECTOR_EXECUTED_ZERO_DETECTIONS"
+            blocker = "Detector executed but produced zero person detections."
+        elif run_a.get("step1", {}).get("completion_status") != "completed":
+            classification = "BLOCKED_STEP1_AFTER_REAL_DETECTION"
+            blocker = "Step1 did not complete after real detector execution."
+        elif run_a.get("step2", {}).get("completion_status") != "completed":
+            classification = "BLOCKED_STEP2_AFTER_REAL_STEP1"
+            blocker = "Step2 did not complete after real Step1 output."
+        elif comparison.get("row_level_repeatability_passed") is False:
+            classification = "FAIL_REAL_PIPELINE_NONDETERMINISTIC"
+            blocker = "Run A and B detector/Step1/Step2 rows differ or did not both execute."
+        elif review.get("review_candidate_count", 0) > 0:
+            classification = "PASS_NEW_OFFICIAL_BASELINE_PORTABLE_PIPELINE_READY_FOR_REVIEW"
+            blocker = None
+        else:
+            classification = "PASS_REAL_DETECTOR_STEP1_STEP2_REQUIRES_DIAGNOSIS"
+            blocker = "Step1/Step2 executed but review candidates were not available."
+        payload = guardrail_payload(
+            {
+                "artifact": "final_classification",
+                "created_at": utc_now(),
+                "final_classification": classification,
+                "exact_next_blocker": blocker,
+            }
+        )
+        write_json_file(stage_root / "validation/final_classification.json", payload)
+        return payload
     closure_path = stage_root / "closure/portable_pipeline_input_closure.json"
     comparison_path = stage_root / "validation/portable_run_comparison.json"
     review_path = stage_root / "review/blind_review_candidate_summary.json"

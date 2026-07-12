@@ -34,6 +34,7 @@ videos/
 review_pack/
 calibration/
 artifacts/
+models/*.pt
 *.mp4
 *.mov
 *.avi

@@ -1,0 +1,21 @@
+{
+  "schema_version": "m5_4a.detector_model_provenance.v1",
+  "detector_recovery_classification": "OFFICIAL_YOLOV8M_REFERENCE_IDENTIFIED_WITHOUT_HISTORICAL_HASH",
+  "detector_source_classification": "NEW_OFFICIAL_PRETRAINED_BASELINE_NOT_HISTORICAL_WEIGHT_RECOVERY",
+  "source_organisation": "Ultralytics",
+  "source_release": "v8.3.0",
+  "source_asset": "yolov8m.pt",
+  "terminal_acquisition_record": "C:\\Users\\sebgr\\Documents\\football-intelligence\\trusted-model-cache\\yolov8m.provenance.json",
+  "trusted_cache_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\trusted-model-cache\\yolov8m.pt",
+  "runtime_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\SoccerTrack-v2\\models\\model=yolov8m-imgsz=2048.pt",
+  "sha256": "5d4a90cdc7a21786cc59cd19778e9eafff836df9e2da32524737c7ee6efe4fe5",
+  "byte_size": 52136884,
+  "ultralytics_version_used_for_validation": "8.3.49",
+  "model_task": "detect",
+  "class_count": 80,
+  "person_class_id": 0,
+  "historical_equivalence": false,
+  "historical_checkpoint_recovered": false,
+  "blind_output_used_for_selection": false,
+  "model_storage_policy": "raw checkpoint ignored by ordinary Git; sidecars committed"
+}

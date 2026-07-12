@@ -471,6 +471,13 @@ def declared_input_records(
                 "person detection model weights",
             )
         )
+    for key, artifact_id, description in [
+        ("model_sha256_path", "person_detection_model_sha256", "person detection model SHA-256 sidecar"),
+        ("model_provenance_path", "person_detection_model_provenance", "person detection model provenance"),
+    ]:
+        value = str(config.get(key, "") or "")
+        if value:
+            records.append(DeclaredInput(artifact_id, _resolve_repo_path(repo_root, value), description))
     for index, item in enumerate(config.get("match_local_configuration_artifacts", []) or []):
         if isinstance(item, dict) and item.get("path"):
             records.append(
