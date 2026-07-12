@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from football_intelligence.replay.portable_context import (
     PortableVisualRunContext,
     guardrail_payload,
-    read_json_file,
     sha256_file,
     utc_now,
 )
 from football_intelligence.replay.portable_detector import EXPECTED_BASELINE_SHA256, detector_config_from_context
+
+
+def _read_json_maybe_bom(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _artifact_path(context: PortableVisualRunContext, value: str) -> Path:
@@ -40,8 +44,8 @@ def write_detector_provenance_artifacts(context: PortableVisualRunContext) -> di
         context,
         str(context.config.get("model_sha256_path", "models/model=yolov8m-imgsz=2048.pt.sha256")),
     )
-    terminal_record = read_json_file(terminal_record_path) if terminal_record_path.exists() else {}
-    runtime_provenance = read_json_file(runtime_provenance_path) if runtime_provenance_path.exists() else {}
+    terminal_record = _read_json_maybe_bom(terminal_record_path) if terminal_record_path.exists() else {}
+    runtime_provenance = _read_json_maybe_bom(runtime_provenance_path) if runtime_provenance_path.exists() else {}
     runtime_hash = sha256_file(runtime_model_path) if runtime_model_path.exists() else None
     gitignore_text = (
         (context.repo_root / ".gitignore").read_text(encoding="utf-8")
