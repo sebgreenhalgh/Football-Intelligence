@@ -199,15 +199,24 @@ def stage_inventory() -> list[dict[str, Any]]:
 
 
 def write_portability_audit(context: PortableVisualRunContext) -> dict[str, Any]:
+    stages = stage_inventory()
+    if _is_m5_4a(context) and str(context.config.get("model_weight_path", "") or ""):
+        model_path = (context.repo_root / str(context.config.get("model_weight_path"))).resolve()
+        if model_path.exists():
+            for row in stages:
+                if row.get("stage_id") == "STEP1A":
+                    row["portable_execution_status"] = "PORTABLE_WITH_THIN_WRAPPER"
+                    row["model_weights"] = [str(model_path)]
+                    row["explicit_output_wrapper_sufficient"] = True
     inventory = {
         "schema_version": "m5_4.portability_inventory.v1",
         "created_at": utc_now(),
         "match_id": context.match_id,
         "window_id": context.window_id,
         "audit_result": "BLOCKED_MISSING_DEPENDENCY"
-        if any(row["portable_execution_status"] == "BLOCKED_MISSING_DEPENDENCY" for row in stage_inventory())
+        if any(row["portable_execution_status"] == "BLOCKED_MISSING_DEPENDENCY" for row in stages)
         else "PORTABLE_WITH_WRAPPERS",
-        "stages": stage_inventory(),
+        "stages": stages,
     }
     graph = {
         "schema_version": "m5_4.global_path_dependency_graph.v1",
