@@ -97,6 +97,17 @@ from football_intelligence.replay.portable_step1_validation import validate_exis
 from football_intelligence.replay.portable_step2 import run_portable_step2
 from football_intelligence.replay.portable_step2_validation import validate_existing_step2_outputs
 from football_intelligence.replay.source_retention import write_source_retention_artifacts
+from football_intelligence.review.evidence import (
+    build_visual_continuity_workbench,
+    write_text as write_review_text,
+)
+from football_intelligence.review.server import ReviewServerConfig, serve as serve_review_workbench
+from football_intelligence.review.validation import (
+    export_review,
+    seal_completion,
+    validate_review_package,
+)
+from football_intelligence.review.workbench import build_workbench
 
 app = typer.Typer(no_args_is_help=True)
 config_app = typer.Typer(no_args_is_help=True)
@@ -106,6 +117,7 @@ replay_app = typer.Typer(no_args_is_help=True)
 true_replay_app = typer.Typer(no_args_is_help=True)
 blind_window_app = typer.Typer(no_args_is_help=True)
 portable_blind_app = typer.Typer(no_args_is_help=True)
+review_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
@@ -113,6 +125,7 @@ app.add_typer(replay_app, name="replay")
 app.add_typer(true_replay_app, name="true-replay")
 app.add_typer(blind_window_app, name="blind-window")
 app.add_typer(portable_blind_app, name="portable-blind")
+app.add_typer(review_app, name="review")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -1346,3 +1359,160 @@ def portable_blind_build_review_pack(
     manifest = build_portable_review_pack(context=context, prompt_path=prompt_path.resolve())
     final_classification(stage_root.resolve())
     typer.echo(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def _write_open_review_launcher(
+    *,
+    stage_root: Path,
+    repo_root: Path,
+    manifest_path: Path,
+    evidence_root: Path,
+    decision_root: Path,
+    workbench_root: Path,
+    host: str,
+    port: int,
+) -> Path:
+    launcher = stage_root / "OPEN_REVIEW.ps1"
+    text = f"""$ErrorActionPreference = "Stop"
+$RepoRoot = "{repo_root}"
+$Manifest = "{manifest_path}"
+$EvidenceRoot = "{evidence_root}"
+$DecisionRoot = "{decision_root}"
+$WorkbenchRoot = "{workbench_root}"
+$HostName = "{host}"
+$Port = {port}
+$Url = "http://$HostName`:$Port/"
+
+Write-Host "Starting M5.4B localhost review server..."
+Write-Host "Decisions path: $DecisionRoot\\review_decisions.json"
+Write-Host "Event log path: $DecisionRoot\\review_decision_events.jsonl"
+Write-Host "Recovery snapshots: $DecisionRoot\\snapshots"
+Write-Host "Review URL: $Url"
+Write-Host "Stop server: close the spawned PowerShell window or press Ctrl+C in it."
+
+$CommandParts = @(
+  "cd `"$RepoRoot`";",
+  "uv run fi-pipeline review serve",
+  "--review-manifest `"$Manifest`"",
+  "--evidence-root `"$EvidenceRoot`"",
+  "--decision-root `"$DecisionRoot`"",
+  "--workbench-root `"$WorkbenchRoot`"",
+  "--host $HostName",
+  "--port $Port"
+)
+$Command = $CommandParts -join " "
+Start-Process powershell -ArgumentList @("-NoExit", "-Command", $Command)
+Start-Sleep -Seconds 2
+Start-Process $Url
+"""
+    return write_review_text(launcher, text)
+
+
+@review_app.command("build")
+def review_build(
+    stage_root: Path = typer.Option(..., "--stage-root", file_okay=False, dir_okay=True),
+    source_stage_root: Path = typer.Option(..., "--source-stage-root", exists=True, file_okay=False, dir_okay=True),
+    frame_manifest: Path = typer.Option(..., "--frame-manifest", exists=True, readable=True),
+    frame_root: Path = typer.Option(..., "--frame-root", exists=True, file_okay=False, dir_okay=True),
+    candidate_rows: Path = typer.Option(..., "--candidate-rows", exists=True, readable=True),
+    visible_person_base: Path = typer.Option(..., "--visible-person-base", exists=True, readable=True),
+    repo_root: Path = typer.Option(..., "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8765, "--port"),
+) -> None:
+    result = build_visual_continuity_workbench(
+        stage_root=stage_root.resolve(),
+        source_stage_root=source_stage_root.resolve(),
+        frame_manifest_path=frame_manifest.resolve(),
+        frame_root=frame_root.resolve(),
+        candidate_rows_path=candidate_rows.resolve(),
+        visible_person_base_path=visible_person_base.resolve(),
+    )
+    workbench_manifest = build_workbench(Path(result["workbench_root"]))
+    launcher = _write_open_review_launcher(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+        manifest_path=Path(result["manifest_path"]).resolve(),
+        evidence_root=Path(result["evidence_root"]).resolve(),
+        decision_root=Path(result["decision_root"]).resolve(),
+        workbench_root=Path(result["workbench_root"]).resolve(),
+        host=host,
+        port=port,
+    )
+    result["workbench_manifest"] = workbench_manifest
+    result["launcher_path"] = str(launcher)
+    result["local_review_url"] = f"http://{host}:{port}/"
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@review_app.command("validate")
+def review_validate(
+    review_manifest: Path = typer.Option(..., "--review-manifest", exists=True, readable=True),
+    evidence_root: Path = typer.Option(..., "--evidence-root", exists=True, file_okay=False, dir_okay=True),
+    decision_root: Path = typer.Option(..., "--decision-root", exists=True, file_okay=False, dir_okay=True),
+    output_path: Path | None = typer.Option(None, "--output-path"),
+) -> None:
+    result = validate_review_package(
+        manifest_path=review_manifest.resolve(),
+        evidence_root=evidence_root.resolve(),
+        decision_root=decision_root.resolve(),
+        output_path=output_path.resolve() if output_path is not None else None,
+    )
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@review_app.command("serve")
+def review_serve(
+    review_manifest: Path = typer.Option(..., "--review-manifest", exists=True, readable=True),
+    evidence_root: Path = typer.Option(..., "--evidence-root", exists=True, file_okay=False, dir_okay=True),
+    decision_root: Path = typer.Option(..., "--decision-root", file_okay=False, dir_okay=True),
+    workbench_root: Path = typer.Option(..., "--workbench-root", exists=True, file_okay=False, dir_okay=True),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8765, "--port"),
+    reviewer_session_id: str | None = typer.Option(None, "--reviewer-session-id"),
+    read_only_source_root: list[Path] = typer.Option([], "--read-only-source-root", file_okay=False, dir_okay=True),
+) -> None:
+    config = ReviewServerConfig(
+        manifest_path=review_manifest.resolve(),
+        evidence_root=evidence_root.resolve(),
+        decision_root=decision_root.resolve(),
+        workbench_root=workbench_root.resolve(),
+        host=host,
+        port=port,
+        reviewer_session_id=reviewer_session_id,
+        readonly_source_roots=[path.resolve() for path in read_only_source_root],
+    )
+    typer.echo(f"Serving review workbench at http://{host}:{port}/")
+    serve_review_workbench(config)
+
+
+@review_app.command("export")
+def review_export(
+    review_manifest: Path = typer.Option(..., "--review-manifest", exists=True, readable=True),
+    decision_root: Path = typer.Option(..., "--decision-root", exists=True, file_okay=False, dir_okay=True),
+    reviewer_session_id: str = typer.Option("local-reviewer", "--reviewer-session-id"),
+    output_path: Path | None = typer.Option(None, "--output-path"),
+) -> None:
+    payload = export_review(
+        manifest_path=review_manifest.resolve(),
+        decision_root=decision_root.resolve(),
+        reviewer_session_id=reviewer_session_id,
+        output_path=output_path.resolve() if output_path is not None else None,
+    )
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+@review_app.command("seal-completion")
+def review_seal_completion(
+    review_manifest: Path = typer.Option(..., "--review-manifest", exists=True, readable=True),
+    decision_root: Path = typer.Option(..., "--decision-root", exists=True, file_okay=False, dir_okay=True),
+    reviewer_session_id: str = typer.Option("local-reviewer", "--reviewer-session-id"),
+) -> None:
+    result = seal_completion(
+        manifest_path=review_manifest.resolve(),
+        decision_root=decision_root.resolve(),
+        reviewer_session_id=reviewer_session_id,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
