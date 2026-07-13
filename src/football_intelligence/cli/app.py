@@ -79,6 +79,10 @@ from football_intelligence.replay.blind_window_selection import (
     read_json as read_blind_json,
     seal_blind_window_selection,
 )
+from football_intelligence.replay.balanced_role_then_continuity import (
+    build_balanced_role_then_continuity_stage,
+    run_post_role_review_ingestion,
+)
 from football_intelligence.replay.portable_pipeline import (
     backup_confirmation_status,
     build_context_from_cli,
@@ -124,6 +128,7 @@ review_app = typer.Typer(no_args_is_help=True)
 quality_incident_app = typer.Typer(no_args_is_help=True)
 rebuilt_pipeline_app = typer.Typer(no_args_is_help=True)
 role_partitioned_learning_app = typer.Typer(no_args_is_help=True)
+balanced_role_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
@@ -135,6 +140,7 @@ app.add_typer(review_app, name="review")
 app.add_typer(quality_incident_app, name="quality-incident")
 app.add_typer(rebuilt_pipeline_app, name="rebuilt-pipeline")
 app.add_typer(role_partitioned_learning_app, name="role-learning")
+app.add_typer(balanced_role_app, name="balanced-role")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -1578,4 +1584,30 @@ def role_partitioned_learning_build(
         match_id=match_id,
         stage_root=stage_root.resolve() if stage_root is not None else None,
     )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@balanced_role_app.command("build")
+def balanced_role_build(
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(
+        Path("..").resolve(), "--artifact-root", exists=True, file_okay=False, dir_okay=True
+    ),
+    match_id: str = typer.Option("128058", "--match-id"),
+    stage_root: Path | None = typer.Option(None, "--stage-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = build_balanced_role_then_continuity_stage(
+        repo_root=repo_root.resolve(),
+        artifact_root=artifact_root.resolve(),
+        match_id=match_id,
+        stage_root=stage_root.resolve() if stage_root is not None else None,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@balanced_role_app.command("ingest-role-review")
+def balanced_role_ingest_role_review(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    result = run_post_role_review_ingestion(stage_root=stage_root.resolve())
     typer.echo(json.dumps(result, indent=2, sort_keys=True))

@@ -259,6 +259,7 @@ const isTyping = () => {
 const DECISION_META = {
   accept_continuity: {label: "Accept continuity", key: "A", className: "accept"},
   reject_continuity: {label: "Reject continuity", key: "R", className: "reject"},
+  not_applicable_invalid_or_incompatible_endpoint: {label: "Not applicable endpoint", key: "N", className: "unresolved"},
   unresolved: {label: "Unresolved", key: "U", className: "unresolved"},
   valid_on_pitch_person: {label: "Valid on-pitch person", key: "P", className: "valid"},
   valid_official: {label: "Valid official", key: "O", className: "official"},

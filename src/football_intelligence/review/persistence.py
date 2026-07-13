@@ -83,6 +83,7 @@ CONTINUITY_LABELS = [
     "accept_continuity",
     "reject_continuity",
     "unresolved",
+    "not_applicable_invalid_or_incompatible_endpoint",
     "not_applicable_invalid_endpoint",
 ]
 
@@ -92,7 +93,7 @@ def _continuity_label(case: Any, value: str, note: str) -> str:
         return value
     text = f"{note} {' '.join(case.uncertainty_reasons)}".lower()
     if "invalid endpoint" in text or "not applicable" in text or "non-person" in text:
-        return "not_applicable_invalid_endpoint"
+        return "not_applicable_invalid_or_incompatible_endpoint"
     return value
 
 
@@ -128,7 +129,7 @@ def _reviewed_counts(manifest: ReviewManifest, state: dict[str, Any]) -> dict[st
             label = _continuity_label(case, value, str(notes.get(case_id, ""))) if case is not None else value
             label = label if label in continuity_distribution else "unresolved"
             continuity_distribution[label] += 1
-            if label in {"unresolved", "not_applicable_invalid_endpoint"}:
+            if label == "unresolved" or label.startswith("not_applicable_invalid"):
                 training_excluded_count += 1
             else:
                 training_usable_count += 1

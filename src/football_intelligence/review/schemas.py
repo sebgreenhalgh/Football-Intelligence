@@ -10,7 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 WORKBENCH_VERSION = "m5.4b.unified_review_workbench.v1"
 VISUAL_ONLY_WARNING = "VISUAL_ONLY_NOT_METRIC"
 CONTINUITY_QUESTION = "Does this short sequence show the same visible person continuing across the frames?"
-CONTINUITY_DECISIONS = ["accept_continuity", "reject_continuity", "unresolved"]
+CONTINUITY_NOT_APPLICABLE_DECISION = "not_applicable_invalid_or_incompatible_endpoint"
+CONTINUITY_DECISIONS = [
+    "accept_continuity",
+    "reject_continuity",
+    CONTINUITY_NOT_APPLICABLE_DECISION,
+    "unresolved",
+]
 ENTITY_VALIDITY_QUESTION = "What does this box contain?"
 ENTITY_VALIDITY_DECISIONS = [
     "valid_on_pitch_person",
@@ -185,7 +191,7 @@ class ReviewCase(BaseModel):
             if self.concise_question != CONTINUITY_QUESTION:
                 raise ValueError("continuity review must use the approved continuity question")
             if self.allowed_decisions != CONTINUITY_DECISIONS:
-                raise ValueError("continuity review decisions must be accept/reject/unresolved")
+                raise ValueError("continuity review decisions must be accept/reject/not-applicable/unresolved")
             if self.target_frame_sequence is None:
                 raise ValueError("continuity review requires a target frame sequence")
         if self.task_type == "entity_validity":

@@ -16,6 +16,7 @@ CONTINUITY_LABELS = [
     "accept_continuity",
     "reject_continuity",
     "unresolved",
+    "not_applicable_invalid_or_incompatible_endpoint",
     "not_applicable_invalid_endpoint",
 ]
 
@@ -57,11 +58,13 @@ def _decision_state(completed_review: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalise_continuity_label(case: dict[str, Any], decision: str, note: str) -> str:
+    if decision == "not_applicable_invalid_or_incompatible_endpoint":
+        return decision
     if decision != "unresolved":
         return decision
     text = f"{note} {' '.join(case.get('uncertainty_reasons', []))}".lower()
     if "invalid endpoint" in text or "not applicable" in text or "non-person" in text:
-        return "not_applicable_invalid_endpoint"
+        return "not_applicable_invalid_or_incompatible_endpoint"
     return decision
 
 
@@ -93,7 +96,7 @@ def ingest_mixed_review(
         if task_type == "visual_continuity_edge_review":
             label = _normalise_continuity_label(case, human_decision, note)
         usable = label != "unresolved"
-        if task_type == "visual_continuity_edge_review" and label == "not_applicable_invalid_endpoint":
+        if task_type == "visual_continuity_edge_review" and label.startswith("not_applicable_invalid"):
             usable = False
         if task_type not in {"entity_validity", "visual_continuity_edge_review"}:
             usable = False
@@ -159,7 +162,7 @@ def ingest_mixed_review(
 def _exclusion_reason(task_type: str, label: str) -> str:
     if label == "unresolved":
         return "unresolved_label"
-    if label == "not_applicable_invalid_endpoint":
+    if label.startswith("not_applicable_invalid"):
         return "continuity_not_applicable_invalid_endpoint"
     if task_type not in {"entity_validity", "visual_continuity_edge_review"}:
         return "unsupported_task_type_for_training"
