@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.core.fingerprints import sha256_file
-from football_intelligence.review.schemas import ENTITY_VALIDITY_DECISIONS, ReviewManifest, safety_payload, stable_hash
+from football_intelligence.review.schemas import (
+    ENTITY_VALIDITY_DECISIONS,
+    ReviewManifest,
+    safety_payload,
+    stable_hash,
+)
 
 
 def utc_now() -> str:
@@ -67,13 +72,71 @@ def _case_map(manifest: ReviewManifest) -> dict[str, Any]:
     return {case.review_case_id: case for case in manifest.review_cases}
 
 
-def _reviewed_counts(manifest: ReviewManifest, state: dict[str, Any]) -> dict[str, int]:
+ENTITY_LABELS = [
+    "valid_on_pitch_person",
+    "valid_official",
+    "valid_off_pitch_person",
+    "non_person_false_positive",
+    "unresolved",
+]
+CONTINUITY_LABELS = [
+    "accept_continuity",
+    "reject_continuity",
+    "unresolved",
+    "not_applicable_invalid_endpoint",
+]
+
+
+def _continuity_label(case: Any, value: str, note: str) -> str:
+    if value != "unresolved":
+        return value
+    text = f"{note} {' '.join(case.uncertainty_reasons)}".lower()
+    if "invalid endpoint" in text or "not applicable" in text or "non-person" in text:
+        return "not_applicable_invalid_endpoint"
+    return value
+
+
+def _reviewed_counts(manifest: ReviewManifest, state: dict[str, Any]) -> dict[str, Any]:
     decisions = state.get("decisions", {}) if isinstance(state.get("decisions"), dict) else {}
+    notes = state.get("notes", {}) if isinstance(state.get("notes"), dict) else {}
+    cases = _case_map(manifest)
     accepted = sum(1 for value in decisions.values() if value == "accept_continuity")
     rejected = sum(1 for value in decisions.values() if value == "reject_continuity")
     unresolved = sum(1 for value in decisions.values() if value == "unresolved")
     entity_validity_reviewed = sum(1 for value in decisions.values() if value in ENTITY_VALIDITY_DECISIONS)
     reviewed = len(decisions)
+    decision_counts_by_task_type: dict[str, int] = {}
+    decision_counts_by_label: dict[str, int] = {}
+    entity_distribution = {label: 0 for label in ENTITY_LABELS}
+    continuity_distribution = {label: 0 for label in CONTINUITY_LABELS}
+    training_usable_count = 0
+    training_excluded_count = 0
+    for case_id, raw_value in decisions.items():
+        value = str(raw_value)
+        case = cases.get(str(case_id))
+        task_type = case.task_type if case is not None else "unknown"
+        decision_counts_by_task_type[task_type] = decision_counts_by_task_type.get(task_type, 0) + 1
+        decision_counts_by_label[value] = decision_counts_by_label.get(value, 0) + 1
+        if task_type == "entity_validity":
+            label = value if value in entity_distribution else "unresolved"
+            entity_distribution[label] += 1
+            if label == "unresolved":
+                training_excluded_count += 1
+            else:
+                training_usable_count += 1
+        elif task_type == "visual_continuity_edge_review":
+            label = _continuity_label(case, value, str(notes.get(case_id, ""))) if case is not None else value
+            label = label if label in continuity_distribution else "unresolved"
+            continuity_distribution[label] += 1
+            if label in {"unresolved", "not_applicable_invalid_endpoint"}:
+                training_excluded_count += 1
+            else:
+                training_usable_count += 1
+        elif task_type in {"visual_team_role_context"}:
+            if value == "unresolved":
+                training_excluded_count += 1
+            else:
+                training_usable_count += 1
     return {
         "total_cases": len(manifest.review_cases),
         "accepted": accepted,
@@ -83,6 +146,17 @@ def _reviewed_counts(manifest: ReviewManifest, state: dict[str, Any]) -> dict[st
         "reviewed": reviewed,
         "remaining": max(0, len(manifest.review_cases) - reviewed),
         "notes_count": len([note for note in state.get("notes", {}).values() if str(note).strip()]),
+        "decision_counts_by_task_type": dict(sorted(decision_counts_by_task_type.items())),
+        "decision_counts_by_label": dict(sorted(decision_counts_by_label.items())),
+        "entity_case_count": sum(1 for case in manifest.review_cases if case.task_type == "entity_validity"),
+        "continuity_case_count": sum(
+            1 for case in manifest.review_cases if case.task_type == "visual_continuity_edge_review"
+        ),
+        "entity_label_distribution": entity_distribution,
+        "continuity_label_distribution": continuity_distribution,
+        "training_usable_count": training_usable_count,
+        "training_excluded_count": training_excluded_count,
+        "summary_counters_used_for_label_inventory": False,
     }
 
 
@@ -402,6 +476,15 @@ class ReviewPersistence:
             "reviewer_session_id": self.reviewer_session_id,
             "completed_at": state.get("completed_at"),
             "human_approved": False,
+            "decision_counts_by_task_type": export["summary"]["decision_counts_by_task_type"],
+            "decision_counts_by_label": export["summary"]["decision_counts_by_label"],
+            "entity_case_count": export["summary"]["entity_case_count"],
+            "continuity_case_count": export["summary"]["continuity_case_count"],
+            "entity_label_distribution": export["summary"]["entity_label_distribution"],
+            "continuity_label_distribution": export["summary"]["continuity_label_distribution"],
+            "training_usable_count": export["summary"]["training_usable_count"],
+            "training_excluded_count": export["summary"]["training_excluded_count"],
+            "summary_counters_used_for_label_inventory": False,
             **safety_payload(),
         }
         atomic_write_json(self.decision_root / "completed_review.json", export)

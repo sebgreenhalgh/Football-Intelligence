@@ -19,9 +19,23 @@ ENTITY_VALIDITY_DECISIONS = [
     "non_person_false_positive",
     "unresolved",
 ]
+VISUAL_TEAM_ROLE_QUESTION = "What is the strongest supported visual context for this person?"
+VISUAL_TEAM_ROLE_DECISIONS = [
+    "team_1_outfield",
+    "team_2_outfield",
+    "team_1_goalkeeper",
+    "team_2_goalkeeper",
+    "central_referee",
+    "assistant_referee_near_camera",
+    "assistant_referee_far_camera",
+    "other_off_pitch_person",
+    "non_person_false_positive",
+    "unresolved",
+]
 ALLOWED_REVIEW_TASK_TYPES = [
     "visual_continuity_edge_review",
     "entity_validity",
+    "visual_team_role_context",
     "visual_role_classification",
     "official_context_classification",
     "goalkeeper_visual_context_classification",
@@ -124,6 +138,7 @@ class ReviewCase(BaseModel):
     task_type: Literal[
         "visual_continuity_edge_review",
         "entity_validity",
+        "visual_team_role_context",
         "visual_role_classification",
         "official_context_classification",
         "goalkeeper_visual_context_classification",
@@ -178,6 +193,11 @@ class ReviewCase(BaseModel):
                 raise ValueError("entity-validity review must use the approved entity question")
             if self.allowed_decisions != ENTITY_VALIDITY_DECISIONS:
                 raise ValueError("entity-validity decisions must use the approved P/O/F/X/U decision set")
+        if self.task_type == "visual_team_role_context":
+            if self.concise_question != VISUAL_TEAM_ROLE_QUESTION:
+                raise ValueError("visual team/role review must use the approved role-context question")
+            if self.allowed_decisions != VISUAL_TEAM_ROLE_DECISIONS:
+                raise ValueError("visual team/role review decisions must use the approved decision set")
         return self
 
 

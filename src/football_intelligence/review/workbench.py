@@ -18,13 +18,17 @@ KEYBOARD_SHORTCUTS = {
     "O": "valid_official",
     "F": "valid_off_pitch_person",
     "X": "non_person_false_positive",
+    "1": "team_1_outfield",
+    "2": "team_2_outfield",
+    "3": "team_1_goalkeeper",
+    "4": "team_2_goalkeeper",
+    "N": "assistant_referee_near_camera_or_note",
     "ArrowLeft": "previous",
     "ArrowRight": "next",
     "Space": "play_pause_temporal_evidence",
     "Z": "toggle_zoom",
     "C": "toggle_context",
     "D": "toggle_engineering_details",
-    "N": "focus_note_field",
     "Ctrl+Z": "undo_most_recent_decision_change",
 }
 
@@ -95,8 +99,9 @@ INDEX_HTML = """<!doctype html>
         <h2>Shortcuts</h2>
         <p><kbd>A</kbd> Accept <kbd>R</kbd> Reject <kbd>U</kbd> Unresolved</p>
         <p><kbd>P</kbd> Person <kbd>O</kbd> Official <kbd>F</kbd> Off-pitch <kbd>X</kbd> False positive</p>
+        <p><kbd>1</kbd>/<kbd>2</kbd> Team <kbd>3</kbd>/<kbd>4</kbd> GK <kbd>R</kbd> Ref <kbd>N</kbd>/<kbd>F</kbd> AR</p>
         <p><kbd>Left</kbd>/<kbd>Right</kbd> Previous/next <kbd>Space</kbd> Play/pause</p>
-        <p><kbd>Z</kbd> Zoom <kbd>C</kbd> Context <kbd>D</kbd> Details <kbd>N</kbd> Note <kbd>Ctrl+Z</kbd> Undo</p>
+        <p><kbd>Z</kbd> Zoom <kbd>C</kbd> Context <kbd>D</kbd> Details <kbd>Ctrl+Z</kbd> Undo</p>
       </section>
     </aside>
 
@@ -258,10 +263,24 @@ const DECISION_META = {
   valid_on_pitch_person: {label: "Valid on-pitch person", key: "P", className: "valid"},
   valid_official: {label: "Valid official", key: "O", className: "official"},
   valid_off_pitch_person: {label: "Valid off-pitch person", key: "F", className: "offpitch"},
-  non_person_false_positive: {label: "Non-person false positive", key: "X", className: "false-positive"}
+  non_person_false_positive: {label: "Non-person false positive", key: "X", className: "false-positive"},
+  team_1_outfield: {label: "Team 1 outfield", key: "1", className: "valid"},
+  team_2_outfield: {label: "Team 2 outfield", key: "2", className: "official"},
+  team_1_goalkeeper: {label: "Team 1 goalkeeper", key: "3", className: "offpitch"},
+  team_2_goalkeeper: {label: "Team 2 goalkeeper", key: "4", className: "offpitch"},
+  central_referee: {label: "Central referee", key: "R", className: "official"},
+  assistant_referee_near_camera: {label: "Near-camera assistant", key: "N", className: "official"},
+  assistant_referee_far_camera: {label: "Far-camera assistant", key: "F", className: "official"},
+  other_off_pitch_person: {label: "Other off-pitch person", key: "O", className: "offpitch"}
 };
 
-const DECISION_BY_KEY = Object.fromEntries(Object.entries(DECISION_META).map(([decision, meta]) => [meta.key.toLowerCase(), decision]));
+function decisionForKey(caseItem, key) {
+  for (const decision of caseItem.allowed_decisions || []) {
+    const meta = DECISION_META[decision];
+    if (meta && meta.key.toLowerCase() === key) return decision;
+  }
+  return null;
+}
 
 function setStatus(text, failed=false) {
   $("saveStatus").textContent = text;
@@ -579,8 +598,11 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.ctrlKey && event.key.toLowerCase() === "z") { event.preventDefault(); undo(); return; }
   const key = event.key.toLowerCase();
-  const decision = DECISION_BY_KEY[key];
-  if (decision && activeCase().allowed_decisions.includes(decision)) saveDecision(decision);
+  const decision = decisionForKey(activeCase(), key);
+  if (decision && activeCase().allowed_decisions.includes(decision)) {
+    saveDecision(decision);
+    return;
+  }
   if (event.key === "ArrowLeft") go(-1);
   if (event.key === "ArrowRight") go(1);
   if (event.code === "Space") { event.preventDefault(); togglePlay(); }
