@@ -83,6 +83,7 @@ from football_intelligence.replay.balanced_role_then_continuity import (
     build_balanced_role_then_continuity_stage,
     run_post_role_review_ingestion,
 )
+from football_intelligence.replay.blind_hard_continuity import build_blind_hard_continuity_review
 from football_intelligence.replay.portable_pipeline import (
     backup_confirmation_status,
     build_context_from_cli,
@@ -1610,4 +1611,13 @@ def balanced_role_ingest_role_review(
     stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
 ) -> None:
     result = run_post_role_review_ingestion(stage_root=stage_root.resolve())
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@balanced_role_app.command("build-hard-continuity-review")
+def balanced_role_build_hard_continuity_review(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    result = build_blind_hard_continuity_review(stage_root=stage_root.resolve(), repo_root=repo_root.resolve())
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
