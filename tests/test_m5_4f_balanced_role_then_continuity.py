@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from football_intelligence.replay.balanced_role_then_continuity import (
+    ROLE_DECISION_TO_CONTEXT,
     ROLE_TARGETS,
+    _post_role_application,
+    _role_calibrator_validation,
+    _role_training_readiness,
     audit_continuity_review_selection,
     audit_role_review_selection,
     class_level_cluster_id_detected,
@@ -231,3 +236,83 @@ def test_continuity_balance_requirements_overlap_gaps_and_bound_endpoints() -> N
 def test_audit_payloads_are_json_serializable() -> None:
     payload = audit_role_review_selection({"review_cases": [_role_case(1, "team_1_outfield_visual_context", 1)]})
     json.dumps(payload, sort_keys=True)
+
+
+def _reviewed_role_example(label: str, index: int) -> dict[str, object]:
+    return {
+        "review_case_id": f"role_case_{index:03d}",
+        "candidate_artifact_id": f"candidate_{index:03d}",
+        "candidate_hash": f"candidate_hash_{index}",
+        "evidence_hash": f"evidence_hash_{index}",
+        "human_decision": label,
+        "model_prediction_before_review": ROLE_DECISION_TO_CONTEXT[label],
+        "model_confidence_before_review": 0.7,
+        "label_usable_for_training": True,
+        "equivalence_cluster_id": f"cluster_{label}_{index}",
+        "frame_quartile": f"q{(index % 4) + 1}",
+        "spatial_region_bucket": f"region_{index % 3}",
+        "bbox_size_bucket": "medium_bbox",
+        "colour_cluster": f"colour_{index % 3}",
+    }
+
+
+def test_role_readiness_does_not_make_count_support_application_ready() -> None:
+    examples = [
+        *[_reviewed_role_example("team_1_outfield", index) for index in range(6)],
+        *[_reviewed_role_example("team_2_outfield", 20 + index) for index in range(6)],
+        *[_reviewed_role_example("assistant_referee_near_camera", 40 + index) for index in range(6)],
+    ]
+    readiness = _role_training_readiness(examples, role_review_complete=True)
+
+    assert readiness["status"] == "READY_FOR_SUPPORTED_CLASSES"
+    assert set(readiness["grouped_validation_ready_classes"]) == {
+        "assistant_referee_near_camera",
+        "team_1_outfield",
+        "team_2_outfield",
+    }
+    assert readiness["application_ready_classes"] == []
+    assert readiness["per_class_readiness"]["team_1_outfield"]["application_ready"] is False
+
+
+def test_role_calibrator_validation_has_correct_identity_and_no_broad_application() -> None:
+    examples = [
+        *[_reviewed_role_example("team_1_outfield", index) for index in range(6)],
+        *[_reviewed_role_example("team_2_outfield", 20 + index) for index in range(6)],
+    ]
+    readiness = _role_training_readiness(examples, role_review_complete=True)
+    validation = _role_calibrator_validation(examples, readiness)
+
+    assert validation["artifact"] == "m5_4f_role_calibrator_validation"
+    assert validation["status"] == "REVIEWED_EXEMPLARS_ONLY"
+    assert validation["broad_application_performed"] is False
+    assert validation["validated_application_classes"] == []
+
+
+def test_post_role_application_applies_exact_human_label_without_broad_inference() -> None:
+    role_rows = [
+        {
+            "candidate_id": "candidate_001",
+            "frame_sequence": 10,
+            "visual_role_context_state": "team_2_outfield_visual_context",
+            "visual_role_context_confidence": 0.8,
+        },
+        {
+            "candidate_id": "candidate_002",
+            "frame_sequence": 11,
+            "visual_role_context_state": "team_2_outfield_visual_context",
+            "visual_role_context_confidence": 0.8,
+        },
+    ]
+    reviewed = [_reviewed_role_example("team_1_outfield", 1)]
+    application_rows, audit = _post_role_application(
+        stage_root=Path("."),
+        role_rows=role_rows,
+        examples=reviewed,
+    )
+
+    assert application_rows[0]["post_role_source"] == "human_review"
+    assert application_rows[0]["effective_post_role_context_state"] == "team_1_outfield_visual_context"
+    assert application_rows[1]["post_role_source"] == "original_m5_4e_prediction"
+    assert audit["exact_reviewed_rows_applied"] == 1
+    assert audit["broad_inferred_rows_updated"] == 0
+    assert audit["unsupported_classes_broadly_applied"] is False
