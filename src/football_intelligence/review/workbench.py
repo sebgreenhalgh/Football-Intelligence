@@ -14,6 +14,10 @@ KEYBOARD_SHORTCUTS = {
     "A": "accept_continuity",
     "R": "reject_continuity",
     "U": "unresolved",
+    "P": "valid_on_pitch_person",
+    "O": "valid_official",
+    "F": "valid_off_pitch_person",
+    "X": "non_person_false_positive",
     "ArrowLeft": "previous",
     "ArrowRight": "next",
     "Space": "play_pause_temporal_evidence",
@@ -90,6 +94,7 @@ INDEX_HTML = """<!doctype html>
       <section class="shortcuts">
         <h2>Shortcuts</h2>
         <p><kbd>A</kbd> Accept <kbd>R</kbd> Reject <kbd>U</kbd> Unresolved</p>
+        <p><kbd>P</kbd> Person <kbd>O</kbd> Official <kbd>F</kbd> Off-pitch <kbd>X</kbd> False positive</p>
         <p><kbd>Left</kbd>/<kbd>Right</kbd> Previous/next <kbd>Space</kbd> Play/pause</p>
         <p><kbd>Z</kbd> Zoom <kbd>C</kbd> Context <kbd>D</kbd> Details <kbd>N</kbd> Note <kbd>Ctrl+Z</kbd> Undo</p>
       </section>
@@ -116,11 +121,7 @@ INDEX_HTML = """<!doctype html>
       <section id="contextPanel" class="evidence-panel hidden"></section>
       <section id="temporalPanel" class="evidence-panel hidden"></section>
 
-      <section class="decision-panel" aria-label="Decision controls">
-        <button id="acceptBtn" class="decision accept" data-decision="accept_continuity"><span>A</span> Accept continuity</button>
-        <button id="rejectBtn" class="decision reject" data-decision="reject_continuity"><span>R</span> Reject continuity</button>
-        <button id="unresolvedBtn" class="decision unresolved" data-decision="unresolved"><span>U</span> Unresolved</button>
-      </section>
+      <section id="decisionPanel" class="decision-panel" aria-label="Decision controls"></section>
 
       <label class="note-label" for="note">Optional note</label>
       <textarea id="note" rows="4" placeholder="Add review note. Notes autosave after a short pause."></textarea>
@@ -193,12 +194,16 @@ figure { margin: 0; }
 figcaption { margin-top: 5px; color: var(--muted); font-size: 13px; }
 img, video { max-width: 100%; height: auto; border: 1px solid var(--line); background: #111; }
 .zoom img, .zoom video { width: 100%; max-width: none; }
-.decision-panel { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.decision-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 14px 0; }
 .decision { min-height: 58px; border: 3px solid transparent; border-radius: 8px; color: white; font-size: 17px; font-weight: 800; cursor: pointer; }
 .decision span { display: inline-grid; place-items: center; min-width: 28px; height: 28px; border: 2px solid white; border-radius: 999px; margin-right: 8px; }
 .accept { background: var(--accept); }
 .reject { background: var(--reject); }
 .unresolved { background: var(--unresolved); }
+.valid { background: #0b6477; }
+.official { background: #3f5e18; }
+.offpitch { background: #604b86; }
+.false-positive { background: #9f1d20; }
 .decision.selected { outline: 4px solid #111; }
 .secondary { border: 1px solid #7a8492; background: white; color: var(--ink); border-radius: 6px; padding: 9px 12px; cursor: pointer; }
 .note-label { display: block; font-weight: 700; margin: 12px 0 5px; }
@@ -238,6 +243,18 @@ const isTyping = () => {
   return el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
 };
 
+const DECISION_META = {
+  accept_continuity: {label: "Accept continuity", key: "A", className: "accept"},
+  reject_continuity: {label: "Reject continuity", key: "R", className: "reject"},
+  unresolved: {label: "Unresolved", key: "U", className: "unresolved"},
+  valid_on_pitch_person: {label: "Valid on-pitch person", key: "P", className: "valid"},
+  valid_official: {label: "Valid official", key: "O", className: "official"},
+  valid_off_pitch_person: {label: "Valid off-pitch person", key: "F", className: "offpitch"},
+  non_person_false_positive: {label: "Non-person false positive", key: "X", className: "false-positive"}
+};
+
+const DECISION_BY_KEY = Object.fromEntries(Object.entries(DECISION_META).map(([decision, meta]) => [meta.key.toLowerCase(), decision]));
+
 function setStatus(text, failed=false) {
   $("saveStatus").textContent = text;
   $("saveStatus").style.color = failed ? "#ffd166" : "";
@@ -248,8 +265,24 @@ function asset(caseItem, type) {
   return caseItem.evidence_manifest.evidence_assets.find(a => a.asset_type === type || a.asset_id === type);
 }
 
+function assetAny(caseItem, types) {
+  for (const type of types) {
+    const found = asset(caseItem, type);
+    if (found) return found;
+  }
+  return null;
+}
+
 function evidenceUrl(caseItem, assetItem) {
   return `/evidence/${caseItem.review_case_id}/${assetItem.relative_path}`;
+}
+
+function figureHtml(caseItem, assetItem, caption) {
+  if (!assetItem) return "";
+  if (assetItem.media_type === "video/mp4") {
+    return `<figure><video id="temporalMedia" controls src="${evidenceUrl(caseItem, assetItem)}"></video><figcaption>${caption}</figcaption></figure>`;
+  }
+  return `<figure><img alt="${caption}" src="${evidenceUrl(caseItem, assetItem)}"><figcaption>${caption}</figcaption></figure>`;
 }
 
 async function api(path, options={}) {
@@ -311,42 +344,54 @@ function renderCaseList() {
     btn.className = "case-button";
     if (index === activeIndex) btn.classList.add("active");
     if (decisions()[caseItem.review_case_id]) btn.classList.add("done");
-    btn.textContent = `${index + 1}. ${caseItem.category} f${caseItem.source_frame_sequence}->${caseItem.target_frame_sequence}`;
+    const frameLabel = caseItem.target_frame_sequence === null || caseItem.target_frame_sequence === undefined
+      ? `f${caseItem.source_frame_sequence}`
+      : `f${caseItem.source_frame_sequence}->${caseItem.target_frame_sequence}`;
+    btn.textContent = `${index + 1}. ${caseItem.category} ${frameLabel}`;
     btn.onclick = () => { activeIndex = index; render(); };
     $("caseList").appendChild(btn);
   });
 }
 
 function renderEvidence(caseItem) {
-  const side = asset(caseItem, "side_by_side");
-  const src = asset(caseItem, "source_crop");
+  const side = assetAny(caseItem, ["side_by_side", "full_frame"]);
+  const src = assetAny(caseItem, ["source_crop", "tight_crop"]);
   const tgt = asset(caseItem, "target_crop");
-  const srcContext = asset(caseItem, "source_context");
+  const srcContext = assetAny(caseItem, ["source_context", "wide_crop"]);
   const tgtContext = asset(caseItem, "target_context");
   const strip = asset(caseItem, "temporal_strip");
   const clip = asset(caseItem, "temporal_clip") || caseItem.evidence_manifest.evidence_assets.find(a => a.media_type === "video/mp4");
   const gif = caseItem.evidence_manifest.evidence_assets.find(a => a.media_type === "image/gif");
-  $("primaryPanel").innerHTML = `
-    <div class="evidence-grid primary">
-      <figure><img alt="Side by side source and target detections" src="${evidenceUrl(caseItem, side)}"><figcaption>Side-by-side comparison</figcaption></figure>
-    </div>
-    <div class="evidence-grid">
-      <figure><img alt="Source detection crop" src="${evidenceUrl(caseItem, src)}"><figcaption>Source crop</figcaption></figure>
-      <figure><img alt="Target detection crop" src="${evidenceUrl(caseItem, tgt)}"><figcaption>Target crop</figcaption></figure>
-    </div>`;
-  $("contextPanel").innerHTML = `
-    <div class="evidence-grid">
-      <figure><img alt="Source wider context" src="${evidenceUrl(caseItem, srcContext)}"><figcaption>Source wider context</figcaption></figure>
-      <figure><img alt="Target wider context" src="${evidenceUrl(caseItem, tgtContext)}"><figcaption>Target wider context</figcaption></figure>
-    </div>`;
-  const media = clip
-    ? `<video id="temporalMedia" controls src="${evidenceUrl(caseItem, clip)}"></video>`
-    : `<img id="temporalMedia" alt="Animated temporal evidence" src="${evidenceUrl(caseItem, gif)}">`;
-  $("temporalPanel").innerHTML = `
-    <div class="evidence-grid primary">
-      <figure><img alt="Temporal strip" src="${evidenceUrl(caseItem, strip)}"><figcaption>Short temporal strip</figcaption></figure>
-      <figure>${media}<figcaption>Playable temporal evidence</figcaption></figure>
-    </div>`;
+  const primaryFigures = [
+    figureHtml(caseItem, side, caseItem.task_type === "entity_validity" ? "Full frame with highlighted box" : "Side-by-side comparison"),
+    figureHtml(caseItem, src, caseItem.task_type === "entity_validity" ? "Tight crop" : "Source crop"),
+    figureHtml(caseItem, tgt, "Target crop")
+  ].filter(Boolean).join("");
+  const contextFigures = [
+    figureHtml(caseItem, srcContext, caseItem.task_type === "entity_validity" ? "Wider crop" : "Source wider context"),
+    figureHtml(caseItem, tgtContext, "Target wider context")
+  ].filter(Boolean).join("");
+  const temporalFigures = [
+    figureHtml(caseItem, strip, "Short temporal strip"),
+    figureHtml(caseItem, clip || gif, "Playable temporal evidence")
+  ].filter(Boolean).join("");
+  $("primaryPanel").innerHTML = `<div class="evidence-grid">${primaryFigures}</div>`;
+  $("contextPanel").innerHTML = `<div class="evidence-grid">${contextFigures || primaryFigures}</div>`;
+  $("temporalPanel").innerHTML = `<div class="evidence-grid primary">${temporalFigures || primaryFigures}</div>`;
+}
+
+function renderDecisionButtons(caseItem) {
+  $("decisionPanel").innerHTML = "";
+  for (const decision of caseItem.allowed_decisions || []) {
+    const meta = DECISION_META[decision] || {label: decision.replaceAll("_", " "), key: decision[0].toUpperCase(), className: "unresolved"};
+    const btn = document.createElement("button");
+    btn.className = `decision ${meta.className}`;
+    btn.dataset.decision = decision;
+    btn.innerHTML = `<span>${meta.key}</span> ${meta.label}`;
+    btn.classList.toggle("selected", decisions()[caseItem.review_case_id] === decision);
+    btn.onclick = () => saveDecision(decision);
+    $("decisionPanel").appendChild(btn);
+  }
 }
 
 function render() {
@@ -360,7 +405,9 @@ function render() {
   $("category").textContent = caseItem.category;
   $("question").textContent = caseItem.concise_question;
   $("uncertainty").textContent = (caseItem.uncertainty_reasons || []).join(", ");
-  $("frameGap").textContent = `Gap ${caseItem.evidence_manifest.frame_gap}`;
+  $("frameGap").textContent = caseItem.evidence_manifest.frame_gap === null || caseItem.evidence_manifest.frame_gap === undefined
+    ? `Frame ${caseItem.source_frame_sequence}`
+    : `Gap ${caseItem.evidence_manifest.frame_gap}`;
   $("note").value = notes()[caseItem.review_case_id] || "";
   $("engineeringJson").textContent = JSON.stringify({
     review_case_id: caseItem.review_case_id,
@@ -373,10 +420,7 @@ function render() {
   }, null, 2);
   renderEvidence(caseItem);
   renderCaseList();
-  document.querySelectorAll(".decision").forEach(btn => {
-    btn.classList.toggle("selected", decisions()[caseItem.review_case_id] === btn.dataset.decision);
-    btn.onclick = () => saveDecision(btn.dataset.decision);
-  });
+  renderDecisionButtons(caseItem);
   showTab(activeTab);
   applyZoom();
 }
@@ -494,9 +538,8 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.ctrlKey && event.key.toLowerCase() === "z") { event.preventDefault(); undo(); return; }
   const key = event.key.toLowerCase();
-  if (key === "a") saveDecision("accept_continuity");
-  if (key === "r") saveDecision("reject_continuity");
-  if (key === "u") saveDecision("unresolved");
+  const decision = DECISION_BY_KEY[key];
+  if (decision && activeCase().allowed_decisions.includes(decision)) saveDecision(decision);
   if (event.key === "ArrowLeft") go(-1);
   if (event.key === "ArrowRight") go(1);
   if (event.code === "Space") { event.preventDefault(); togglePlay(); }

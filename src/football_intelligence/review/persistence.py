@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.core.fingerprints import sha256_file
-from football_intelligence.review.schemas import ReviewManifest, safety_payload, stable_hash
+from football_intelligence.review.schemas import ENTITY_VALIDITY_DECISIONS, ReviewManifest, safety_payload, stable_hash
 
 
 def utc_now() -> str:
@@ -72,12 +72,14 @@ def _reviewed_counts(manifest: ReviewManifest, state: dict[str, Any]) -> dict[st
     accepted = sum(1 for value in decisions.values() if value == "accept_continuity")
     rejected = sum(1 for value in decisions.values() if value == "reject_continuity")
     unresolved = sum(1 for value in decisions.values() if value == "unresolved")
-    reviewed = accepted + rejected + unresolved
+    entity_validity_reviewed = sum(1 for value in decisions.values() if value in ENTITY_VALIDITY_DECISIONS)
+    reviewed = len(decisions)
     return {
         "total_cases": len(manifest.review_cases),
         "accepted": accepted,
         "rejected": rejected,
         "unresolved": unresolved,
+        "entity_validity_reviewed": entity_validity_reviewed,
         "reviewed": reviewed,
         "remaining": max(0, len(manifest.review_cases) - reviewed),
         "notes_count": len([note for note in state.get("notes", {}).values() if str(note).strip()]),

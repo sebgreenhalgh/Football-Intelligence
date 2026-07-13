@@ -11,8 +11,17 @@ WORKBENCH_VERSION = "m5.4b.unified_review_workbench.v1"
 VISUAL_ONLY_WARNING = "VISUAL_ONLY_NOT_METRIC"
 CONTINUITY_QUESTION = "Does the visual evidence support continuity between these two detections?"
 CONTINUITY_DECISIONS = ["accept_continuity", "reject_continuity", "unresolved"]
+ENTITY_VALIDITY_QUESTION = "What does this box contain?"
+ENTITY_VALIDITY_DECISIONS = [
+    "valid_on_pitch_person",
+    "valid_official",
+    "valid_off_pitch_person",
+    "non_person_false_positive",
+    "unresolved",
+]
 ALLOWED_REVIEW_TASK_TYPES = [
     "visual_continuity_edge_review",
+    "entity_validity",
     "visual_role_classification",
     "official_context_classification",
     "goalkeeper_visual_context_classification",
@@ -114,6 +123,7 @@ class ReviewCase(BaseModel):
     review_case_id: str
     task_type: Literal[
         "visual_continuity_edge_review",
+        "entity_validity",
         "visual_role_classification",
         "official_context_classification",
         "goalkeeper_visual_context_classification",
@@ -157,6 +167,11 @@ class ReviewCase(BaseModel):
                 raise ValueError("continuity review decisions must be accept/reject/unresolved")
             if self.target_frame_sequence is None:
                 raise ValueError("continuity review requires a target frame sequence")
+        if self.task_type == "entity_validity":
+            if self.concise_question != ENTITY_VALIDITY_QUESTION:
+                raise ValueError("entity-validity review must use the approved entity question")
+            if self.allowed_decisions != ENTITY_VALIDITY_DECISIONS:
+                raise ValueError("entity-validity decisions must use the approved P/O/F/X/U decision set")
         return self
 
 
