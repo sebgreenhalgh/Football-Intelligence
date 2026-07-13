@@ -330,8 +330,10 @@ class ReviewPersistence:
         )
         return self._persist(state, event)
 
-    def complete(self) -> dict[str, Any]:
+    def complete(self, *, elapsed_active_seconds: int | None = None) -> dict[str, Any]:
         state = self.ensure_state()
+        if elapsed_active_seconds is not None:
+            state["elapsed_active_seconds"] = int(elapsed_active_seconds)
         state["completed"] = True
         state["completed_at"] = utc_now()
         event = self._event(
@@ -341,6 +343,7 @@ class ReviewPersistence:
             previous_decision=None,
             optional_note=None,
             state=state,
+            extra={"elapsed_active_seconds": state.get("elapsed_active_seconds")},
         )
         state = self._persist(state, event)
         self.export_completed_review(state)

@@ -221,12 +221,13 @@ def test_durable_autosave_events_snapshots_resume_undo_and_completion(tmp_path: 
     assert reconstructed["notes"][cases[0].review_case_id] == "clear enough"
 
     persistence.save_decision(review_case_id=cases[2].review_case_id, decision="unresolved")
-    completed = persistence.complete()
+    completed = persistence.complete(elapsed_active_seconds=123)
     assert completed["completed"] is True
     summary = _read_json(paths["decision_root"] / "completed_review_summary.json")
     assert summary["accepted"] == 1
     assert summary["rejected"] == 1
     assert summary["unresolved"] == 1
+    assert summary["review_duration"] == 123
     assert summary["human_approved"] is False
 
 

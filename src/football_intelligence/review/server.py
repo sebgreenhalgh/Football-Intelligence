@@ -131,7 +131,10 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
             elif path == "/api/review/undo":
                 _json_response(self, persistence.undo())
             elif path == "/api/review/complete":
-                _json_response(self, persistence.complete())
+                _json_response(
+                    self,
+                    persistence.complete(elapsed_active_seconds=body.get("elapsed_active_seconds")),
+                )
             else:
                 _text_response(self, "not found", status=404)
         except Exception as exc:

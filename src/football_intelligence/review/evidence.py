@@ -278,6 +278,7 @@ def build_visual_continuity_workbench(
     evidence_root.mkdir(parents=True, exist_ok=True)
     workbench_root.mkdir(parents=True, exist_ok=True)
     decision_root.mkdir(parents=True, exist_ok=True)
+    (decision_root / "snapshots").mkdir(parents=True, exist_ok=True)
 
     candidate_payload = read_json(candidate_rows_path)
     candidate_rows = _rows(candidate_payload)
