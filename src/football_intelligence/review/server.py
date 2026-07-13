@@ -37,6 +37,29 @@ def _text_response(handler: SimpleHTTPRequestHandler, text: str, status: int = 4
     handler.wfile.write(data)
 
 
+def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int] | None:
+    if not range_header.startswith("bytes=") or "," in range_header:
+        return None
+    start_text, _, end_text = range_header.removeprefix("bytes=").partition("-")
+    if not start_text and not end_text:
+        return None
+    try:
+        if start_text:
+            start = int(start_text)
+            end = int(end_text) if end_text else file_size - 1
+        else:
+            suffix_length = int(end_text)
+            if suffix_length <= 0:
+                return None
+            start = max(0, file_size - suffix_length)
+            end = file_size - 1
+    except ValueError:
+        return None
+    if start < 0 or end < start or start >= file_size:
+        return None
+    return start, min(end, file_size - 1)
+
+
 def _read_body(handler: SimpleHTTPRequestHandler) -> dict[str, Any]:
     size = int(handler.headers.get("Content-Length", "0"))
     if size == 0:
@@ -97,8 +120,8 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
                 _json_response(self, self.server.persistence.export_payload())
             elif path in {"/", "/index.html"}:
                 self._serve_file(self.server.config.workbench_root / "index.html")
-            elif path in {"/app.js", "/styles.css", "/fallback.html"}:
-                self._serve_file(self.server.config.workbench_root / path.lstrip("/"))
+            elif path.startswith("/") and not path.startswith("/api/") and not path.startswith("/evidence/"):
+                self._serve_workbench_file(path)
             elif path.startswith("/evidence/"):
                 self._serve_evidence(path)
             else:
@@ -149,15 +172,48 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
             return
         self._serve_file(target)
 
+    def _serve_workbench_file(self, request_path: str) -> None:
+        relative = Path(unquote(request_path.lstrip("/")))
+        target = (self.server.config.workbench_root / relative).resolve()
+        root = self.server.config.workbench_root.resolve()
+        if not (target == root or target.is_relative_to(root)) or not target.is_file():
+            _text_response(self, "not found", status=404)
+            return
+        self._serve_file(target)
+
     def _serve_file(self, path: Path) -> None:
         if not path.exists() or not path.is_file():
             _text_response(self, "not found", status=404)
             return
-        data = path.read_bytes()
         media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        file_size = path.stat().st_size
+        range_header = self.headers.get("Range")
+        if range_header:
+            byte_range = _parse_byte_range(range_header, file_size)
+            if byte_range is None:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{file_size}")
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                return
+            start, end = byte_range
+            length = end - start + 1
+            self.send_response(206)
+            self.send_header("Content-Type", media_type)
+            self.send_header("Content-Length", str(length))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with path.open("rb") as handle:
+                handle.seek(start)
+                self.wfile.write(handle.read(length))
+            return
+        data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", media_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)

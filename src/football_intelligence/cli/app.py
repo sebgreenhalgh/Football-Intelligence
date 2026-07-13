@@ -87,6 +87,10 @@ from football_intelligence.replay.blind_hard_continuity import build_blind_hard_
 from football_intelligence.replay.positive_only_counterfactual_continuity import (
     build_positive_only_counterfactual_continuity_stage,
 )
+from football_intelligence.replay.geometry_matched_counterfactual_review import (
+    build_geometry_matched_counterfactual_review_stage,
+    confirm_m5_4f4_smoke,
+)
 from football_intelligence.replay.portable_pipeline import (
     backup_confirmation_status,
     build_context_from_cli,
@@ -133,6 +137,7 @@ quality_incident_app = typer.Typer(no_args_is_help=True)
 rebuilt_pipeline_app = typer.Typer(no_args_is_help=True)
 role_partitioned_learning_app = typer.Typer(no_args_is_help=True)
 balanced_role_app = typer.Typer(no_args_is_help=True)
+counterfactual_review_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
@@ -145,6 +150,7 @@ app.add_typer(quality_incident_app, name="quality-incident")
 app.add_typer(rebuilt_pipeline_app, name="rebuilt-pipeline")
 app.add_typer(role_partitioned_learning_app, name="role-learning")
 app.add_typer(balanced_role_app, name="balanced-role")
+app.add_typer(counterfactual_review_app, name="counterfactual-review")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -1634,5 +1640,35 @@ def balanced_role_build_counterfactual_continuity_review(
     result = build_positive_only_counterfactual_continuity_stage(
         stage_root=stage_root.resolve(),
         repo_root=repo_root.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build")
+def counterfactual_review_build(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    result = build_geometry_matched_counterfactual_review_stage(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("confirm-smoke")
+def counterfactual_review_confirm_smoke(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    passed: bool = typer.Option(False, "--passed", help="Record a passing manual browser smoke test."),
+    failed: bool = typer.Option(False, "--failed", help="Record a failing manual browser smoke test."),
+    reason: str | None = typer.Option(None, "--reason"),
+    reviewer_session_id: str = typer.Option("local-manual-smoke", "--reviewer-session-id"),
+) -> None:
+    result = confirm_m5_4f4_smoke(
+        stage_root=stage_root.resolve(),
+        passed=passed,
+        failed=failed,
+        reason=reason,
+        reviewer_session_id=reviewer_session_id,
     )
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
