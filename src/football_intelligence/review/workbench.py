@@ -120,6 +120,12 @@ INDEX_HTML = """<!doctype html>
       <section id="primaryPanel" class="evidence-panel"></section>
       <section id="contextPanel" class="evidence-panel hidden"></section>
       <section id="temporalPanel" class="evidence-panel hidden"></section>
+      <div id="mediaControls" class="media-controls hidden">
+        <button id="stepBackBtn" class="secondary">Step back</button>
+        <button id="stepForwardBtn" class="secondary">Step forward</button>
+        <label>Speed <select id="speedControl"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></label>
+        <label class="check"><input type="checkbox" id="loopControl" checked> Loop</label>
+      </div>
 
       <section id="decisionPanel" class="decision-panel" aria-label="Decision controls"></section>
 
@@ -188,6 +194,8 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 5px; border: 1px soli
 .tab { border: 1px solid var(--line); background: white; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
 .tab.active { border-color: var(--accent); background: #eaf2ff; font-weight: 700; }
 .evidence-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.media-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.media-controls select { border: 1px solid var(--line); border-radius: 6px; padding: 7px; background: white; }
 .evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .evidence-grid.primary { grid-template-columns: 1fr; }
 figure { margin: 0; }
@@ -280,7 +288,7 @@ function evidenceUrl(caseItem, assetItem) {
 function figureHtml(caseItem, assetItem, caption) {
   if (!assetItem) return "";
   if (assetItem.media_type === "video/mp4") {
-    return `<figure><video id="temporalMedia" controls src="${evidenceUrl(caseItem, assetItem)}"></video><figcaption>${caption}</figcaption></figure>`;
+    return `<figure><video id="temporalMedia" controls loop src="${evidenceUrl(caseItem, assetItem)}"></video><figcaption>${caption}</figcaption></figure>`;
   }
   return `<figure><img alt="${caption}" src="${evidenceUrl(caseItem, assetItem)}"><figcaption>${caption}</figcaption></figure>`;
 }
@@ -362,7 +370,7 @@ function renderEvidence(caseItem) {
   const strip = asset(caseItem, "temporal_strip");
   const clip = asset(caseItem, "temporal_clip") || caseItem.evidence_manifest.evidence_assets.find(a => a.media_type === "video/mp4");
   const gif = caseItem.evidence_manifest.evidence_assets.find(a => a.media_type === "image/gif");
-  const primaryFigures = [
+  const defaultPrimaryFigures = [
     figureHtml(caseItem, side, caseItem.task_type === "entity_validity" ? "Full frame with highlighted box" : "Side-by-side comparison"),
     figureHtml(caseItem, src, caseItem.task_type === "entity_validity" ? "Tight crop" : "Source crop"),
     figureHtml(caseItem, tgt, "Target crop")
@@ -372,12 +380,16 @@ function renderEvidence(caseItem) {
     figureHtml(caseItem, tgtContext, "Target wider context")
   ].filter(Boolean).join("");
   const temporalFigures = [
-    figureHtml(caseItem, strip, "Short temporal strip"),
-    figureHtml(caseItem, clip || gif, "Playable temporal evidence")
+    figureHtml(caseItem, clip || gif, "Primary temporal evidence"),
+    figureHtml(caseItem, strip, "Short temporal strip")
   ].filter(Boolean).join("");
+  const primaryFigures = caseItem.task_type === "visual_continuity_edge_review"
+    ? (temporalFigures + defaultPrimaryFigures)
+    : defaultPrimaryFigures;
   $("primaryPanel").innerHTML = `<div class="evidence-grid">${primaryFigures}</div>`;
   $("contextPanel").innerHTML = `<div class="evidence-grid">${contextFigures || primaryFigures}</div>`;
   $("temporalPanel").innerHTML = `<div class="evidence-grid primary">${temporalFigures || primaryFigures}</div>`;
+  $("mediaControls").classList.toggle("hidden", caseItem.task_type !== "visual_continuity_edge_review");
 }
 
 function renderDecisionButtons(caseItem) {
@@ -402,7 +414,10 @@ function render() {
   $("reviewedCounter").textContent = `Reviewed ${c.reviewed}`;
   $("remainingCounter").textContent = `Remaining ${c.remaining}`;
   $("unresolvedCounter").textContent = `Unresolved ${c.unresolved}`;
-  $("category").textContent = caseItem.category;
+  const roundLabel = caseItem.review_round ? `Round ${caseItem.review_round}` : "Review";
+  const clusterLabel = caseItem.equivalence_cluster_id ? `cluster ${caseItem.equivalence_cluster_id}` : "unclustered";
+  const modelLabel = caseItem.model_prediction ? `${caseItem.model_prediction} ${Math.round((caseItem.model_confidence || 0) * 100)}%` : "no model prediction";
+  $("category").textContent = `${roundLabel} | ${caseItem.task_type} | ${caseItem.category} | ${clusterLabel} | ${modelLabel}`;
   $("question").textContent = caseItem.concise_question;
   $("uncertainty").textContent = (caseItem.uncertainty_reasons || []).join(", ");
   $("frameGap").textContent = caseItem.evidence_manifest.frame_gap === null || caseItem.evidence_manifest.frame_gap === undefined
@@ -416,6 +431,13 @@ function render() {
     evidence_hash: caseItem.evidence_hash,
     source_frame_sequence: caseItem.source_frame_sequence,
     target_frame_sequence: caseItem.target_frame_sequence,
+    task_type: caseItem.task_type,
+    review_round: caseItem.review_round,
+    equivalence_cluster_id: caseItem.equivalence_cluster_id,
+    representative_of_count: caseItem.representative_of_count,
+    model_prediction: caseItem.model_prediction,
+    model_confidence: caseItem.model_confidence,
+    selection_metadata: caseItem.selection_metadata,
     safety_payload: caseItem.safety_payload
   }, null, 2);
   renderEvidence(caseItem);
@@ -531,6 +553,25 @@ function togglePlay() {
   }
 }
 
+function temporalMedia() {
+  return $("temporalMedia");
+}
+
+function setPlaybackRate() {
+  const media = temporalMedia();
+  if (media && media.tagName === "VIDEO") media.playbackRate = Number($("speedControl").value || 1);
+}
+
+function setLoop() {
+  const media = temporalMedia();
+  if (media && media.tagName === "VIDEO") media.loop = $("loopControl").checked;
+}
+
+function stepVideo(delta) {
+  const media = temporalMedia();
+  if (media && media.tagName === "VIDEO") media.currentTime = Math.max(0, media.currentTime + delta);
+}
+
 document.addEventListener("keydown", (event) => {
   if (isTyping()) {
     if (event.key === "Escape") document.activeElement.blur();
@@ -563,6 +604,10 @@ $("completeBtn").onclick = completeReview;
 $("exportBtn").onclick = exportJson;
 $("retryBtn").onclick = () => { if (lastFailedSave) lastFailedSave(); };
 $("unresolvedOnly").onchange = () => { if ($("unresolvedOnly").checked) nextUnresolved(); else render(); };
+$("speedControl").onchange = setPlaybackRate;
+$("loopControl").onchange = setLoop;
+$("stepBackBtn").onclick = () => stepVideo(-1 / 3);
+$("stepForwardBtn").onclick = () => stepVideo(1 / 3);
 
 setInterval(() => {
   const total = elapsedSeconds + Math.floor((Date.now() - timerStarted) / 1000);

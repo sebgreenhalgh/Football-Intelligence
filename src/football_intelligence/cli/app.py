@@ -97,6 +97,7 @@ from football_intelligence.replay.portable_step1_validation import validate_exis
 from football_intelligence.replay.portable_step2 import run_portable_step2
 from football_intelligence.replay.portable_step2_validation import validate_existing_step2_outputs
 from football_intelligence.replay.quality_incident import build_quality_incident_stage
+from football_intelligence.replay.rebuilt_human_calibrated_pipeline import build_rebuilt_human_calibrated_stage
 from football_intelligence.replay.source_retention import write_source_retention_artifacts
 from football_intelligence.review.evidence import (
     build_visual_continuity_workbench,
@@ -120,6 +121,7 @@ blind_window_app = typer.Typer(no_args_is_help=True)
 portable_blind_app = typer.Typer(no_args_is_help=True)
 review_app = typer.Typer(no_args_is_help=True)
 quality_incident_app = typer.Typer(no_args_is_help=True)
+rebuilt_pipeline_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
@@ -129,6 +131,7 @@ app.add_typer(blind_window_app, name="blind-window")
 app.add_typer(portable_blind_app, name="portable-blind")
 app.add_typer(review_app, name="review")
 app.add_typer(quality_incident_app, name="quality-incident")
+app.add_typer(rebuilt_pipeline_app, name="rebuilt-pipeline")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -1531,6 +1534,24 @@ def quality_incident_build(
     stage_root: Path | None = typer.Option(None, "--stage-root", file_okay=False, dir_okay=True),
 ) -> None:
     result = build_quality_incident_stage(
+        repo_root=repo_root.resolve(),
+        artifact_root=artifact_root.resolve(),
+        match_id=match_id,
+        stage_root=stage_root.resolve() if stage_root is not None else None,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@rebuilt_pipeline_app.command("build")
+def rebuilt_pipeline_build(
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    artifact_root: Path = typer.Option(
+        Path("..").resolve(), "--artifact-root", exists=True, file_okay=False, dir_okay=True
+    ),
+    match_id: str = typer.Option("128058", "--match-id"),
+    stage_root: Path | None = typer.Option(None, "--stage-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = build_rebuilt_human_calibrated_stage(
         repo_root=repo_root.resolve(),
         artifact_root=artifact_root.resolve(),
         match_id=match_id,

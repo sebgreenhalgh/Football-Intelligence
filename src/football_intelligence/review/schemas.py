@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 WORKBENCH_VERSION = "m5.4b.unified_review_workbench.v1"
 VISUAL_ONLY_WARNING = "VISUAL_ONLY_NOT_METRIC"
-CONTINUITY_QUESTION = "Does the visual evidence support continuity between these two detections?"
+CONTINUITY_QUESTION = "Does this short sequence show the same visible person continuing across the frames?"
 CONTINUITY_DECISIONS = ["accept_continuity", "reject_continuity", "unresolved"]
 ENTITY_VALIDITY_QUESTION = "What does this box contain?"
 ENTITY_VALIDITY_DECISIONS = [
@@ -145,6 +145,12 @@ class ReviewCase(BaseModel):
     candidate_hash: str
     evidence_hash: str
     safety_payload: dict[str, Any]
+    review_round: int | None = None
+    selection_metadata: dict[str, Any] = Field(default_factory=dict)
+    model_prediction: str | None = None
+    model_confidence: float | None = None
+    equivalence_cluster_id: str | None = None
+    representative_of_count: int | None = None
 
     @field_validator("allowed_decisions")
     @classmethod
