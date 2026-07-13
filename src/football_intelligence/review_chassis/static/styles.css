@@ -1,0 +1,158 @@
+:root {
+  color-scheme: light;
+  font-family: Segoe UI, system-ui, sans-serif;
+  background: #f5f6f2;
+  color: #171a1f;
+}
+
+body {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 100vh;
+}
+
+aside {
+  background: #20252b;
+  color: #f7f7f2;
+  padding: 18px;
+  overflow: auto;
+}
+
+main {
+  padding: 20px;
+  overflow: auto;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+button {
+  border: 1px solid #b8bfc7;
+  background: #ffffff;
+  color: #15171a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+aside button {
+  width: 100%;
+  margin: 4px 0;
+}
+
+.caseButton {
+  text-align: left;
+  background: #303842;
+  color: #f7f7f2;
+  border-color: #48515d;
+}
+
+.caseButton.done {
+  border-color: #6cc38f;
+}
+
+.caseButton.active {
+  background: #ffffff;
+  color: #15171a;
+}
+
+.question,
+.assetCard,
+#metadataPanel,
+#notesPanel,
+#revealPanel {
+  background: #ffffff;
+  border: 1px solid #d9dee2;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+#decisionButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.decision.selected {
+  outline: 3px solid #1b6ca8;
+}
+
+.decision.accept {
+  border-color: #24784f;
+}
+
+.decision.reject {
+  border-color: #b63d3d;
+}
+
+.decision.neutral {
+  border-color: #5e6a78;
+}
+
+.assetCard {
+  display: grid;
+  gap: 10px;
+}
+
+.evidenceImage {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #d2d7dc;
+  background: #101318;
+}
+
+.temporalGif {
+  image-rendering: auto;
+}
+
+.stepperControls,
+.gifControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e3e7eb;
+  text-align: left;
+  padding: 6px;
+  vertical-align: top;
+}
+
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#status.failed {
+  color: #ffb0a8;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  body {
+    grid-template-columns: 1fr;
+  }
+
+  aside {
+    max-height: 48vh;
+  }
+}

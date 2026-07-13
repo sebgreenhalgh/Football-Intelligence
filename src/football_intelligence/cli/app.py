@@ -91,6 +91,7 @@ from football_intelligence.replay.geometry_matched_counterfactual_review import 
     build_geometry_matched_counterfactual_review_stage,
     confirm_m5_4f4_smoke,
 )
+from football_intelligence.replay.gif_paired_counterfactual_review import build_gif_paired_counterfactual_review_stage
 from football_intelligence.replay.portable_pipeline import (
     backup_confirmation_status,
     build_context_from_cli,
@@ -122,6 +123,12 @@ from football_intelligence.review.validation import (
     seal_completion,
     validate_review_package,
 )
+from football_intelligence.review_chassis.completion import confirm_smoke as confirm_review_chassis_smoke
+from football_intelligence.review_chassis.server import (
+    ReviewChassisServerConfig,
+    serve as serve_review_chassis,
+)
+from football_intelligence.review_chassis.validation import validate_review_chassis_package
 from football_intelligence.review.workbench import build_workbench
 
 app = typer.Typer(no_args_is_help=True)
@@ -138,6 +145,7 @@ rebuilt_pipeline_app = typer.Typer(no_args_is_help=True)
 role_partitioned_learning_app = typer.Typer(no_args_is_help=True)
 balanced_role_app = typer.Typer(no_args_is_help=True)
 counterfactual_review_app = typer.Typer(no_args_is_help=True)
+review_chassis_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(registry_app, name="registry")
@@ -151,6 +159,7 @@ app.add_typer(rebuilt_pipeline_app, name="rebuilt-pipeline")
 app.add_typer(role_partitioned_learning_app, name="role-learning")
 app.add_typer(balanced_role_app, name="balanced-role")
 app.add_typer(counterfactual_review_app, name="counterfactual-review")
+app.add_typer(review_chassis_app, name="review-chassis")
 
 HISTORICAL_HEADLINE_SEMANTIC_HASH = "dfccb51f80bb80663f6c45765095d3f5320b27ff1063b4597e30ec2aa64cf78e"
 
@@ -1665,6 +1674,78 @@ def counterfactual_review_confirm_smoke(
     reviewer_session_id: str = typer.Option("local-manual-smoke", "--reviewer-session-id"),
 ) -> None:
     result = confirm_m5_4f4_smoke(
+        stage_root=stage_root.resolve(),
+        passed=passed,
+        failed=failed,
+        reason=reason,
+        reviewer_session_id=reviewer_session_id,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-gif-paired-review")
+def counterfactual_review_build_gif_paired_review(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    result = build_gif_paired_counterfactual_review_stage(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@review_chassis_app.command("serve")
+def review_chassis_serve(
+    manifest: Path = typer.Option(..., "--manifest", exists=True, readable=True),
+    ui_config: Path = typer.Option(..., "--ui-config", exists=True, readable=True),
+    evidence_root: Path = typer.Option(..., "--evidence-root", exists=True, file_okay=False, dir_okay=True),
+    decisions_root: Path = typer.Option(..., "--decisions-root", file_okay=False, dir_okay=True),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8776, "--port"),
+    reviewer_session_id: str | None = typer.Option(None, "--reviewer-session-id"),
+) -> None:
+    typer.echo(f"Serving reusable review chassis at http://{host}:{port}/")
+    serve_review_chassis(
+        ReviewChassisServerConfig(
+            manifest_path=manifest.resolve(),
+            ui_config_path=ui_config.resolve(),
+            evidence_root=evidence_root.resolve(),
+            decisions_root=decisions_root.resolve(),
+            host=host,
+            port=port,
+            reviewer_session_id=reviewer_session_id,
+        )
+    )
+
+
+@review_chassis_app.command("validate")
+def review_chassis_validate(
+    manifest: Path = typer.Option(..., "--manifest", exists=True, readable=True),
+    ui_config: Path = typer.Option(..., "--ui-config", exists=True, readable=True),
+    evidence_root: Path = typer.Option(..., "--evidence-root", exists=True, file_okay=False, dir_okay=True),
+    decisions_root: Path | None = typer.Option(None, "--decisions-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = validate_review_chassis_package(
+        manifest_path=manifest.resolve(),
+        ui_config_path=ui_config.resolve(),
+        evidence_root=evidence_root.resolve(),
+        decisions_root=decisions_root.resolve() if decisions_root is not None else None,
+    )
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@review_chassis_app.command("confirm-smoke")
+def review_chassis_confirm_smoke(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    passed: bool = typer.Option(False, "--passed"),
+    failed: bool = typer.Option(False, "--failed"),
+    reason: str | None = typer.Option(None, "--reason"),
+    reviewer_session_id: str = typer.Option("local-gif-smoke", "--reviewer-session-id"),
+) -> None:
+    result = confirm_review_chassis_smoke(
         stage_root=stage_root.resolve(),
         passed=passed,
         failed=failed,

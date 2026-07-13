@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review Chassis</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside>
+    <header>
+      <h1 id="reviewTitle">Review</h1>
+      <p id="warning"></p>
+    </header>
+    <div id="counts"></div>
+    <div id="caseList"></div>
+    <button id="prevBtn" type="button">Previous</button>
+    <button id="nextBtn" type="button">Next</button>
+    <button id="undoBtn" type="button">Undo</button>
+    <button id="completeBtn" type="button">Complete</button>
+    <button id="exportBtn" type="button">Export</button>
+    <div id="status"></div>
+  </aside>
+  <main>
+    <section class="question">
+      <h2 id="caseTitle"></h2>
+      <p id="instructions"></p>
+      <p id="question"></p>
+      <div id="decisionButtons"></div>
+    </section>
+    <section id="assetPanels"></section>
+    <section id="metadataPanel"></section>
+    <details id="revealPanel">
+      <summary>Reveal hidden context</summary>
+      <pre id="hiddenMetadata"></pre>
+    </details>
+    <section id="notesPanel">
+      <label for="note">Notes</label>
+      <textarea id="note" rows="4"></textarea>
+    </section>
+    <pre id="exportBox" class="hidden"></pre>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

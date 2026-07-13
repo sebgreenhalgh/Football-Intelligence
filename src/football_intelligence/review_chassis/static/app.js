@@ -1,0 +1,308 @@
+let manifest = null;
+let uiConfig = null;
+let state = null;
+let activeIndex = 0;
+let elapsedSeconds = 0;
+let timerStarted = Date.now();
+const frameStepper = {};
+
+const $ = (id) => document.getElementById(id);
+const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: {"Content-Type": "application/json"},
+    ...options,
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+function activeCase() {
+  return manifest.cases[activeIndex];
+}
+
+function decisions() {
+  return state?.decisions || {};
+}
+
+function noteFor(caseId) {
+  return state?.notes?.[caseId] || "";
+}
+
+function evidenceUrl(caseId, relativePath) {
+  return `/evidence/${encodeURIComponent(caseId)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function assetSort(a, b) {
+  const order = uiConfig.asset_panel_order || [];
+  const index = (asset) => {
+    const found = order.findIndex((item) => item.asset_type === asset.asset_type && (!item.group_id || item.group_id === asset.group_id));
+    return found >= 0 ? found : 999;
+  };
+  return index(a) - index(b) || a.label.localeCompare(b.label);
+}
+
+function groupedSequenceAssets(caseData) {
+  const groups = {};
+  for (const asset of caseData.evidence_assets.filter((item) => item.asset_type === "image_sequence")) {
+    const key = asset.group_id || "default";
+    groups[key] = groups[key] || [];
+    groups[key].push(asset);
+  }
+  for (const assets of Object.values(groups)) {
+    assets.sort((a, b) => (a.frame_sequences[0] || 0) - (b.frame_sequences[0] || 0));
+  }
+  return groups;
+}
+
+function renderImageStepper(caseData, assets, groupId) {
+  if (!assets.length) return "";
+  const caseKey = `${caseData.case_id}:${groupId}`;
+  frameStepper[caseKey] = Math.max(0, Math.min(frameStepper[caseKey] || 0, assets.length - 1));
+  const current = assets[frameStepper[caseKey]];
+  const frameLabel = current.frame_sequences.length ? `Frame ${current.frame_sequences.join(", ")}` : current.label;
+  return `
+    <div class="stepper" data-stepper="${caseKey}">
+      <div class="stepperControls">
+        <button type="button" data-stepper-prev="${caseKey}">Previous frame</button>
+        <span>${frameLabel}</span>
+        <button type="button" data-stepper-next="${caseKey}">Next frame</button>
+      </div>
+      <img class="evidenceImage" src="${evidenceUrl(caseData.case_id, current.relative_path)}" alt="${current.label}">
+    </div>`;
+}
+
+function renderAsset(caseData, asset) {
+  const url = evidenceUrl(caseData.case_id, asset.relative_path);
+  if (asset.asset_type === "animated_gif") {
+    return `
+      <article class="assetCard">
+        <h3>${asset.label}</h3>
+        <div class="gifControls">
+          <button type="button" data-gif-restart="${asset.asset_id}">Restart GIF</button>
+        </div>
+        <img class="evidenceImage temporalGif" id="gif_${asset.asset_id}" src="${url}" alt="${asset.label}">
+      </article>`;
+  }
+  if (asset.asset_type === "metadata_json") {
+    return `
+      <article class="assetCard">
+        <h3>${asset.label}</h3>
+        <a href="${url}" target="_blank" rel="noreferrer">Open metadata</a>
+      </article>`;
+  }
+  if (asset.asset_type === "image_sequence") return "";
+  return `
+    <article class="assetCard">
+      <h3>${asset.label}</h3>
+      <img class="evidenceImage" src="${url}" alt="${asset.label}">
+    </article>`;
+}
+
+function renderAssets(caseData) {
+  const sequenceGroups = groupedSequenceAssets(caseData);
+  const sequenceCards = Object.entries(sequenceGroups).map(([groupId, assets]) => `
+    <article class="assetCard">
+      <h3>${assets[0]?.label || "Frame sequence"}</h3>
+      ${renderImageStepper(caseData, assets, groupId)}
+    </article>`);
+  const normalAssets = caseData.evidence_assets.slice().sort(assetSort).map((asset) => renderAsset(caseData, asset));
+  $("assetPanels").innerHTML = [...normalAssets, ...sequenceCards].join("");
+}
+
+function renderMetadata(caseData) {
+  const fields = uiConfig.visible_metadata_fields || [];
+  const rows = fields.map((field) => {
+    const value = caseData.visible_metadata?.[field] ?? caseData[field] ?? "";
+    return `<tr><th>${field}</th><td>${String(value)}</td></tr>`;
+  });
+  $("metadataPanel").innerHTML = rows.length ? `<table>${rows.join("")}</table>` : "";
+  $("hiddenMetadata").textContent = JSON.stringify({
+    hidden_metadata: caseData.hidden_metadata || {},
+    reveal_metadata: caseData.reveal_metadata || {},
+  }, null, 2);
+}
+
+function renderDecisions(caseData) {
+  const current = decisions()[caseData.case_id];
+  $("decisionButtons").innerHTML = uiConfig.decisions.map((option) => {
+    const selected = current === option.value ? " selected" : "";
+    return `<button type="button" class="decision ${option.style}${selected}" data-decision="${option.value}">
+      <strong>${option.key}</strong> ${option.label}
+    </button>`;
+  }).join("");
+}
+
+function renderCaseList() {
+  $("caseList").innerHTML = manifest.cases.map((caseData, index) => {
+    const done = decisions()[caseData.case_id] ? "done" : "";
+    const active = index === activeIndex ? "active" : "";
+    return `<button type="button" class="caseButton ${done} ${active}" data-case-index="${index}">
+      ${index + 1}. ${caseData.case_id}
+    </button>`;
+  }).join("");
+}
+
+function render() {
+  if (!manifest || !uiConfig || !state) return;
+  const caseData = activeCase();
+  document.title = uiConfig.page_title;
+  $("reviewTitle").textContent = uiConfig.review_title;
+  $("warning").textContent = uiConfig.visual_warning;
+  $("instructions").textContent = uiConfig.task_instructions;
+  $("caseTitle").textContent = `${activeIndex + 1} / ${manifest.cases.length}: ${caseData.case_id}`;
+  $("question").textContent = caseData.concise_question;
+  $("counts").textContent = `${state.counts.reviewed} reviewed, ${state.counts.remaining} remaining`;
+  $("notesPanel").classList.toggle("hidden", !uiConfig.notes_enabled);
+  $("undoBtn").classList.toggle("hidden", !uiConfig.undo_enabled);
+  $("note").value = noteFor(caseData.case_id);
+  renderCaseList();
+  renderDecisions(caseData);
+  renderAssets(caseData);
+  renderMetadata(caseData);
+}
+
+function setStatus(text, failed = false) {
+  $("status").textContent = text;
+  $("status").classList.toggle("failed", failed);
+}
+
+async function saveDecision(decision, inputSource = "click") {
+  const caseData = activeCase();
+  const body = {
+    case_id: caseData.case_id,
+    decision,
+    note: $("note").value,
+    input_source: inputSource,
+    reveal_state: {[caseData.case_id]: $("revealPanel").open},
+    last_viewed_case_id: caseData.case_id,
+    elapsed_active_seconds: elapsedSeconds + Math.floor((Date.now() - timerStarted) / 1000),
+  };
+  state = await api("/api/review/decision", {method: "POST", body: JSON.stringify(body)});
+  setStatus("Saved");
+  if (uiConfig.decisions_advance_automatically) {
+    activeIndex = Math.min(manifest.cases.length - 1, activeIndex + 1);
+  }
+  render();
+}
+
+async function saveNote() {
+  if (!uiConfig.notes_enabled) return;
+  const caseData = activeCase();
+  state = await api("/api/review/note", {
+    method: "POST",
+    body: JSON.stringify({case_id: caseData.case_id, note: $("note").value}),
+  });
+  setStatus("Note saved");
+}
+
+async function undo() {
+  state = await api("/api/review/undo", {method: "POST", body: "{}"});
+  setStatus("Undo saved");
+  render();
+}
+
+async function completeReview() {
+  try {
+    state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({elapsed_active_seconds: elapsedSeconds})});
+    setStatus("Completed");
+    render();
+  } catch (error) {
+    setStatus(`Completion blocked: ${error.message}`, true);
+  }
+}
+
+async function exportReview() {
+  $("exportBox").textContent = JSON.stringify(await api("/api/review/export"), null, 2);
+  $("exportBox").classList.remove("hidden");
+}
+
+function go(delta) {
+  activeIndex = Math.max(0, Math.min(manifest.cases.length - 1, activeIndex + delta));
+  render();
+}
+
+function decisionForKey(key) {
+  const lowered = key.toLowerCase();
+  return uiConfig.decisions.find((option) => option.key.toLowerCase() === lowered)?.value;
+}
+
+document.addEventListener("keydown", (event) => {
+  if (isTyping()) {
+    if (event.key === "Escape") document.activeElement.blur();
+    return;
+  }
+  if (event.ctrlKey && event.key.toLowerCase() === "z" && uiConfig.undo_enabled) {
+    event.preventDefault();
+    undo();
+    return;
+  }
+  const decision = decisionForKey(event.key);
+  if (decision && activeCase().allowed_decisions.includes(decision)) {
+    event.preventDefault();
+    saveDecision(decision, "keyboard");
+    return;
+  }
+  if (event.key === "ArrowLeft") go(-1);
+  if (event.key === "ArrowRight") go(1);
+  if (event.key.toLowerCase() === "n" && uiConfig.notes_enabled) $("note").focus();
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const decision = target.closest("[data-decision]")?.dataset.decision;
+  if (decision) saveDecision(decision, "click");
+  const caseIndex = target.closest("[data-case-index]")?.dataset.caseIndex;
+  if (caseIndex !== undefined) {
+    activeIndex = Number(caseIndex);
+    render();
+  }
+  const prev = target.closest("[data-stepper-prev]")?.dataset.stepperPrev;
+  if (prev) {
+    frameStepper[prev] = Math.max(0, (frameStepper[prev] || 0) - 1);
+    render();
+  }
+  const next = target.closest("[data-stepper-next]")?.dataset.stepperNext;
+  if (next) {
+    const [caseId, groupId] = next.split(":");
+    const caseData = manifest.cases.find((item) => item.case_id === caseId);
+    const count = groupedSequenceAssets(caseData)[groupId]?.length || 1;
+    frameStepper[next] = Math.min(count - 1, (frameStepper[next] || 0) + 1);
+    render();
+  }
+  const gif = target.closest("[data-gif-restart]")?.dataset.gifRestart;
+  if (gif) {
+    const image = $(`gif_${gif}`);
+    const base = image.src.split("?")[0];
+    image.src = `${base}?restart=${Date.now()}`;
+  }
+});
+
+let noteTimer = null;
+$("note").addEventListener("input", () => {
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(saveNote, 400);
+});
+$("prevBtn").onclick = () => go(-1);
+$("nextBtn").onclick = () => go(1);
+$("undoBtn").onclick = undo;
+$("completeBtn").onclick = completeReview;
+$("exportBtn").onclick = exportReview;
+
+setInterval(() => {
+  elapsedSeconds += Math.floor((Date.now() - timerStarted) / 1000);
+  timerStarted = Date.now();
+}, 1000);
+
+async function load() {
+  manifest = await api("/api/review/manifest");
+  uiConfig = await api("/api/review/ui-config");
+  state = await api("/api/review/state");
+  const resume = state.resume_case_id;
+  activeIndex = Math.max(0, manifest.cases.findIndex((caseData) => caseData.case_id === resume));
+  render();
+}
+
+load().catch((error) => setStatus(`Load failed: ${error.message}`, true));
