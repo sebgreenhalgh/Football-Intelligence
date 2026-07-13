@@ -92,6 +92,9 @@ from football_intelligence.replay.geometry_matched_counterfactual_review import 
     confirm_m5_4f4_smoke,
 )
 from football_intelligence.replay.gif_paired_counterfactual_review import build_gif_paired_counterfactual_review_stage
+from football_intelligence.replay.review_only_compatibility_counterfactual_review import (
+    build_review_only_compatibility_counterfactual_stage,
+)
 from football_intelligence.replay.portable_pipeline import (
     backup_confirmation_status,
     build_context_from_cli,
@@ -1689,6 +1692,18 @@ def counterfactual_review_build_gif_paired_review(
     repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
 ) -> None:
     result = build_gif_paired_counterfactual_review_stage(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-review-only-compatibility-review")
+def counterfactual_review_build_review_only_compatibility_review(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    result = build_review_only_compatibility_counterfactual_stage(
         stage_root=stage_root.resolve(),
         repo_root=repo_root.resolve(),
     )
