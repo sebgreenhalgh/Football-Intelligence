@@ -69,6 +69,31 @@ F6_1_BLOCKED_TARGET_CHOICE = "BLOCKED_TARGET_CHOICE_INTEGRITY"
 F6_1_BLOCKED_NEIGHBOURHOODS = "BLOCKED_INDEPENDENT_ASSIGNMENT_NEIGHBOURHOODS"
 F6_1_BLOCKED_SMOKE = "BLOCKED_GIF_BROWSER_SMOKE_TEST"
 F6_1_FAIL_SAFETY = "FAIL_SOURCE_MUTATION_OR_SAFETY"
+F6_2_READY = "PASS_SERVER_SEALED_UNIQUE_TARGET_CHOICE_REVIEW_READY"
+F6_2_BLOCKED_PREDECISION_KEY = "BLOCKED_PREDECISION_ANSWER_KEY_DELIVERY"
+F6_2_BLOCKED_SEALED_MAPPING = "BLOCKED_SEALED_MAPPING_ACCESSIBILITY"
+F6_2_BLOCKED_DUPLICATES = "BLOCKED_REVERSED_COMPARISON_DEDUPLICATION"
+F6_2_BLOCKED_TARGET_CHOICE = "BLOCKED_TARGET_CHOICE_INTEGRITY"
+F6_2_BLOCKED_SMOKE = "BLOCKED_GIF_BROWSER_SMOKE_TEST"
+F6_2_FAIL_SAFETY = "FAIL_SOURCE_MUTATION_OR_SAFETY"
+
+ANSWER_KEY_FORBIDDEN_KEYS = {
+    "accepted_target_panel",
+    "alternative_target_panel",
+    "decision_to_output_mapping",
+    "conflict_if_chosen_panel_is_not_prior_accept",
+    "target_assignment",
+    "candidate_type",
+    "accepted_target_identity",
+    "prior_conflict_code",
+}
+ANSWER_KEY_FORBIDDEN_VALUE_FRAGMENTS = {
+    "prior_accepted_target",
+    "same_frame_alternative_target",
+    "REVIEW_CONFLICT_WITH_PRIOR_ACCEPTED_TARGET",
+    "review_only_true_same_frame_swap",
+    "review_only_local_same_frame_wrong_target",
+}
 
 TARGET_CHOICE_DECISIONS = [
     {"key": "A", "value": "target_a_continues_source", "label": "Target A continues source", "style": "neutral"},
@@ -366,6 +391,7 @@ def _write_target_choice_evidence(
     assignment: dict[str, Any],
     frame_root: Path,
     frame_records: dict[int, dict[str, Any]],
+    include_post_decision_asset: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     src_seq = int(row["source_frame_sequence"])
     tgt_seq = int(row["target_frame_sequence"])
@@ -474,30 +500,31 @@ def _write_target_choice_evidence(
         ]
     )
     assets.extend(frame_assets)
-    answer_path = case_root / "post_decision_target_key.json"
-    answer_payload = {
-        "accepted_target_panel": assignment["accepted_target_panel"],
-        "alternative_target_panel": assignment["alternative_target_panel"],
-        "prior_accepted_target_visible_person_base_id": assignment[assignment["accepted_target_panel"]][
-            "visible_person_base_id"
-        ],
-        "review_only_warning": "Reveal metadata only; do not ingest without completed review mapping.",
-    }
-    answer_path.write_text(json.dumps(answer_payload, indent=2, sort_keys=True), encoding="utf-8")
-    hidden_asset = GenericEvidenceAsset(
-        asset_id="post_decision_target_key",
-        asset_type="metadata_json",
-        label="Post-decision target key",
-        relative_path="post_decision_target_key.json",
-        sha256=sha256_file(answer_path),
-        media_type="application/json",
-        visibility_policy="hidden_until_explicit_reveal",
-        reveal_group_id="post_decision_answer_key",
-        reveal_button_label="Reveal target key after decision",
-        reveal_requires_existing_decision=True,
-        record_reveal_event=True,
-    ).model_dump(mode="json")
-    assets.append(hidden_asset)
+    if include_post_decision_asset:
+        answer_path = case_root / "post_decision_target_key.json"
+        answer_payload = {
+            "accepted_target_panel": assignment["accepted_target_panel"],
+            "alternative_target_panel": assignment["alternative_target_panel"],
+            "prior_accepted_target_visible_person_base_id": assignment[assignment["accepted_target_panel"]][
+                "visible_person_base_id"
+            ],
+            "review_only_warning": "Reveal metadata only; do not ingest without completed review mapping.",
+        }
+        answer_path.write_text(json.dumps(answer_payload, indent=2, sort_keys=True), encoding="utf-8")
+        hidden_asset = GenericEvidenceAsset(
+            asset_id="post_decision_target_key",
+            asset_type="metadata_json",
+            label="Post-decision target key",
+            relative_path="post_decision_target_key.json",
+            sha256=sha256_file(answer_path),
+            media_type="application/json",
+            visibility_policy="hidden_until_explicit_reveal",
+            reveal_group_id="post_decision_answer_key",
+            reveal_button_label="Reveal target key after decision",
+            reveal_requires_existing_decision=True,
+            record_reveal_event=True,
+        ).model_dump(mode="json")
+        assets.append(hidden_asset)
     evidence_hash = stable_hash([assets, row["source_bbox"], assignment, frame_sequences])
     return assets, {
         "evidence_hash": evidence_hash,
@@ -771,6 +798,363 @@ def _stage_ui_copy_count(root: Path) -> int:
     return sum(1 for path in root.rglob("*") if path.is_file() and path.name in names) if root.exists() else 0
 
 
+def _comparison_identity(row: dict[str, Any]) -> str:
+    target_ids = sorted(
+        [
+            str(row["accepted_target_visible_person_base_id"]),
+            str(row["alternative_target_visible_person_base_id"]),
+        ]
+    )
+    return stable_hash(
+        [
+            row["source_visible_person_base_id"],
+            int(row["source_frame_sequence"]),
+            int(row["target_frame_sequence"]),
+            target_ids,
+        ]
+    )
+
+
+def _dedupe_reversed_comparisons(rows_in: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    unique = []
+    duplicate_rows = []
+    for row in rows_in:
+        identity = _comparison_identity(row)
+        row_with_identity = {**row, "comparison_identity": identity}
+        if identity in seen:
+            duplicate_rows.append(
+                {
+                    "comparison_identity": identity,
+                    "kept_candidate_id": seen[identity]["candidate_id"],
+                    "removed_candidate_id": row["candidate_id"],
+                    "same_source_visible_person_base_id": (
+                        seen[identity]["source_visible_person_base_id"] == row["source_visible_person_base_id"]
+                    ),
+                    "same_source_frame_sequence": (
+                        int(seen[identity]["source_frame_sequence"]) == int(row["source_frame_sequence"])
+                    ),
+                    "same_target_frame_sequence": (
+                        int(seen[identity]["target_frame_sequence"]) == int(row["target_frame_sequence"])
+                    ),
+                    "same_unordered_target_set": sorted(
+                        [
+                            seen[identity]["accepted_target_visible_person_base_id"],
+                            seen[identity]["alternative_target_visible_person_base_id"],
+                        ]
+                    )
+                    == sorted(
+                        [
+                            row["accepted_target_visible_person_base_id"],
+                            row["alternative_target_visible_person_base_id"],
+                        ]
+                    ),
+                    "reason": "same source, target frame and unordered target set",
+                    **safety_payload(),
+                }
+            )
+            continue
+        seen[identity] = row_with_identity
+        unique.append(row_with_identity)
+    after_duplicate_count = len(unique) - len({_comparison_identity(row) for row in unique})
+    audit = {
+        "artifact": "m5_4f6_2_reversed_comparison_deduplication_audit",
+        "comparison_identity_definition": (
+            "hash(source_visible_person_base_id, source_frame_sequence, "
+            "target_frame_sequence, sorted(target_visible_person_base_ids))"
+        ),
+        "raw_target_choice_candidate_count": len(rows_in),
+        "unique_comparison_count": len(unique),
+        "reversed_comparison_duplicate_count_before": len(duplicate_rows),
+        "reversed_comparison_duplicate_count_after": after_duplicate_count,
+        "duplicate_rows": duplicate_rows,
+        **safety_payload(),
+    }
+    return unique, audit
+
+
+def _safe_target_choice_ui_config() -> dict[str, Any]:
+    payload = ReviewUIConfig(
+        page_title="Blind target-choice continuity review",
+        review_title="Blind target-choice continuity review",
+        task_instructions="Choose which anonymous target continues the highlighted source person.",
+        decisions=TARGET_CHOICE_DECISIONS,
+        layout="multi_candidate_comparison",
+        comparison_panels=[
+            {"asset_group_id": "source", "label": "Source"},
+            {"asset_group_id": "target_a", "label": "Target A"},
+            {"asset_group_id": "target_b", "label": "Target B"},
+        ],
+        asset_panel_order=[
+            {"asset_type": "crop", "label": "Comparison crops"},
+            {"asset_type": "animated_gif", "label": "Animated temporal GIF"},
+            {"asset_type": "image_sequence", "label": "Frame stepper", "group_id": "temporal_frames"},
+            {"asset_type": "temporal_strip", "label": "Temporal strip"},
+            {"asset_type": "wide_context", "label": "Context"},
+        ],
+        visible_metadata_fields=[
+            "source_frame_sequence",
+            "target_frame_sequence",
+            "frame_gap",
+            "target_a_id",
+            "target_b_id",
+        ],
+    ).model_dump(mode="json")
+    payload.pop("decision_to_output_mapping", None)
+    payload["hidden_metadata_fields"] = []
+    return payload
+
+
+def _case_mapping(case_id: str, row: dict[str, Any], assignment: dict[str, Any]) -> dict[str, Any]:
+    target_a = assignment["target_a"]
+    target_b = assignment["target_b"]
+    accepted_panel = assignment["accepted_target_panel"]
+    return {
+        "case_id": case_id,
+        "source_anchor_candidate_id": row["candidate_id"],
+        "comparison_identity": row["comparison_identity"],
+        "local_assignment_neighbourhood_id": row["local_assignment_neighbourhood_id"],
+        "accepted_target_panel": accepted_panel,
+        "alternative_target_panel": assignment["alternative_target_panel"],
+        "target_a_visible_person_base_id": target_a["visible_person_base_id"],
+        "target_b_visible_person_base_id": target_b["visible_person_base_id"],
+        "target_a_candidate_id": target_a["candidate_id"],
+        "target_b_candidate_id": target_b["candidate_id"],
+        "decision_mapping": {
+            "target_a_continues_source": {
+                "chosen_panel": "target_a",
+                "chosen_visible_person_base_id": target_a["visible_person_base_id"],
+                "creates_binary_labels_when_decisive": True,
+                "conflict_if_chosen_panel_is_not_prior_accept": accepted_panel != "target_a",
+            },
+            "target_b_continues_source": {
+                "chosen_panel": "target_b",
+                "chosen_visible_person_base_id": target_b["visible_person_base_id"],
+                "creates_binary_labels_when_decisive": True,
+                "conflict_if_chosen_panel_is_not_prior_accept": accepted_panel != "target_b",
+            },
+            "neither_target_is_valid_or_compatible": {"creates_binary_labels_when_decisive": False},
+            "unresolved": {"creates_binary_labels_when_decisive": False},
+        },
+        "prior_conflict_code": "REVIEW_CONFLICT_WITH_PRIOR_ACCEPTED_TARGET",
+        "candidate_construction_type": row.get("candidate_type"),
+        **safety_payload(),
+    }
+
+
+def _write_server_sealed_manifest(
+    *,
+    stage_root: Path,
+    continuity_v8: Path,
+    selected: list[dict[str, Any]],
+    frame_root: Path,
+    frame_records: dict[int, dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    source_refs = _source_refs(stage_root)
+    cases: list[GenericReviewCase] = []
+    bindings = []
+    mapping_rows = []
+    random_rows = []
+    reveal_payloads: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(selected, start=1):
+        case_id = f"m5_4f6_2_target_choice_case_{index:03d}"
+        assignment = _target_assignment(row, index)
+        assets, evidence = _write_target_choice_evidence(
+            evidence_root=continuity_v8 / "evidence",
+            case_id=case_id,
+            row=row,
+            assignment=assignment,
+            frame_root=frame_root,
+            frame_records=frame_records,
+            include_post_decision_asset=False,
+        )
+        bindings.append(evidence["binding"])
+        target_a = assignment["target_a"]
+        target_b = assignment["target_b"]
+        mapping = _case_mapping(case_id, row, assignment)
+        mapping_rows.append(mapping)
+        reveal_payloads[case_id] = {
+            "__case_metadata__": {
+                "accepted_target_panel": mapping["accepted_target_panel"],
+                "alternative_target_panel": mapping["alternative_target_panel"],
+                "decision_mapping": mapping["decision_mapping"],
+                "prior_conflict_code": mapping["prior_conflict_code"],
+                "sealed_mapping_hash": stable_hash(mapping),
+                "review_only_warning": "Server-side reveal payload; only valid after a saved decision.",
+            }
+        }
+        random_rows.append(
+            {
+                "case_id": case_id,
+                "source_anchor_candidate_id": row["candidate_id"],
+                "comparison_identity": row["comparison_identity"],
+                "accepted_target_panel": mapping["accepted_target_panel"],
+                "alternative_target_panel": mapping["alternative_target_panel"],
+                "randomisation_hash": stable_hash([row["comparison_identity"], index]),
+                "deterministic_but_hidden": True,
+                **safety_payload(),
+            }
+        )
+        case = GenericReviewCase(
+            case_id=case_id,
+            task_type="visual_continuity_target_choice_review",
+            candidate_id=f"m5_4f6_2_target_choice_{index:03d}",
+            candidate_hash=stable_hash(
+                {
+                    "source": row["source_visible_person_base_id"],
+                    "target_set": sorted(
+                        [
+                            target_a["visible_person_base_id"],
+                            target_b["visible_person_base_id"],
+                        ]
+                    ),
+                    "comparison_identity": row["comparison_identity"],
+                }
+            ),
+            evidence_hash=evidence["evidence_hash"],
+            equivalence_cluster_id=f"m5_4f6_2_neighbourhood_{index:03d}",
+            allowed_decisions=[option["value"] for option in TARGET_CHOICE_DECISIONS],
+            concise_question="Which target continues the highlighted source person?",
+            detailed_instructions="Choose Target A, Target B, neither, or unresolved. Target order is anonymous.",
+            priority=index,
+            evidence_assets=assets,
+            source_frame_sequence=int(row["source_frame_sequence"]),
+            target_frame_sequence=int(row["target_frame_sequence"]),
+            frame_gap=int(row["frame_gap"]),
+            source_bbox=row["source_bbox"],
+            target_bbox=None,
+            visible_metadata={
+                "source_frame_sequence": row["source_frame_sequence"],
+                "target_frame_sequence": row["target_frame_sequence"],
+                "frame_gap": row["frame_gap"],
+                "target_a_id": f"{case_id}_target_a",
+                "target_b_id": f"{case_id}_target_b",
+            },
+            hidden_metadata={},
+            reveal_metadata={},
+            source_artifact_references=source_refs,
+        )
+        cases.append(case)
+    manifest = GenericReviewManifest(
+        review_id="m5_4f6_2_server_sealed_unique_target_choice_review",
+        stage_id="m5_4f6_2",
+        task_type="visual_continuity_target_choice_review",
+        title="M5.4F.6.2 server-sealed blind target-choice continuity review",
+        cases=cases,
+        evidence_manifest_hash=stable_hash([case.evidence_hash for case in cases]),
+        source_manifest_hash=stable_hash(source_refs),
+        source_artifact_references=source_refs,
+    )
+    manifest_payload = manifest.model_dump(mode="json")
+    manifest_payload["manifest_hash"] = manifest_hash(manifest)
+    write_json(continuity_v8 / "target_choice_reviewer_manifest.json", manifest_payload)
+    sealed_mapping = {
+        "schema_version": "football_intelligence.m5_4f6_2.server_sealed_mapping.v1",
+        "artifact": "m5_4f6_2_target_choice_server_sealed_mapping",
+        "review_id": manifest.review_id,
+        "stage_id": manifest.stage_id,
+        "server_side_only": True,
+        "browser_served_before_decision": False,
+        "reveal_requires_persisted_decision": True,
+        "mappings": mapping_rows,
+        "reveal_payloads": reveal_payloads,
+        **safety_payload(),
+    }
+    sealed_mapping["sealed_mapping_hash"] = stable_hash(sealed_mapping)
+    sealed_root = continuity_v8 / "sealed"
+    sealed_root.mkdir(parents=True, exist_ok=True)
+    write_json(sealed_root / "target_choice_server_sealed_mapping.json", sealed_mapping)
+    return manifest_payload, sealed_mapping, bindings, mapping_rows, random_rows
+
+
+def _walk_forbidden_answer_key(payload: Any, *, source: str, path: str = "$") -> list[dict[str, Any]]:
+    hits = []
+    if isinstance(payload, dict):
+        for key, child in payload.items():
+            key_text = str(key)
+            if key_text in ANSWER_KEY_FORBIDDEN_KEYS:
+                hits.append(
+                    {"source": source, "path": f"{path}.{key_text}", "match_type": "forbidden_key", "match": key_text}
+                )
+            hits.extend(_walk_forbidden_answer_key(child, source=source, path=f"{path}.{key_text}"))
+    elif isinstance(payload, list):
+        for index, child in enumerate(payload):
+            hits.extend(_walk_forbidden_answer_key(child, source=source, path=f"{path}[{index}]"))
+    elif isinstance(payload, str):
+        for fragment in ANSWER_KEY_FORBIDDEN_VALUE_FRAGMENTS:
+            if fragment in payload:
+                hits.append({"source": source, "path": path, "match_type": "forbidden_value", "match": fragment})
+    return hits
+
+
+def _forbidden_text_hits(text: str, *, source: str) -> list[dict[str, Any]]:
+    hits = []
+    for key in ANSWER_KEY_FORBIDDEN_KEYS:
+        if key in text:
+            hits.append({"source": source, "path": "$", "match_type": "forbidden_key_text", "match": key})
+    for fragment in ANSWER_KEY_FORBIDDEN_VALUE_FRAGMENTS:
+        if fragment in text:
+            hits.append({"source": source, "path": "$", "match_type": "forbidden_value_text", "match": fragment})
+    return hits
+
+
+def _predecision_answer_key_audit(
+    *,
+    reviewer_manifest: dict[str, Any],
+    ui_config: dict[str, Any],
+    initial_state: dict[str, Any],
+    evidence_root: Path,
+    sealed_mapping_path: Path,
+) -> dict[str, Any]:
+    hits = []
+    hits.extend(_walk_forbidden_answer_key(reviewer_manifest, source="reviewer_safe_manifest"))
+    hits.extend(_walk_forbidden_answer_key(ui_config, source="ui_config"))
+    hits.extend(_walk_forbidden_answer_key(initial_state, source="initial_api_state"))
+    app_text = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    index_text = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+    hits.extend(_forbidden_text_hits(app_text, source="static_app_js"))
+    hits.extend(_forbidden_text_hits(index_text, source="static_index_html"))
+    browser_json_files = []
+    for path in evidence_root.rglob("*.json"):
+        browser_json_files.append(str(path))
+        hits.extend(_walk_forbidden_answer_key(read_json(path), source=str(path)))
+    sealed_outside_evidence = not sealed_mapping_path.resolve().is_relative_to(evidence_root.resolve())
+    return {
+        "artifact": "m5_4f6_2_predecision_answer_key_delivery_audit",
+        "predecision_answer_key_delivered_to_client": bool(hits),
+        "browser_served_answer_key_field_count": len(hits),
+        "forbidden_hits": hits,
+        "browser_served_json_file_count": 3 + len(browser_json_files),
+        "browser_served_evidence_json_files": browser_json_files,
+        "sealed_mapping_path": str(sealed_mapping_path),
+        "sealed_mapping_outside_evidence_root": sealed_outside_evidence,
+        **safety_payload(),
+    }
+
+
+def _write_server_sealed_launcher(
+    path: Path,
+    *,
+    repo_root: Path,
+    manifest: Path,
+    config: Path,
+    evidence: Path,
+    decisions: Path,
+    sealed_mapping: Path,
+    port: int,
+) -> str:
+    return _write_launcher(
+        path,
+        repo_root=repo_root,
+        manifest=manifest,
+        config=config,
+        evidence=evidence,
+        decisions=decisions,
+        sealed_mapping=sealed_mapping,
+        port=port,
+    )
+
+
 def build_blind_target_choice_review_stage(*, stage_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     stage_root = stage_root.resolve()
     repo_root = (repo_root or Path.cwd()).resolve()
@@ -963,4 +1347,207 @@ def build_blind_target_choice_review_stage(*, stage_root: Path, repo_root: Path 
         **safety_payload(),
     }
     write_json(validation_root / "m5_4f6_1_validation_summary.json", summary)
+    return summary
+
+
+def build_server_sealed_unique_target_choice_review_stage(
+    *, stage_root: Path, repo_root: Path | None = None
+) -> dict[str, Any]:
+    stage_root = stage_root.resolve()
+    repo_root = (repo_root or Path.cwd()).resolve()
+    continuity_v8 = stage_root / "continuity_v8"
+    audit_root = continuity_v8 / "audit"
+    validation_root = stage_root / "validation"
+    for root in [audit_root, continuity_v8 / "evidence", continuity_v8 / "decisions", validation_root]:
+        root.mkdir(parents=True, exist_ok=True)
+    prior_paths = [
+        stage_root / "continuity_v2" / "decisions",
+        stage_root / "continuity_v3",
+        stage_root / "continuity_v4",
+        stage_root / "continuity_v5",
+        stage_root / "continuity_v6",
+        stage_root / "continuity_v7",
+        stage_root / "OPEN_BLIND_TARGET_CHOICE_CONTINUITY_REVIEW.ps1",
+    ]
+    before_inventory = _inventory(prior_paths, base=stage_root)
+    raw_selected = _selected_f6_candidates(stage_root)
+    selected, dedupe_audit = _dedupe_reversed_comparisons(raw_selected)
+    write_json(audit_root / "reversed_comparison_deduplication_audit.json", dedupe_audit)
+    paths = _stage_input_paths(stage_root)
+    frame_root = paths["frame_root"]
+    frame_records = _frame_records(read_json(paths["frame_manifest"]))
+    manifest, sealed_mapping, bindings, mapping_rows, random_rows = _write_server_sealed_manifest(
+        stage_root=stage_root,
+        continuity_v8=continuity_v8,
+        selected=selected,
+        frame_root=frame_root,
+        frame_records=frame_records,
+    )
+    ui_config = _safe_target_choice_ui_config()
+    write_json(continuity_v8 / "target_choice_ui_config.json", ui_config)
+    _write_empty_decisions(
+        continuity_v8 / "target_choice_reviewer_manifest.json",
+        continuity_v8 / "target_choice_ui_config.json",
+        continuity_v8 / "decisions",
+    )
+    _write_case_index(continuity_v8 / "target_choice_case_index.csv", manifest)
+    write_json(
+        continuity_v8 / "target_choice_label_mapping_server_sealed_reference.json",
+        {
+            "artifact": "m5_4f6_2_target_choice_label_mapping_server_sealed_reference",
+            "server_side_only": True,
+            "sealed_mapping_hash": sealed_mapping["sealed_mapping_hash"],
+            "mapping_count": len(mapping_rows),
+            **safety_payload(),
+        },
+    )
+    sealed_mapping_path = continuity_v8 / "sealed" / "target_choice_server_sealed_mapping.json"
+    package_validation = validate_review_chassis_package(
+        manifest_path=continuity_v8 / "target_choice_reviewer_manifest.json",
+        ui_config_path=continuity_v8 / "target_choice_ui_config.json",
+        evidence_root=continuity_v8 / "evidence",
+        decisions_root=continuity_v8 / "decisions",
+    )
+    initial_state = read_json(continuity_v8 / "decisions" / "review_decisions.json")
+    predecision_audit = _predecision_answer_key_audit(
+        reviewer_manifest=manifest,
+        ui_config=ui_config,
+        initial_state=initial_state,
+        evidence_root=continuity_v8 / "evidence",
+        sealed_mapping_path=sealed_mapping_path,
+    )
+    write_json(audit_root / "predecision_answer_key_delivery_audit.json", predecision_audit)
+    integrity = _target_choice_integrity(selected, bindings, random_rows)
+    integrity["artifact"] = "m5_4f6_2_target_choice_integrity_audit"
+    write_json(audit_root / "target_choice_integrity_audit.json", integrity)
+    difficulty = _difficulty_rows(selected, random_rows)
+    difficulty["artifact"] = "m5_4f6_2_target_choice_difficulty_audit"
+    write_json(audit_root / "target_choice_difficulty_audit.json", difficulty)
+    randomisation = {
+        "artifact": "m5_4f6_2_target_randomisation_audit",
+        "target_a_accepted_target_count": sum(row["accepted_target_panel"] == "target_a" for row in random_rows),
+        "target_b_accepted_target_count": sum(row["accepted_target_panel"] == "target_b" for row in random_rows),
+        "accepted_target_position_not_constant": len({row["accepted_target_panel"] for row in random_rows}) > 1,
+        "rows": random_rows,
+        **safety_payload(),
+    }
+    write_json(audit_root / "target_randomisation_audit.json", randomisation)
+    after_inventory = _inventory(prior_paths, base=stage_root)
+    source_mutation = {
+        "artifact": "m5_4f6_2_source_mutation_audit",
+        "before": before_inventory,
+        "after": after_inventory,
+        "prior_artifacts_preserved": before_inventory["inventory_hash"] == after_inventory["inventory_hash"],
+        **safety_payload(),
+    }
+    safety = {
+        "artifact": "m5_4f6_2_safety_guardrail_audit",
+        "model_fit_performed": False,
+        "learned_continuity_rows_updated": 0,
+        "mp4_generation_performed": False,
+        **safety_payload(),
+    }
+    server_sealed_validation = {
+        "artifact": "m5_4f6_2_server_sealed_visibility_validation",
+        "sealed_mapping_path": str(sealed_mapping_path),
+        "sealed_mapping_hash": sealed_mapping["sealed_mapping_hash"],
+        "sealed_mapping_outside_evidence_root": predecision_audit["sealed_mapping_outside_evidence_root"],
+        "sealed_mapping_accessibility_result": "not_browser_routable_predecision",
+        "reveal_requires_persisted_decision": True,
+        "predecision_answer_key_delivered_to_client": predecision_audit["predecision_answer_key_delivered_to_client"],
+        **safety_payload(),
+    }
+    write_json(validation_root / "m5_4f6_2_source_mutation_audit.json", source_mutation)
+    write_json(validation_root / "m5_4f6_2_safety_guardrail_audit.json", safety)
+    write_json(validation_root / "m5_4f6_2_server_sealed_visibility_validation.json", server_sealed_validation)
+    smoke_gate, smoke_status = _read_smoke_status(stage_root)
+    independent_neighbourhoods = len({row["local_assignment_neighbourhood_id"] for row in selected})
+    no_answer_key_gate = (
+        predecision_audit["browser_served_answer_key_field_count"] == 0
+        and not predecision_audit["predecision_answer_key_delivered_to_client"]
+    )
+    dedupe_gate = (
+        dedupe_audit["reversed_comparison_duplicate_count_before"] == 1
+        and dedupe_audit["reversed_comparison_duplicate_count_after"] == 0
+        and len(selected) == 6
+    )
+    integrity_gate = (
+        package_validation["passed"]
+        and integrity["canonical_frame_binding_passed"]
+        and integrity["distinct_targets_passed"]
+        and independent_neighbourhoods == 6
+        and randomisation["accepted_target_position_not_constant"]
+    )
+    sealed_gate = predecision_audit["sealed_mapping_outside_evidence_root"]
+    launcher_path = None
+    review_url = None
+    if (
+        source_mutation["prior_artifacts_preserved"]
+        and no_answer_key_gate
+        and dedupe_gate
+        and integrity_gate
+        and sealed_gate
+        and smoke_gate
+    ):
+        launcher_path = _write_server_sealed_launcher(
+            stage_root / "OPEN_SERVER_SEALED_TARGET_CHOICE_CONTINUITY_REVIEW.ps1",
+            repo_root=repo_root,
+            manifest=continuity_v8 / "target_choice_reviewer_manifest.json",
+            config=continuity_v8 / "target_choice_ui_config.json",
+            evidence=continuity_v8 / "evidence",
+            decisions=continuity_v8 / "decisions",
+            sealed_mapping=sealed_mapping_path,
+            port=8782,
+        )
+        review_url = "http://127.0.0.1:8782/"
+    if not source_mutation["prior_artifacts_preserved"]:
+        final_classification = F6_2_FAIL_SAFETY
+        blocker = "PRIOR_ARTIFACT_MUTATION"
+    elif not no_answer_key_gate:
+        final_classification = F6_2_BLOCKED_PREDECISION_KEY
+        blocker = "PREDECISION_ANSWER_KEY_DELIVERED_TO_CLIENT"
+    elif not sealed_gate:
+        final_classification = F6_2_BLOCKED_SEALED_MAPPING
+        blocker = "SEALED_MAPPING_UNDER_BROWSER_SERVED_ROOT"
+    elif not dedupe_gate:
+        final_classification = F6_2_BLOCKED_DUPLICATES
+        blocker = "REVERSED_COMPARISON_DEDUPLICATION_FAILED"
+    elif not integrity_gate:
+        final_classification = F6_2_BLOCKED_TARGET_CHOICE
+        blocker = "TARGET_CHOICE_INTEGRITY_FAILED"
+    elif not smoke_gate:
+        final_classification = F6_2_BLOCKED_SMOKE
+        blocker = "GIF_BROWSER_SMOKE_NOT_PASSED"
+    else:
+        final_classification = F6_2_READY
+        blocker = "NONE"
+    summary = {
+        "artifact": "m5_4f6_2_validation_summary",
+        "final_classification": final_classification,
+        "exact_blocker": blocker,
+        "prior_artifacts_preserved": source_mutation["prior_artifacts_preserved"],
+        "browser_served_answer_key_field_count": predecision_audit["browser_served_answer_key_field_count"],
+        "predecision_answer_key_delivered_to_client": predecision_audit["predecision_answer_key_delivered_to_client"],
+        "sealed_mapping_accessibility_result": server_sealed_validation["sealed_mapping_accessibility_result"],
+        "reversed_comparison_duplicate_count_before": dedupe_audit["reversed_comparison_duplicate_count_before"],
+        "reversed_comparison_duplicate_count_after": dedupe_audit["reversed_comparison_duplicate_count_after"],
+        "target_choice_case_count": len(selected),
+        "independent_assignment_neighbourhood_count": independent_neighbourhoods,
+        "target_a_accepted_target_count": randomisation["target_a_accepted_target_count"],
+        "target_b_accepted_target_count": randomisation["target_b_accepted_target_count"],
+        "gif_smoke_status": smoke_status,
+        "launcher_path": launcher_path,
+        "review_url": review_url,
+        "manifest_schema_version": GENERIC_MANIFEST_SCHEMA_VERSION,
+        "ui_config_schema_version": GENERIC_UI_CONFIG_SCHEMA_VERSION,
+        "gif_only_mode": package_validation["gif_asset_count"] == len(selected)
+        and package_validation["mp4_asset_count"] == 0
+        and not package_validation["video_element_present"],
+        "stage_specific_copied_ui_count": _stage_ui_copy_count(continuity_v8),
+        "model_fit_performed": False,
+        "learned_continuity_rows_updated": 0,
+        "deterministic_output_hash": stable_hash([selected, random_rows, sealed_mapping["sealed_mapping_hash"]]),
+        **safety_payload(),
+    }
+    write_json(validation_root / "m5_4f6_2_validation_summary.json", summary)
     return summary

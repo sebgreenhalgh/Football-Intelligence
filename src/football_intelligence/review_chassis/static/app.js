@@ -190,9 +190,15 @@ function renderMetadata(caseData) {
   });
   $("metadataPanel").innerHTML = rows.length ? `<table>${rows.join("")}</table>` : "";
   const canShowHidden = currentDecision(caseData) && revealMap(caseData).__case_metadata__ === true;
-  $("hiddenMetadata").textContent = canShowHidden ? JSON.stringify({
+  const serverRevealPayloads = state?.server_reveal_payloads?.[caseData.case_id] || {};
+  const serverReveal = serverRevealPayloads.__case_metadata__ || serverRevealPayloads.post_decision_answer_key;
+  const legacyReveal = {
     hidden_metadata: caseData.hidden_metadata || {},
     reveal_metadata: caseData.reveal_metadata || {},
+  };
+  const revealPayload = serverReveal || legacyReveal;
+  $("hiddenMetadata").textContent = canShowHidden ? JSON.stringify({
+    server_reveal_payload: revealPayload,
   }, null, 2) : "Hidden until a decision is saved or reveal is recorded.";
 }
 

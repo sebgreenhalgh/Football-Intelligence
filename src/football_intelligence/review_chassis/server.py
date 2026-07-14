@@ -53,6 +53,7 @@ class ReviewChassisServerConfig:
     ui_config_path: Path
     evidence_root: Path
     decisions_root: Path
+    sealed_mapping_path: Path | None = None
     host: str = "127.0.0.1"
     port: int = 8776
     reviewer_session_id: str | None = None
@@ -68,6 +69,7 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
         self.config = config
         self.manifest = load_manifest(config.manifest_path)
         self.ui_config = load_ui_config(config.ui_config_path)
+        self.sealed_mapping = self._load_sealed_mapping(config.sealed_mapping_path)
         reviewer = config.reviewer_session_id or f"local-{secrets.token_hex(4)}"
         self.persistence = GenericReviewPersistence(
             manifest=self.manifest,
@@ -76,6 +78,32 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
             reviewer_session_id=reviewer,
         )
         super().__init__(server_address, handler_class)
+
+    @staticmethod
+    def _load_sealed_mapping(path: Path | None) -> dict[str, Any]:
+        if path is None:
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("sealed mapping must be a JSON object")
+        return payload
+
+    def ui_config_payload(self) -> dict[str, Any]:
+        payload = self.ui_config.model_dump(mode="json")
+        payload.pop("decision_to_output_mapping", None)
+        return payload
+
+    def sealed_reveal_payload(self, case_id: str, reveal_group_id: str | None) -> dict[str, Any] | None:
+        if not reveal_group_id:
+            return None
+        reveal_payloads = self.sealed_mapping.get("reveal_payloads", {})
+        if not isinstance(reveal_payloads, dict):
+            return None
+        case_payloads = reveal_payloads.get(case_id, {})
+        if not isinstance(case_payloads, dict):
+            return None
+        payload = case_payloads.get(reveal_group_id)
+        return payload if isinstance(payload, dict) else None
 
 
 class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
@@ -90,7 +118,7 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
             if path == "/api/review/manifest":
                 _json_response(self, self.server.manifest.model_dump(mode="json"))
             elif path == "/api/review/ui-config":
-                _json_response(self, self.server.ui_config.model_dump(mode="json"))
+                _json_response(self, self.server.ui_config_payload())
             elif path == "/api/review/state":
                 _json_response(self, self.server.persistence.state())
             elif path == "/api/review/export":
@@ -134,13 +162,19 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                     ),
                 )
             elif path == "/api/review/reveal":
+                reveal_group_id = body.get("reveal_group_id")
+                if reveal_group_id is not None:
+                    reveal_group_id = str(reveal_group_id)
+                reveal_payload = self.server.sealed_reveal_payload(str(body["case_id"]), reveal_group_id)
                 _json_response(
                     self,
                     persistence.record_reveal(
                         case_id=str(body["case_id"]),
                         asset_id=body.get("asset_id"),
-                        reveal_group_id=body.get("reveal_group_id"),
+                        reveal_group_id=reveal_group_id,
                         input_source=str(body.get("input_source", "click")),
+                        require_decision=reveal_payload is not None,
+                        reveal_payload=reveal_payload,
                     ),
                 )
             elif path == "/api/review/undo":

@@ -807,8 +807,18 @@ def _http_gif_smoke(
 
 
 def _write_launcher(
-    path: Path, *, repo_root: Path, manifest: Path, config: Path, evidence: Path, decisions: Path, port: int
+    path: Path,
+    *,
+    repo_root: Path,
+    manifest: Path,
+    config: Path,
+    evidence: Path,
+    decisions: Path,
+    port: int,
+    sealed_mapping: Path | None = None,
 ) -> str:
+    sealed_mapping_variable = f'$SealedMapping = "{sealed_mapping}"\n' if sealed_mapping is not None else ""
+    sealed_mapping_argument = "  --sealed-mapping $SealedMapping `\n" if sealed_mapping is not None else ""
     write_text(
         path,
         f"""$RepoRoot = \"{repo_root}\"
@@ -816,14 +826,14 @@ $Manifest = \"{manifest}\"
 $Config = \"{config}\"
 $Evidence = \"{evidence}\"
 $Decisions = \"{decisions}\"
-$Port = {port}
+{sealed_mapping_variable}$Port = {port}
 Set-Location $RepoRoot
 uv run fi-pipeline review-chassis serve `
   --manifest $Manifest `
   --ui-config $Config `
   --evidence-root $Evidence `
   --decisions-root $Decisions `
-  --port $Port
+{sealed_mapping_argument}  --port $Port
 """,
     )
     return str(path)

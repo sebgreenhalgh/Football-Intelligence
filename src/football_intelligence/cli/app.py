@@ -95,7 +95,10 @@ from football_intelligence.replay.gif_paired_counterfactual_review import build_
 from football_intelligence.replay.review_only_compatibility_counterfactual_review import (
     build_review_only_compatibility_counterfactual_stage,
 )
-from football_intelligence.replay.blind_target_choice_review import build_blind_target_choice_review_stage
+from football_intelligence.replay.blind_target_choice_review import (
+    build_blind_target_choice_review_stage,
+    build_server_sealed_unique_target_choice_review_stage,
+)
 from football_intelligence.replay.portable_pipeline import (
     backup_confirmation_status,
     build_context_from_cli,
@@ -1723,12 +1726,25 @@ def counterfactual_review_build_blind_target_choice_review(
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
+@counterfactual_review_app.command("build-server-sealed-unique-target-choice-review")
+def counterfactual_review_build_server_sealed_unique_target_choice_review(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    result = build_server_sealed_unique_target_choice_review_stage(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
 @review_chassis_app.command("serve")
 def review_chassis_serve(
     manifest: Path = typer.Option(..., "--manifest", exists=True, readable=True),
     ui_config: Path = typer.Option(..., "--ui-config", exists=True, readable=True),
     evidence_root: Path = typer.Option(..., "--evidence-root", exists=True, file_okay=False, dir_okay=True),
     decisions_root: Path = typer.Option(..., "--decisions-root", file_okay=False, dir_okay=True),
+    sealed_mapping: Path | None = typer.Option(None, "--sealed-mapping", exists=True, readable=True, dir_okay=False),
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8776, "--port"),
     reviewer_session_id: str | None = typer.Option(None, "--reviewer-session-id"),
@@ -1740,6 +1756,7 @@ def review_chassis_serve(
             ui_config_path=ui_config.resolve(),
             evidence_root=evidence_root.resolve(),
             decisions_root=decisions_root.resolve(),
+            sealed_mapping_path=sealed_mapping.resolve() if sealed_mapping is not None else None,
             host=host,
             port=port,
             reviewer_session_id=reviewer_session_id,

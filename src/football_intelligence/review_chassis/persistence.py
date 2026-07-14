@@ -92,6 +92,7 @@ class GenericReviewPersistence:
             "decisions": {},
             "notes": {},
             "reveal_state": {},
+            "server_reveal_payloads": {},
             "last_viewed_case_id": None,
             "elapsed_active_seconds": 0,
             "completed": False,
@@ -271,6 +272,8 @@ class GenericReviewPersistence:
         asset_id: str | None = None,
         reveal_group_id: str | None = None,
         input_source: str = "click",
+        require_decision: bool = False,
+        reveal_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         cases = self.case_map()
         if case_id not in cases:
@@ -280,7 +283,17 @@ class GenericReviewPersistence:
         reveal_key = reveal_group_id or asset_id
         if not reveal_key:
             raise ValueError("reveal requires an asset_id or reveal_group_id")
+        case = cases[case_id]
+        asset_requires_decision = any(
+            asset.reveal_requires_existing_decision
+            for asset in case.evidence_assets
+            if asset.asset_id == asset_id or asset.reveal_group_id == reveal_group_id
+        )
+        if (require_decision or asset_requires_decision) and decision is None:
+            raise ValueError("reveal is blocked until a decision is saved")
         state.setdefault("reveal_state", {}).setdefault(case_id, {})[reveal_key] = True
+        if reveal_payload is not None:
+            state.setdefault("server_reveal_payloads", {}).setdefault(case_id, {})[reveal_key] = reveal_payload
         event = self._event(
             event_type="reveal",
             case_id=case_id,
@@ -295,6 +308,7 @@ class GenericReviewPersistence:
                 "reveal_group_id": reveal_group_id,
                 "decision_exists_at_reveal": decision is not None,
                 "decision_value_at_reveal": decision,
+                "server_reveal_payload_hash": stable_hash(reveal_payload) if reveal_payload is not None else None,
             },
         )
         return self._persist(state, event)
