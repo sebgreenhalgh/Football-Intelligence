@@ -193,6 +193,9 @@ class ReviewUIConfig(BaseModel):
     layout: str = "review"
     comparison_panels: list[dict[str, Any]] = Field(default_factory=list)
     decision_to_output_mapping: dict[str, Any] = Field(default_factory=dict)
+    spatial_annotation_enabled: bool = False
+    spatial_annotation_mode: str = "none"
+    spatial_annotation_schema: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("decisions")
     @classmethod

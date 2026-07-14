@@ -202,6 +202,73 @@ function renderMetadata(caseData) {
   }, null, 2) : "Hidden until a decision is saved or reveal is recorded.";
 }
 
+function parseAnnotationNote() {
+  try {
+    const parsed = JSON.parse($("note").value || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function annotationValue(key) {
+  const parsed = parseAnnotationNote();
+  return parsed?.spatial_annotation?.[key] ?? "";
+}
+
+function renderSpatialAnnotation(caseData) {
+  const panel = $("annotationPanel");
+  if (!uiConfig.spatial_annotation_enabled) {
+    panel.classList.add("hidden");
+    panel.innerHTML = "";
+    return;
+  }
+  const schema = uiConfig.spatial_annotation_schema || {};
+  const sizeCategories = schema.bbox_size_categories || ["small", "medium", "large", "uncertain"];
+  const confidenceValues = schema.confidence_values || ["high", "medium", "low", "uncertain"];
+  panel.classList.remove("hidden");
+  panel.innerHTML = `
+    <h3>${schema.title || "Spatial annotation"}</h3>
+    <div class="annotationGrid">
+      <label>bbox x1<input data-annotation-field="bbox_x1" type="number" step="0.1" value="${annotationValue("bbox_x1")}"></label>
+      <label>bbox y1<input data-annotation-field="bbox_y1" type="number" step="0.1" value="${annotationValue("bbox_y1")}"></label>
+      <label>bbox x2<input data-annotation-field="bbox_x2" type="number" step="0.1" value="${annotationValue("bbox_x2")}"></label>
+      <label>bbox y2<input data-annotation-field="bbox_y2" type="number" step="0.1" value="${annotationValue("bbox_y2")}"></label>
+      <label>footpoint x<input data-annotation-field="footpoint_x" type="number" step="0.1" value="${annotationValue("footpoint_x")}"></label>
+      <label>footpoint y<input data-annotation-field="footpoint_y" type="number" step="0.1" value="${annotationValue("footpoint_y")}"></label>
+      <label>existing candidate #<input data-annotation-field="existing_candidate_number" type="number" step="1" min="1" value="${annotationValue("existing_candidate_number")}"></label>
+      <label>confidence<select data-annotation-field="confidence">
+        ${confidenceValues.map((value) => `<option value="${value}"${annotationValue("confidence") === value ? " selected" : ""}>${value}</option>`).join("")}
+      </select></label>
+      <label>bbox size<select data-annotation-field="bbox_size_category">
+        ${sizeCategories.map((value) => `<option value="${value}"${annotationValue("bbox_size_category") === value ? " selected" : ""}>${value}</option>`).join("")}
+      </select></label>
+      <label>partial or occluded<select data-annotation-field="partial_or_occluded">
+        ${["", "false", "true"].map((value) => `<option value="${value}"${String(annotationValue("partial_or_occluded")) === value ? " selected" : ""}>${value || "unspecified"}</option>`).join("")}
+      </select></label>
+    </div>
+    <div class="annotationActions">
+      <button type="button" data-annotation-apply="true">Write annotation JSON to notes</button>
+    </div>`;
+}
+
+function applySpatialAnnotation() {
+  const caseData = activeCase();
+  const annotation = {
+    schema_version: "football_intelligence.review_chassis.spatial_annotation.v1",
+    case_id: caseData.case_id,
+    mode: uiConfig.spatial_annotation_mode || "spatial_annotation",
+  };
+  document.querySelectorAll("[data-annotation-field]").forEach((input) => {
+    const key = input.dataset.annotationField;
+    if (!key) return;
+    const value = input.value;
+    if (value !== "") annotation[key] = value;
+  });
+  $("note").value = JSON.stringify({spatial_annotation: annotation}, null, 2);
+  saveNote();
+}
+
 function renderDecisions(caseData) {
   const current = decisions()[caseData.case_id];
   $("decisionButtons").innerHTML = uiConfig.decisions.map((option) => {
@@ -238,6 +305,7 @@ function render() {
   renderCaseList();
   renderDecisions(caseData);
   renderAssets(caseData);
+  renderSpatialAnnotation(caseData);
   renderMetadata(caseData);
 }
 
@@ -376,6 +444,7 @@ document.addEventListener("click", (event) => {
     const group = target.closest("[data-reveal-asset]")?.dataset.revealGroup;
     reveal(revealAsset, group);
   }
+  if (target.closest("[data-annotation-apply]")) applySpatialAnnotation();
 });
 
 let noteTimer = null;

@@ -111,6 +111,9 @@ from football_intelligence.replay.third_unseen_review_ingestion import (
 from football_intelligence.replay.third_unseen_review_correction import (
     build_m5_4i1_review_correction,
 )
+from football_intelligence.replay.followup_candidate_supply_diagnostic import (
+    build_m5_4j_candidate_supply_diagnostic,
+)
 from football_intelligence.replay.third_unseen_geometry_challenge import (
     build_m5_4h_third_unseen_geometry_challenge,
 )
@@ -1815,6 +1818,18 @@ def counterfactual_review_correct_third_unseen_review_audit(
     repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
 ) -> None:
     result = build_m5_4i1_review_correction(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-followup-candidate-supply-diagnostic")
+def counterfactual_review_build_followup_candidate_supply_diagnostic(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    result = build_m5_4j_candidate_supply_diagnostic(
         stage_root=stage_root.resolve(),
         repo_root=repo_root.resolve(),
     )

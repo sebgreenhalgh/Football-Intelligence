@@ -64,6 +64,7 @@ aside button {
 .question,
 .assetCard,
 #metadataPanel,
+#annotationPanel,
 #notesPanel,
 #revealPanel {
   background: #ffffff;
@@ -160,6 +161,35 @@ textarea {
   width: 100%;
   box-sizing: border-box;
   font-family: inherit;
+}
+
+.annotationGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.annotationGrid label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.92rem;
+}
+
+.annotationGrid input,
+.annotationGrid select {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #c8ced6;
+  border-radius: 5px;
+  padding: 7px;
+  font: inherit;
+}
+
+.annotationActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
 }
 
 .hidden {
