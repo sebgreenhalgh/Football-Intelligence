@@ -264,6 +264,41 @@ class GenericReviewPersistence:
         )
         return self._persist(state, event)
 
+    def record_reveal(
+        self,
+        *,
+        case_id: str,
+        asset_id: str | None = None,
+        reveal_group_id: str | None = None,
+        input_source: str = "click",
+    ) -> dict[str, Any]:
+        cases = self.case_map()
+        if case_id not in cases:
+            raise ValueError(f"unknown review case: {case_id}")
+        state = self.ensure_state()
+        decision = state.get("decisions", {}).get(case_id)
+        reveal_key = reveal_group_id or asset_id
+        if not reveal_key:
+            raise ValueError("reveal requires an asset_id or reveal_group_id")
+        state.setdefault("reveal_state", {}).setdefault(case_id, {})[reveal_key] = True
+        event = self._event(
+            event_type="reveal",
+            case_id=case_id,
+            prior_decision=decision,
+            new_decision=decision,
+            notes=state.get("notes", {}).get(case_id),
+            state=state,
+            input_source=input_source,
+            reveal_state=state["reveal_state"][case_id],
+            extra={
+                "asset_id": asset_id,
+                "reveal_group_id": reveal_group_id,
+                "decision_exists_at_reveal": decision is not None,
+                "decision_value_at_reveal": decision,
+            },
+        )
+        return self._persist(state, event)
+
     def undo(self) -> dict[str, Any]:
         state = self.ensure_state()
         events = [

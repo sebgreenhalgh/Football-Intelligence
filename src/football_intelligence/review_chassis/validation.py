@@ -28,6 +28,8 @@ def validate_review_chassis_package(
     mp4_assets = []
     gif_count = 0
     image_sequence_count = 0
+    hidden_asset_count = 0
+    visibility_policy_counts: dict[str, int] = {}
     for case in manifest.cases:
         if set(case.allowed_decisions) - {option.value for option in ui_config.decisions}:
             hash_mismatches.append(f"{case.case_id}:decision_not_in_ui_config")
@@ -37,6 +39,11 @@ def validate_review_chassis_package(
                 gif_count += 1
             if asset.asset_type == "image_sequence":
                 image_sequence_count += 1
+            visibility_policy_counts[asset.visibility_policy] = (
+                visibility_policy_counts.get(asset.visibility_policy, 0) + 1
+            )
+            if asset.visibility_policy != "always_visible":
+                hidden_asset_count += 1
             if asset.media_type.startswith("video/") or asset.relative_path.lower().endswith(".mp4"):
                 mp4_assets.append(f"{case.case_id}:{asset.relative_path}")
             if not path.exists() or not path.is_file():
@@ -74,6 +81,8 @@ def validate_review_chassis_package(
         "mp4_asset_count": len(mp4_assets),
         "gif_asset_count": gif_count,
         "image_sequence_asset_count": image_sequence_count,
+        "hidden_asset_count": hidden_asset_count,
+        "visibility_policy_counts": visibility_policy_counts,
         "video_element_present": video_element_present,
         "canonical_chassis_source_paths": [
             str(STATIC_ROOT / "index.html"),

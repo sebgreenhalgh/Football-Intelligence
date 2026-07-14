@@ -100,6 +100,30 @@ aside button {
   gap: 10px;
 }
 
+.comparisonGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.comparisonPanel {
+  background: #ffffff;
+  border: 1px solid #d9dee2;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.comparisonPanel .assetCard {
+  border: 0;
+  padding: 0;
+  margin-bottom: 10px;
+}
+
+.hiddenAssetNotice {
+  border-style: dashed;
+}
+
 .evidenceImage {
   max-width: 100%;
   height: auto;

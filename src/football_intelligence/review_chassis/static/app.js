@@ -45,7 +45,7 @@ function assetSort(a, b) {
 
 function groupedSequenceAssets(caseData) {
   const groups = {};
-  for (const asset of caseData.evidence_assets.filter((item) => item.asset_type === "image_sequence")) {
+  for (const asset of caseData.evidence_assets.filter((item) => item.asset_type === "image_sequence" && assetVisible(caseData, item))) {
     const key = asset.group_id || "default";
     groups[key] = groups[key] || [];
     groups[key].push(asset);
@@ -54,6 +54,51 @@ function groupedSequenceAssets(caseData) {
     assets.sort((a, b) => (a.frame_sequences[0] || 0) - (b.frame_sequences[0] || 0));
   }
   return groups;
+}
+
+function currentDecision(caseData) {
+  return decisions()[caseData.case_id];
+}
+
+function revealMap(caseData) {
+  return state?.reveal_state?.[caseData.case_id] || {};
+}
+
+function revealKey(asset) {
+  return asset.reveal_group_id || asset.asset_id;
+}
+
+function assetVisible(caseData, asset) {
+  const policy = asset.visibility_policy || "always_visible";
+  const decision = currentDecision(caseData);
+  const revealed = revealMap(caseData)[revealKey(asset)] === true;
+  if (state?.completed === true && asset.visible_after_completion === true) return true;
+  if (policy === "always_visible") return true;
+  if (policy === "hidden_always_reviewer") return false;
+  if (policy === "completion_only") return state?.completed === true;
+  if (policy === "hidden_until_decision") {
+    if (!decision) return false;
+    const values = asset.visible_after_decision_values || [];
+    return values.length === 0 || values.includes(decision);
+  }
+  if (policy === "hidden_until_explicit_reveal") return revealed;
+  return false;
+}
+
+function revealControl(caseData, asset) {
+  const policy = asset.visibility_policy || "always_visible";
+  if (!["hidden_until_decision", "hidden_until_explicit_reveal"].includes(policy)) return "";
+  if (assetVisible(caseData, asset)) return "";
+  const decision = currentDecision(caseData);
+  const requiresDecision = asset.reveal_requires_existing_decision || policy === "hidden_until_decision";
+  const disabled = requiresDecision && !decision ? " disabled" : "";
+  const label = asset.reveal_button_label || (requiresDecision ? "Available after decision" : "Reveal hidden evidence");
+  return `<article class="assetCard hiddenAssetNotice">
+    <h3>Hidden evidence</h3>
+    <button type="button" data-reveal-asset="${asset.asset_id}" data-reveal-group="${asset.reveal_group_id || ""}"${disabled}>
+      ${label}
+    </button>
+  </article>`;
 }
 
 function renderImageStepper(caseData, assets, groupId) {
@@ -74,6 +119,7 @@ function renderImageStepper(caseData, assets, groupId) {
 }
 
 function renderAsset(caseData, asset) {
+  if (!assetVisible(caseData, asset)) return revealControl(caseData, asset);
   const url = evidenceUrl(caseData.case_id, asset.relative_path);
   if (asset.asset_type === "animated_gif") {
     return `
@@ -107,8 +153,33 @@ function renderAssets(caseData) {
       <h3>${assets[0]?.label || "Frame sequence"}</h3>
       ${renderImageStepper(caseData, assets, groupId)}
     </article>`);
-  const normalAssets = caseData.evidence_assets.slice().sort(assetSort).map((asset) => renderAsset(caseData, asset));
-  $("assetPanels").innerHTML = [...normalAssets, ...sequenceCards].join("");
+  const renderedGroupIds = new Set(Object.keys(sequenceGroups));
+  const panels = uiConfig.layout === "multi_candidate_comparison" ? (uiConfig.comparison_panels || []) : [];
+  const panelGroupIds = new Set(panels.map((panel) => panel.asset_group_id));
+  const comparisonPanels = panels.map((panel) => {
+    const assets = caseData.evidence_assets
+      .filter((asset) => asset.group_id === panel.asset_group_id && asset.asset_type !== "image_sequence")
+      .sort(assetSort)
+      .map((asset) => renderAsset(caseData, asset))
+      .join("");
+    return `<article class="comparisonPanel">
+      <h3>${panel.label || panel.asset_group_id}</h3>
+      ${assets}
+    </article>`;
+  });
+  const normalAssets = caseData.evidence_assets
+    .filter((asset) => asset.asset_type !== "image_sequence")
+    .filter((asset) => !panelGroupIds.has(asset.group_id))
+    .sort(assetSort)
+    .map((asset) => renderAsset(caseData, asset));
+  const hiddenSequenceControls = caseData.evidence_assets
+    .filter((asset) => asset.asset_type === "image_sequence" && !assetVisible(caseData, asset))
+    .filter((asset) => !renderedGroupIds.has(asset.group_id || "default"))
+    .map((asset) => revealControl(caseData, asset));
+  const comparisonMarkup = comparisonPanels.length
+    ? [`<section class="comparisonGrid">${comparisonPanels.join("")}</section>`]
+    : [];
+  $("assetPanels").innerHTML = [...comparisonMarkup, ...normalAssets, ...sequenceCards, ...hiddenSequenceControls].join("");
 }
 
 function renderMetadata(caseData) {
@@ -118,10 +189,11 @@ function renderMetadata(caseData) {
     return `<tr><th>${field}</th><td>${String(value)}</td></tr>`;
   });
   $("metadataPanel").innerHTML = rows.length ? `<table>${rows.join("")}</table>` : "";
-  $("hiddenMetadata").textContent = JSON.stringify({
+  const canShowHidden = currentDecision(caseData) && revealMap(caseData).__case_metadata__ === true;
+  $("hiddenMetadata").textContent = canShowHidden ? JSON.stringify({
     hidden_metadata: caseData.hidden_metadata || {},
     reveal_metadata: caseData.reveal_metadata || {},
-  }, null, 2);
+  }, null, 2) : "Hidden until a decision is saved or reveal is recorded.";
 }
 
 function renderDecisions(caseData) {
@@ -195,6 +267,21 @@ async function saveNote() {
     body: JSON.stringify({case_id: caseData.case_id, note: $("note").value}),
   });
   setStatus("Note saved");
+}
+
+async function reveal(assetId, revealGroupId) {
+  const caseData = activeCase();
+  state = await api("/api/review/reveal", {
+    method: "POST",
+    body: JSON.stringify({
+      case_id: caseData.case_id,
+      asset_id: assetId || null,
+      reveal_group_id: revealGroupId || assetId || "__case_metadata__",
+      input_source: "click",
+    }),
+  });
+  setStatus("Reveal recorded");
+  render();
 }
 
 async function undo() {
@@ -278,6 +365,11 @@ document.addEventListener("click", (event) => {
     const base = image.src.split("?")[0];
     image.src = `${base}?restart=${Date.now()}`;
   }
+  const revealAsset = target.closest("[data-reveal-asset]")?.dataset.revealAsset;
+  if (revealAsset) {
+    const group = target.closest("[data-reveal-asset]")?.dataset.revealGroup;
+    reveal(revealAsset, group);
+  }
 });
 
 let noteTimer = null;
@@ -290,6 +382,10 @@ $("nextBtn").onclick = () => go(1);
 $("undoBtn").onclick = undo;
 $("completeBtn").onclick = completeReview;
 $("exportBtn").onclick = exportReview;
+$("revealPanel").addEventListener("toggle", () => {
+  const caseData = activeCase();
+  if ($("revealPanel").open && caseData && currentDecision(caseData)) reveal(null, "__case_metadata__");
+});
 
 setInterval(() => {
   elapsedSeconds += Math.floor((Date.now() - timerStarted) / 1000);

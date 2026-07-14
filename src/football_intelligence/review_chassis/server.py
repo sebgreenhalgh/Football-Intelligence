@@ -133,6 +133,16 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                         elapsed_active_seconds=body.get("elapsed_active_seconds"),
                     ),
                 )
+            elif path == "/api/review/reveal":
+                _json_response(
+                    self,
+                    persistence.record_reveal(
+                        case_id=str(body["case_id"]),
+                        asset_id=body.get("asset_id"),
+                        reveal_group_id=body.get("reveal_group_id"),
+                        input_source=str(body.get("input_source", "click")),
+                    ),
+                )
             elif path == "/api/review/undo":
                 _json_response(self, persistence.undo())
             elif path == "/api/review/complete":

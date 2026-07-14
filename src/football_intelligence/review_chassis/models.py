@@ -6,8 +6,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from football_intelligence.review.schemas import VISUAL_ONLY_WARNING, find_forbidden_review_keys, safety_payload
 
-GENERIC_MANIFEST_SCHEMA_VERSION = "football_intelligence.review_manifest.v1"
-GENERIC_UI_CONFIG_SCHEMA_VERSION = "football_intelligence.review_ui_config.v1"
+GENERIC_MANIFEST_SCHEMA_VERSION_V1 = "football_intelligence.review_manifest.v1"
+GENERIC_UI_CONFIG_SCHEMA_VERSION_V1 = "football_intelligence.review_ui_config.v1"
+GENERIC_MANIFEST_SCHEMA_VERSION = "football_intelligence.review_manifest.v2"
+GENERIC_UI_CONFIG_SCHEMA_VERSION = "football_intelligence.review_ui_config.v2"
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {GENERIC_MANIFEST_SCHEMA_VERSION_V1, GENERIC_MANIFEST_SCHEMA_VERSION}
+SUPPORTED_UI_CONFIG_SCHEMA_VERSIONS = {GENERIC_UI_CONFIG_SCHEMA_VERSION_V1, GENERIC_UI_CONFIG_SCHEMA_VERSION}
 
 AssetType = Literal[
     "image",
@@ -19,6 +23,14 @@ AssetType = Literal[
     "overlay",
     "comparison_panel",
     "metadata_json",
+]
+
+VisibilityPolicy = Literal[
+    "always_visible",
+    "hidden_until_decision",
+    "hidden_until_explicit_reveal",
+    "hidden_always_reviewer",
+    "completion_only",
 ]
 
 
@@ -43,6 +55,13 @@ class GenericEvidenceAsset(BaseModel):
     frame_sequences: list[int] = Field(default_factory=list)
     group_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    visibility_policy: VisibilityPolicy = "always_visible"
+    reveal_group_id: str | None = None
+    reveal_button_label: str | None = None
+    reveal_requires_existing_decision: bool = False
+    record_reveal_event: bool = True
+    visible_after_decision_values: list[str] = Field(default_factory=list)
+    visible_after_completion: bool = False
 
     @model_validator(mode="after")
     def validate_no_video(self) -> GenericEvidenceAsset:
@@ -116,7 +135,7 @@ class GenericReviewManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_manifest_safety(self) -> GenericReviewManifest:
-        if self.schema_version != GENERIC_MANIFEST_SCHEMA_VERSION:
+        if self.schema_version not in SUPPORTED_MANIFEST_SCHEMA_VERSIONS:
             raise ValueError("unsupported generic review manifest schema")
         if self.visual_only_warning != VISUAL_ONLY_WARNING:
             raise ValueError("generic review manifest must remain VISUAL_ONLY_NOT_METRIC")
@@ -172,6 +191,8 @@ class ReviewUIConfig(BaseModel):
     show_gif_speed_variants_only_when_present: bool = True
     theme: str = "default"
     layout: str = "review"
+    comparison_panels: list[dict[str, Any]] = Field(default_factory=list)
+    decision_to_output_mapping: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("decisions")
     @classmethod
@@ -188,7 +209,7 @@ class ReviewUIConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_config(self) -> ReviewUIConfig:
-        if self.schema_version != GENERIC_UI_CONFIG_SCHEMA_VERSION:
+        if self.schema_version not in SUPPORTED_UI_CONFIG_SCHEMA_VERSIONS:
             raise ValueError("unsupported generic review UI config schema")
         if self.visual_warning != VISUAL_ONLY_WARNING:
             raise ValueError("generic UI config must remain VISUAL_ONLY_NOT_METRIC")

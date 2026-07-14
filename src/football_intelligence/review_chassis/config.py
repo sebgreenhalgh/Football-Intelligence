@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.review_chassis.hashing import stable_hash
-from football_intelligence.review_chassis.models import ReviewUIConfig
+from football_intelligence.review_chassis.models import GENERIC_UI_CONFIG_SCHEMA_VERSION_V1, ReviewUIConfig
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -20,4 +20,8 @@ def load_ui_config(path: Path) -> ReviewUIConfig:
 
 
 def ui_config_hash(ui_config: ReviewUIConfig) -> str:
-    return stable_hash(ui_config.model_dump(mode="json"))
+    payload = ui_config.model_dump(mode="json")
+    if payload.get("schema_version") == GENERIC_UI_CONFIG_SCHEMA_VERSION_V1:
+        payload.pop("comparison_panels", None)
+        payload.pop("decision_to_output_mapping", None)
+    return stable_hash(payload)
