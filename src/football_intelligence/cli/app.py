@@ -114,6 +114,7 @@ from football_intelligence.replay.third_unseen_review_correction import (
 from football_intelligence.replay.followup_candidate_supply_diagnostic import (
     build_m5_4j_candidate_supply_diagnostic,
 )
+from football_intelligence.replay.occlusion_pro_context_pack import build_occlusion_pro_context_pack
 from football_intelligence.replay.third_unseen_geometry_challenge import (
     build_m5_4h_third_unseen_geometry_challenge,
 )
@@ -1832,6 +1833,20 @@ def counterfactual_review_build_followup_candidate_supply_diagnostic(
     result = build_m5_4j_candidate_supply_diagnostic(
         stage_root=stage_root.resolve(),
         repo_root=repo_root.resolve(),
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-occlusion-pro-context-pack")
+def counterfactual_review_build_occlusion_pro_context_pack(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    output_root: Path | None = typer.Option(None, "--output-root", file_okay=False, dir_okay=True),
+) -> None:
+    result = build_occlusion_pro_context_pack(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+        output_root=output_root.resolve() if output_root is not None else None,
     )
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
