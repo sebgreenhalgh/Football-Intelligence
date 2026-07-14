@@ -105,6 +105,9 @@ from football_intelligence.replay.server_sealed_target_choice_ingestion import (
 from football_intelligence.replay.cadence_matched_third_unseen_challenge import (
     build_m5_4h1_cadence_matched_third_unseen_challenge,
 )
+from football_intelligence.replay.third_unseen_review_ingestion import (
+    build_m5_4i_third_unseen_review_ingestion,
+)
 from football_intelligence.replay.third_unseen_geometry_challenge import (
     build_m5_4h_third_unseen_geometry_challenge,
 )
@@ -1785,6 +1788,20 @@ def counterfactual_review_build_cadence_matched_third_unseen_challenge_review(
         stage_root=stage_root.resolve(),
         repo_root=repo_root.resolve(),
         current_commit=commit,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("ingest-cadence-matched-third-unseen-review")
+def counterfactual_review_ingest_cadence_matched_third_unseen_review(
+    stage_root: Path = typer.Option(..., "--stage-root", exists=True, file_okay=False, dir_okay=True),
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    review_pack: bool = typer.Option(False, "--review-pack", help="Create the bounded 20-file review pack."),
+) -> None:
+    result = build_m5_4i_third_unseen_review_ingestion(
+        stage_root=stage_root.resolve(),
+        repo_root=repo_root.resolve(),
+        write_review_pack=review_pack,
     )
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
