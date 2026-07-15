@@ -652,7 +652,7 @@ def _write_pack(
         "- `src/football_intelligence/review_chassis/static/app.js` filters buttons by the active case decision set.\n"
         "- `src/football_intelligence/cli/app.py` exposes build and validation commands.\n",
     )
-    diff = _git(Path(source_audit["repository_root"]), "diff", "HEAD", "--", "src", "tests")
+    diff = _git(Path(source_audit["repository_root"]), "diff", commit, "--", "src", "tests")
     # Keep the required diff useful while excluding historical answer labels and IDs.
     diff = (
         diff.replace("PATH_A_CONTINUES_SOURCE", "[OLD_LABEL_A]")
@@ -873,7 +873,17 @@ def build_m5_5c_counterbalance_repair(
             "src/football_intelligence/cli/app.py",
         ],
     }
-    pack = _write_pack(workspace, package, manifest, balance, browser, validation, source_audit, diagnosis, commit)
+    pack = _write_pack(
+        workspace,
+        package,
+        manifest,
+        balance,
+        browser,
+        validation,
+        source_audit,
+        diagnosis,
+        contract["minimum_authorized_baseline_commit"],
+    )
     result = {
         "schema_version": "football_intelligence.m5_5c.counterbalance_repair.result.v1",
         "stage_id": STAGE_ID,
