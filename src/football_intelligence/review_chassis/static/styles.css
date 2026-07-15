@@ -200,6 +200,24 @@ textarea {
   margin-bottom: 10px;
 }
 
+.frameBindingStepper,
+.layerControls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.layerControls {
+  padding: 8px;
+  border: 1px solid #d4dae1;
+  background: #f7f9fb;
+  font-size: 0.82rem;
+}
+
+.layerControls label { display: inline-flex; align-items: center; gap: 4px; }
+
 .spatialToolbar button {
   min-height: 36px;
 }
@@ -284,6 +302,15 @@ textarea {
   stroke-width: 3;
   vector-effect: non-scaling-stroke;
 }
+
+.layerBox rect { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.layerBox text { fill: #ffffff; paint-order: stroke; stroke: #15171a; stroke-width: 3; font: 13px Segoe UI, sans-serif; }
+.layer-CANONICAL_DETECTIONS rect { stroke: #1e90ff; }
+.layer-RECOVERY_DETECTIONS rect { stroke: #c084fc; stroke-dasharray: 6 4; }
+.layer-INCOMING_OBSERVED_SEGMENTS rect { stroke: #23b978; }
+.layer-INCOMING_PREDICTED_STATES rect { stroke: #ffb000; stroke-dasharray: 5 4; }
+.layer-MERGED_OBSERVATION_CANDIDATES rect { stroke: #ff4d6d; }
+.layer-OUTGOING_SEGMENT_HYPOTHESES rect { stroke: #00c2d7; stroke-dasharray: 4 3; }
 
 .candidateBox text {
   fill: #ffffff;

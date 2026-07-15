@@ -46,7 +46,7 @@ function assetSort(a, b) {
 
 function groupedSequenceAssets(caseData) {
   const groups = {};
-  for (const asset of caseData.evidence_assets.filter((item) => item.asset_type === "image_sequence" && assetVisible(caseData, item))) {
+  for (const asset of caseData.evidence_assets.filter((item) => item.asset_type === "image_sequence" && !item.metadata?.annotation_base && assetVisible(caseData, item))) {
     const key = asset.group_id || "default";
     groups[key] = groups[key] || [];
     groups[key].push(asset);
@@ -55,6 +55,25 @@ function groupedSequenceAssets(caseData) {
     assets.sort((a, b) => (a.frame_sequences[0] || 0) - (b.frame_sequences[0] || 0));
   }
   return groups;
+}
+
+function annotationFrameAssets(caseData) {
+  return caseData.evidence_assets
+    .filter((item) => item.asset_type === "image_sequence" && item.metadata?.annotation_base === true && assetVisible(caseData, item))
+    .sort((a, b) => (a.frame_sequences[0] || 0) - (b.frame_sequences[0] || 0));
+}
+
+function currentAnnotationAsset(caseData) {
+  const assets = annotationFrameAssets(caseData);
+  if (!assets.length) return null;
+  const key = `${caseData.case_id}:annotation_frames`;
+  frameStepper[key] = Math.max(0, Math.min(frameStepper[key] || 0, assets.length - 1));
+  return assets[frameStepper[key]];
+}
+
+function currentAnnotationCandidates(caseData, asset) {
+  const byFrame = caseData.visible_metadata?.safe_anonymous_candidates_by_frame || {};
+  return byFrame[String(asset?.frame_sequences?.[0])] || caseData.visible_metadata?.safe_anonymous_candidates || [];
 }
 
 function currentDecision(caseData) {
@@ -171,11 +190,11 @@ function renderAssets(caseData) {
   const normalAssets = caseData.evidence_assets
     .filter((asset) => asset.asset_type !== "image_sequence")
     .filter((asset) => !panelGroupIds.has(asset.group_id))
-    .filter((asset) => !(uiConfig.spatial_annotation_enabled && asset.metadata?.primary_annotation_image === true))
+    .filter((asset) => !(uiConfig.spatial_annotation_enabled && (asset.metadata?.primary_annotation_image === true || asset.metadata?.annotation_base === true)))
     .sort(assetSort)
     .map((asset) => renderAsset(caseData, asset));
   const hiddenSequenceControls = caseData.evidence_assets
-    .filter((asset) => asset.asset_type === "image_sequence" && !assetVisible(caseData, asset))
+    .filter((asset) => asset.asset_type === "image_sequence" && !asset.metadata?.annotation_base && !assetVisible(caseData, asset))
     .filter((asset) => !renderedGroupIds.has(asset.group_id || "default"))
     .map((asset) => revealControl(caseData, asset));
   const comparisonMarkup = comparisonPanels.length
@@ -228,7 +247,8 @@ function renderIntervalControls(caseData) {
   if (!root) return;
   const values = intervalAnnotationValues();
   const frames = caseData.visible_metadata?.frame_sequences || [];
-  const candidates = caseData.visible_metadata?.safe_anonymous_candidates || [];
+  const asset = currentAnnotationAsset(caseData);
+  const candidates = currentAnnotationCandidates(caseData, asset);
   const optionList = (items, selected, emptyLabel) => [
     `<option value="">${emptyLabel}</option>`,
     ...items.map((item) => `<option value="${item}"${String(selected) === String(item) ? " selected" : ""}>${item}</option>`),
@@ -278,7 +298,8 @@ function renderSpatialAnnotation(caseData) {
   const interactive = schema.interactive_canvas_enabled === true
     || String(uiConfig.spatial_annotation_mode || "").includes("interactive");
   if (interactive && window.ReviewAnnotationCanvas) {
-    const asset = caseData.evidence_assets.find((item) => item.metadata?.primary_annotation_image === true)
+    const asset = currentAnnotationAsset(caseData)
+      || caseData.evidence_assets.find((item) => item.metadata?.primary_annotation_image === true)
       || caseData.evidence_assets.find((item) => item.asset_id === "target_full_resolution")
       || caseData.evidence_assets.find((item) => item.metadata?.full_resolution === true);
     if (!asset) {
@@ -291,13 +312,17 @@ function renderSpatialAnnotation(caseData) {
       <h3>${schema.title || "Interactive spatial annotation"}</h3>
       <div id="interactiveAnnotationRoot"></div>
       <div id="intervalAnnotationControls"></div>`;
+    const frameAssets = annotationFrameAssets(caseData);
     activeAnnotationEditor = new window.ReviewAnnotationCanvas.SpatialAnnotationCanvas(
       $("interactiveAnnotationRoot"),
       {
         caseData,
         asset,
         imageUrl: evidenceUrl(caseData.case_id, asset.relative_path),
-        candidates: caseData.visible_metadata?.safe_anonymous_candidates || caseData.competing_candidates || [],
+        candidates: currentAnnotationCandidates(caseData, asset),
+        layerRows: caseData.visible_metadata?.geometry_layers || [],
+        frameAssets,
+        selectedFrameIndex: frameStepper[`${caseData.case_id}:annotation_frames`] || 0,
         noteElement: $("note"),
         onChange: () => {},
       },
@@ -535,6 +560,18 @@ document.addEventListener("click", (event) => {
   }
   if (target.closest("[data-annotation-apply]")) applySpatialAnnotation();
   if (target.closest("[data-interval-apply]")) applyIntervalAnnotation();
+  const canvasPrev = target.closest("[data-canvas-prev]")?.dataset.canvasPrev;
+  if (canvasPrev) {
+    frameStepper[canvasPrev] = Math.max(0, (frameStepper[canvasPrev] || 0) - 1);
+    render();
+  }
+  const canvasNext = target.closest("[data-canvas-next]")?.dataset.canvasNext;
+  if (canvasNext) {
+    const caseData = manifest.cases.find((item) => item.case_id === activeCase().case_id);
+    const count = annotationFrameAssets(caseData).length || 1;
+    frameStepper[canvasNext] = Math.min(count - 1, (frameStepper[canvasNext] || 0) + 1);
+    render();
+  }
 });
 
 let noteTimer = null;

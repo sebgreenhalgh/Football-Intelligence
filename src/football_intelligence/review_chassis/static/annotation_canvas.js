@@ -166,6 +166,21 @@
       this.caseData = options.caseData;
       this.asset = options.asset;
       this.candidates = options.candidates || [];
+      this.layerRows = options.layerRows || [];
+      this.frameAssets = options.frameAssets || [];
+      this.selectedFrameIndex = Number(options.selectedFrameIndex || 0);
+      this.displayFrameSequence = Number(this.asset?.frame_sequences?.[0] ?? this.caseData.target_frame_sequence ?? -1);
+      this.displayAssetSha256 = this.asset?.sha256 || "";
+      this.layerVisibility = {
+        RAW_FRAME: true,
+        CANONICAL_DETECTIONS: true,
+        RECOVERY_DETECTIONS: false,
+        INCOMING_OBSERVED_SEGMENTS: true,
+        INCOMING_PREDICTED_STATES: false,
+        MERGED_OBSERVATION_CANDIDATES: true,
+        OUTGOING_SEGMENT_HYPOTHESES: true,
+        REVIEWER_ANNOTATIONS: true,
+      };
       this.noteElement = options.noteElement;
       this.onChange = options.onChange;
       this.transform = {scale: 1, translateX: 0, translateY: 0};
@@ -248,6 +263,16 @@
           <button type="button" data-undo="true">Undo annotation</button>
           <button type="button" data-clear="true">Clear annotations</button>
         </div>
+        <div class="frameBindingStepper" aria-label="Frame-bound annotation stepper">
+          <button type="button" data-canvas-prev="${this.caseData.case_id}:annotation_frames">Previous raw frame</button>
+          <span data-frame-label="true">Frame ${this.displayFrameSequence}</span>
+          <button type="button" data-canvas-next="${this.caseData.case_id}:annotation_frames">Next raw frame</button>
+        </div>
+        <div class="layerControls" aria-label="Evidence layers">
+          <button type="button" data-clean-frame="true">Clean frame</button>
+          ${Object.keys(this.layerVisibility).filter((layer) => layer !== "RAW_FRAME" && layer !== "REVIEWER_ANNOTATIONS").map((layer) => `
+            <label><input type="checkbox" data-layer-toggle="${layer}"${this.layerVisibility[layer] ? " checked" : ""}> ${layer.replaceAll("_", " ")}</label>`).join("")}
+        </div>
         <div class="largeImageViewport" tabindex="0" aria-label="Original-image annotation viewport">
           <div class="imageLayer">
             <img alt="Full-resolution target frame" draggable="false">
@@ -312,6 +337,15 @@
       this.root.querySelector("[data-fullscreen]").addEventListener("click", () => this.toggleFullscreen());
       this.root.querySelector("[data-undo]").addEventListener("click", () => this.undo());
       this.root.querySelector("[data-clear]").addEventListener("click", () => this.clear());
+      this.root.querySelector("[data-clean-frame]").addEventListener("click", () => {
+        for (const layer of Object.keys(this.layerVisibility)) this.layerVisibility[layer] = layer === "RAW_FRAME" || layer === "REVIEWER_ANNOTATIONS";
+        this.root.querySelectorAll("[data-layer-toggle]").forEach((input) => { input.checked = this.layerVisibility[input.dataset.layerToggle]; });
+        this.drawOverlay();
+      });
+      this.root.querySelectorAll("[data-layer-toggle]").forEach((input) => input.addEventListener("change", () => {
+        this.layerVisibility[input.dataset.layerToggle] = input.checked;
+        this.drawOverlay();
+      }));
       this.viewport.addEventListener("pointerdown", (event) => this.pointerDown(event));
       this.viewport.addEventListener("pointermove", (event) => this.pointerMove(event));
       this.viewport.addEventListener("pointerup", (event) => this.pointerUp(event));
@@ -644,7 +678,7 @@
     }
 
     selectCandidate(point) {
-      const hits = hitCandidates(this.candidates, point, this.transform.scale);
+      const hits = hitCandidates(this.candidates.filter((candidate) => this.isBoundToDisplayedFrame(candidate)), point, this.transform.scale);
       this.overlapPanel.classList.toggle("hidden", hits.length <= 1);
       if (!hits.length) return;
       if (hits.length > 1) {
@@ -658,6 +692,12 @@
         });
       }
       this.applyCandidate(hits[0], hits);
+    }
+
+    isBoundToDisplayedFrame(candidate) {
+      return Number(candidate.frame_sequence) === this.displayFrameSequence
+        && String(candidate.image_sha256 || "") === String(this.displayAssetSha256)
+        && String(candidate.coordinate_space || "") === "ORIGINAL_PANORAMA_PIXELS";
     }
 
     applyCandidate(candidate, hits) {
@@ -745,16 +785,27 @@
 
     drawOverlay() {
       if (!this.svg) return;
-      const candidateMarkup = this.candidates.map((candidate) => {
+      const rows = this.layerRows.filter((row) => this.layerVisibility[row.layer] !== false
+        && Number(row.frame_sequence) === this.displayFrameSequence
+        && String(row.image_sha256 || "") === String(this.displayAssetSha256)
+        && String(row.coordinate_space || "") === "ORIGINAL_PANORAMA_PIXELS");
+      const layerMarkup = rows.map((row) => {
+        const box = row.bbox || {};
+        const label = row.label || row.layer || "geometry";
+        const selected = Number(row.anonymous_candidate_number) === Number(this.annotation.existing_candidate_number);
+        return `<g class="layerBox layer-${row.layer || "unknown"}${selected ? " selectedCandidateBox" : ""}"><rect x="${box.x1}" y="${box.y1}" width="${box.x2 - box.x1}" height="${box.y2 - box.y1}"></rect><text x="${box.x1}" y="${Math.max(12, box.y1 - 3)}">${label}</text></g>`;
+      }).join("");
+      const hasCanonicalRows = rows.some((row) => row.layer === "CANONICAL_DETECTIONS");
+      const candidateMarkup = this.layerVisibility.CANONICAL_DETECTIONS && !hasCanonicalRows ? this.candidates.filter((candidate) => this.isBoundToDisplayedFrame(candidate)).map((candidate) => {
         const box = candidate.bbox || {};
         const selected = Number(candidate.anonymous_candidate_number) === Number(this.annotation.existing_candidate_number);
         return `<g class="candidateBox${selected ? " selectedCandidateBox" : ""}"><rect x="${box.x1}" y="${box.y1}" width="${box.x2 - box.x1}" height="${box.y2 - box.y1}"></rect><text x="${box.x1}" y="${Math.max(12, box.y1 - 3)}">#${candidate.anonymous_candidate_number}</text></g>`;
-      }).join("");
+      }).join("") : "";
       const box = this.annotation.reviewer_bbox;
       const reviewerBox = box ? `<g class="reviewerBox"><rect x="${box.x1}" y="${box.y1}" width="${box.x2 - box.x1}" height="${box.y2 - box.y1}"></rect><circle cx="${box.x1}" cy="${box.y1}" r="5"></circle><circle cx="${box.x2}" cy="${box.y1}" r="5"></circle><circle cx="${box.x1}" cy="${box.y2}" r="5"></circle><circle cx="${box.x2}" cy="${box.y2}" r="5"></circle></g>` : "";
       const foot = this.annotation.footpoint ? `<g class="footpointMarker"><circle cx="${this.annotation.footpoint.x}" cy="${this.annotation.footpoint.y}" r="8"></circle><text x="${this.annotation.footpoint.x + 10}" y="${this.annotation.footpoint.y}">foot</text></g>` : "";
       const occlusion = (this.annotation.occlusion_points || []).map((point) => `<g class="occlusionMarker"><path d="M ${point.x - 10} ${point.y} L ${point.x + 10} ${point.y} M ${point.x} ${point.y - 10} L ${point.x} ${point.y + 10}"></path><circle cx="${point.x}" cy="${point.y}" r="6"></circle></g>`).join("");
-      this.svg.innerHTML = `${candidateMarkup}${reviewerBox}${foot}${occlusion}`;
+      this.svg.innerHTML = `${layerMarkup}${candidateMarkup}${reviewerBox}${foot}${occlusion}`;
     }
   }
 
