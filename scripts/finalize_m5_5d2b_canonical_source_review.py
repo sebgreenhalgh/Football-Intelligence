@@ -320,14 +320,23 @@ def make_pack(test_status: str, push_status: str) -> dict[str, Any]:
     index = {
         "workspace": "M5_5D2B_CANONICAL_CANDIDATE_SOURCE_REBUILD_v1",
         "pack_directory": "10_REVIEW_PACK_FOR_CHATGPT",
-        "file_count_before_manifest": len(files),
+        "file_count_before_manifest": 0,
         "forbidden_payloads_excluded": ["sealed mapping", "answer key", "raw video", "model weights", "credentials"],
         "files": [],
     }
     for path in sorted(PACK.iterdir()):
-        if path.is_file() and path.name != "REVIEW_PACK_MANIFEST.json":
+        if path.is_file() and path.name not in {"REVIEW_PACK_MANIFEST.json", "06_OUTPUT_ARTIFACT_INDEX.json"}:
             index["files"].append({"name": path.name, "size": path.stat().st_size, "sha256": sha256(path)})
+    index["file_count_before_manifest"] = len(index["files"]) + 1
     write_json(PACK / "06_OUTPUT_ARTIFACT_INDEX.json", index)
+    manifest_files = [
+        *index["files"],
+        {
+            "name": "06_OUTPUT_ARTIFACT_INDEX.json",
+            "size": (PACK / "06_OUTPUT_ARTIFACT_INDEX.json").stat().st_size,
+            "sha256": sha256(PACK / "06_OUTPUT_ARTIFACT_INDEX.json"),
+        },
+    ]
     manifest = {
         "schema_version": "m5_5d2b.chatgpt_review_pack.v1",
         "file_count": 20,
@@ -342,7 +351,7 @@ def make_pack(test_status: str, push_status: str) -> dict[str, Any]:
         "answers_included": False,
         "raw_video_included": False,
         "model_weights_included": False,
-        "files": index["files"],
+        "files": manifest_files,
     }
     write_json(PACK / "REVIEW_PACK_MANIFEST.json", manifest)
     return manifest
