@@ -17,10 +17,13 @@ FORBIDDEN_BROWSER_KEYS = {
     "alternative_target_panel",
     "answer",
     "candidate_construction_type",
+    "canonical_candidate_id",
     "candidate_id",
     "conflict_if_chosen_panel_is_not_prior_accept",
+    "correct_path",
     "correct_target",
     "decision_to_output_mapping",
+    "ground_truth",
     "identity",
     "prior_accepted_target",
     "same_frame_alternative_target",
@@ -329,7 +332,19 @@ def scan_forbidden_browser_payload(value: Any) -> dict[str, Any]:
                 visit(child, f"{path}[{index}]")
         elif isinstance(item, str):
             lowered = item.lower()
-            if any(fragment in lowered for fragment in ("visible_person_base_id", "candidate_id", "answer_key")):
+            if any(
+                fragment in lowered
+                for fragment in (
+                    "accepted_target",
+                    "answer_key",
+                    "canonical_candidate_id",
+                    "candidate_id",
+                    "correct_path",
+                    "ground_truth",
+                    "prior_accepted_target",
+                    "visible_person_base_id",
+                )
+            ):
                 forbidden_values.append(path)
             if lowered.startswith("m5_4h1_pc_") or lowered.startswith("m5_4h1_vpb_"):
                 forbidden_values.append(path)

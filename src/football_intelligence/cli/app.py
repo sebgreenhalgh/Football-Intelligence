@@ -123,6 +123,10 @@ from football_intelligence.replay.m5_5a_occlusion_stage import (
     build_m5_5a_occlusion_root_cause_stateful_baseline,
     validate_m5_5a_review_pack,
 )
+from football_intelligence.replay.occlusion_path_review_repair import (
+    build_m5_5a_occlusion_path_review_repair,
+    validate_m5_5a_occlusion_path_review_repair_pack,
+)
 from football_intelligence.replay.third_unseen_geometry_challenge import (
     build_m5_4h_third_unseen_geometry_challenge,
 )
@@ -1910,6 +1914,34 @@ def counterfactual_review_validate_m5_5a_review_pack(
     """Validate the flat maximum-20-file M5.5A ChatGPT review pack."""
 
     result = validate_m5_5a_review_pack(review_pack_root=review_pack_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-m5-5a-occlusion-path-review-repair")
+def counterfactual_review_build_m5_5a_occlusion_path_review_repair(
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    prompt_root: Path = typer.Option(..., "--prompt-root", exists=True, file_okay=False, dir_okay=True),
+    output_root: Path | None = typer.Option(None, "--output-root", file_okay=False, dir_okay=True),
+) -> None:
+    """Build the M5.5A repaired generic occlusion path review package."""
+
+    result = build_m5_5a_occlusion_path_review_repair(
+        repo_root=repo_root.resolve(),
+        prompt_root=prompt_root.resolve(),
+        output_root=output_root.resolve() if output_root is not None else None,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("validate-m5-5a-occlusion-path-review-pack")
+def counterfactual_review_validate_m5_5a_occlusion_path_review_pack(
+    review_pack_root: Path = typer.Option(..., "--review-pack-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    """Validate the flat maximum-20-file M5.5A repaired path-review pack."""
+
+    result = validate_m5_5a_occlusion_path_review_repair_pack(review_pack_root=review_pack_root.resolve())
     if not result["passed"]:
         raise typer.BadParameter(json.dumps(result, sort_keys=True))
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
