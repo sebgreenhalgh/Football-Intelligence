@@ -193,7 +193,7 @@ function renderMetadata(caseData) {
   $("metadataPanel").innerHTML = rows.length ? `<table>${rows.join("")}</table>` : "";
   const canShowHidden = currentDecision(caseData) && revealMap(caseData).__case_metadata__ === true;
   const serverRevealPayloads = state?.server_reveal_payloads?.[caseData.case_id] || {};
-  const serverReveal = serverRevealPayloads.__case_metadata__ || serverRevealPayloads.post_decision_answer_key;
+  const serverReveal = serverRevealPayloads.__case_metadata__;
   const legacyReveal = {
     hidden_metadata: caseData.hidden_metadata || {},
     reveal_metadata: caseData.reveal_metadata || {},
@@ -302,7 +302,8 @@ function applySpatialAnnotation() {
 
 function renderDecisions(caseData) {
   const current = decisions()[caseData.case_id];
-  $("decisionButtons").innerHTML = uiConfig.decisions.map((option) => {
+  const allowed = new Set(caseData.allowed_decisions || []);
+  $("decisionButtons").innerHTML = uiConfig.decisions.filter((option) => allowed.has(option.value)).map((option) => {
     const selected = current === option.value ? " selected" : "";
     return `<button type="button" class="decision ${option.style}${selected}" data-decision="${option.value}">
       <strong>${option.key}</strong> ${option.label}

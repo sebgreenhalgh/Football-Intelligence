@@ -135,6 +135,10 @@ from football_intelligence.replay.m5_5c_true_sequence_stage import (
     build_m5_5c_true_sequence_stage,
     validate_m5_5c_review_pack,
 )
+from football_intelligence.replay.m5_5c_counterbalance_repair import (
+    build_m5_5c_counterbalance_repair,
+    validate_m5_5c_counterbalance_review_pack,
+)
 from football_intelligence.replay.third_unseen_geometry_challenge import (
     build_m5_4h_third_unseen_geometry_challenge,
 )
@@ -2012,6 +2016,34 @@ def counterfactual_review_validate_m5_5c_review_pack(
     """Validate the flat maximum-20-file M5.5C ChatGPT review pack."""
 
     result = validate_m5_5c_review_pack(review_pack_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-m5-5c-counterbalance-repair")
+def counterfactual_review_build_m5_5c_counterbalance_repair(
+    repo_root: Path = typer.Option(Path("."), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    prompt_root: Path = typer.Option(..., "--prompt-root", exists=True, file_okay=False, dir_okay=True),
+    output_root: Path | None = typer.Option(None, "--output-root", file_okay=False, dir_okay=True),
+) -> None:
+    """Build the M5.5C balanced blind-review repair package."""
+
+    result = build_m5_5c_counterbalance_repair(
+        repo_root=repo_root.resolve(),
+        prompt_root=prompt_root.resolve(),
+        output_root=output_root.resolve() if output_root is not None else None,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("validate-m5-5c-counterbalance-review-pack")
+def counterfactual_review_validate_m5_5c_counterbalance_review_pack(
+    review_pack_root: Path = typer.Option(..., "--review-pack-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    """Validate the balanced blind-review ChatGPT pack."""
+
+    result = validate_m5_5c_counterbalance_review_pack(review_pack_root.resolve())
     if not result["passed"]:
         raise typer.BadParameter(json.dumps(result, sort_keys=True))
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
