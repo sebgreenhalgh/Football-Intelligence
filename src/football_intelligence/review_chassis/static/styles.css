@@ -192,6 +192,152 @@ textarea {
   flex-wrap: wrap;
 }
 
+.spatialToolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.spatialToolbar button {
+  min-height: 36px;
+}
+
+.spatialToolbar .activeTool {
+  background: #173f5f;
+  color: #ffffff;
+  border-color: #173f5f;
+}
+
+.largeImageViewport {
+  position: relative;
+  width: 100%;
+  height: min(72vh, 760px);
+  overflow: hidden;
+  border: 1px solid #aeb7c1;
+  background: #11161c;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.imageLayer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+.imageLayer img,
+.annotationSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+
+.annotationSvg {
+  pointer-events: none;
+}
+
+.candidateBox rect {
+  fill: rgba(30, 144, 255, 0.08);
+  stroke: #1e90ff;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.candidateBox text {
+  fill: #ffffff;
+  paint-order: stroke;
+  stroke: #10243a;
+  stroke-width: 4;
+  font: 16px Segoe UI, sans-serif;
+}
+
+.selectedCandidateBox rect {
+  fill: rgba(255, 221, 87, 0.18);
+  stroke: #ffdd57;
+  stroke-width: 5;
+}
+
+.reviewerBox rect {
+  fill: rgba(35, 185, 120, 0.14);
+  stroke: #23b978;
+  stroke-width: 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.reviewerBox circle {
+  fill: #ffffff;
+  stroke: #23b978;
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.footpointMarker circle {
+  fill: #ffffff;
+  stroke: #df5f22;
+  stroke-width: 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.footpointMarker text {
+  fill: #ffffff;
+  paint-order: stroke;
+  stroke: #15171a;
+  stroke-width: 4;
+  font: 16px Segoe UI, sans-serif;
+}
+
+.occlusionMarker path,
+.occlusionMarker circle {
+  fill: none;
+  stroke: #ff4d6d;
+  stroke-width: 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.overlapPanel {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px dashed #b8bfc7;
+  background: #fbfcfd;
+}
+
+.annotationFallbackGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.annotationFallbackGrid label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+
+.annotationFallbackGrid input,
+.annotationFallbackGrid select {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #c8ced6;
+  border-radius: 5px;
+  padding: 7px;
+  font: inherit;
+}
+
+.annotationHint {
+  margin: 10px 0 0;
+  color: #4b5663;
+}
+
 .hidden {
   display: none !important;
 }

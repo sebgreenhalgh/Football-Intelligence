@@ -13,6 +13,7 @@ from football_intelligence.review.server import _parse_byte_range
 from football_intelligence.review_chassis.config import load_ui_config
 from football_intelligence.review_chassis.manifest import load_manifest
 from football_intelligence.review_chassis.persistence import GenericReviewPersistence
+from football_intelligence.review_chassis.spatial_annotations import FORBIDDEN_BROWSER_KEYS
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 
@@ -89,9 +90,12 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
         return payload
 
     def ui_config_payload(self) -> dict[str, Any]:
-        payload = self.ui_config.model_dump(mode="json")
+        payload = _sanitize_browser_payload(self.ui_config.model_dump(mode="json"))
         payload.pop("decision_to_output_mapping", None)
         return payload
+
+    def manifest_payload(self) -> dict[str, Any]:
+        return _sanitize_browser_payload(self.manifest.model_dump(mode="json"))
 
     def sealed_reveal_payload(self, case_id: str, reveal_group_id: str | None) -> dict[str, Any] | None:
         if not reveal_group_id:
@@ -116,7 +120,7 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             if path == "/api/review/manifest":
-                _json_response(self, self.server.manifest.model_dump(mode="json"))
+                _json_response(self, self.server.manifest_payload())
             elif path == "/api/review/ui-config":
                 _json_response(self, self.server.ui_config_payload())
             elif path == "/api/review/state":
@@ -125,7 +129,7 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 _json_response(self, self.server.persistence.export_payload())
             elif path in {"/", "/index.html"}:
                 self._serve_file(STATIC_ROOT / "index.html")
-            elif path in {"/app.js", "/styles.css"}:
+            elif path in {"/annotation_canvas.js", "/app.js", "/styles.css"}:
                 self._serve_file(STATIC_ROOT / path.lstrip("/"))
             elif path.startswith("/evidence/"):
                 self._serve_evidence(path)
@@ -251,3 +255,18 @@ def serve(config: ReviewChassisServerConfig) -> None:
         server.serve_forever()
     finally:
         server.server_close()
+
+
+def _sanitize_browser_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, child in value.items():
+            if key in FORBIDDEN_BROWSER_KEYS:
+                continue
+            if key in {"hidden_metadata", "reveal_metadata"}:
+                continue
+            sanitized[key] = _sanitize_browser_payload(child)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_browser_payload(item) for item in value]
+    return value

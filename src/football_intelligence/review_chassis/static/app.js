@@ -4,6 +4,7 @@ let state = null;
 let activeIndex = 0;
 let elapsedSeconds = 0;
 let timerStarted = Date.now();
+let activeAnnotationEditor = null;
 const frameStepper = {};
 
 const $ = (id) => document.getElementById(id);
@@ -170,6 +171,7 @@ function renderAssets(caseData) {
   const normalAssets = caseData.evidence_assets
     .filter((asset) => asset.asset_type !== "image_sequence")
     .filter((asset) => !panelGroupIds.has(asset.group_id))
+    .filter((asset) => !(uiConfig.spatial_annotation_enabled && asset.metadata?.primary_annotation_image === true))
     .sort(assetSort)
     .map((asset) => renderAsset(caseData, asset));
   const hiddenSequenceControls = caseData.evidence_assets
@@ -218,12 +220,41 @@ function annotationValue(key) {
 
 function renderSpatialAnnotation(caseData) {
   const panel = $("annotationPanel");
+  activeAnnotationEditor = null;
   if (!uiConfig.spatial_annotation_enabled) {
     panel.classList.add("hidden");
     panel.innerHTML = "";
     return;
   }
   const schema = uiConfig.spatial_annotation_schema || {};
+  const interactive = schema.interactive_canvas_enabled === true
+    || String(uiConfig.spatial_annotation_mode || "").includes("interactive");
+  if (interactive && window.ReviewAnnotationCanvas) {
+    const asset = caseData.evidence_assets.find((item) => item.metadata?.primary_annotation_image === true)
+      || caseData.evidence_assets.find((item) => item.asset_id === "target_full_resolution")
+      || caseData.evidence_assets.find((item) => item.metadata?.full_resolution === true);
+    if (!asset) {
+      panel.classList.remove("hidden");
+      panel.innerHTML = "<h3>Spatial annotation</h3><p>Full-resolution annotation image is unavailable.</p>";
+      return;
+    }
+    panel.classList.remove("hidden");
+    panel.innerHTML = `
+      <h3>${schema.title || "Interactive spatial annotation"}</h3>
+      <div id="interactiveAnnotationRoot"></div>`;
+    activeAnnotationEditor = new window.ReviewAnnotationCanvas.SpatialAnnotationCanvas(
+      $("interactiveAnnotationRoot"),
+      {
+        caseData,
+        asset,
+        imageUrl: evidenceUrl(caseData.case_id, asset.relative_path),
+        candidates: caseData.visible_metadata?.safe_anonymous_candidates || caseData.competing_candidates || [],
+        noteElement: $("note"),
+        onChange: () => {},
+      },
+    );
+    return;
+  }
   const sizeCategories = schema.bbox_size_categories || ["small", "medium", "large", "uncertain"];
   const confidenceValues = schema.confidence_values || ["high", "medium", "low", "uncertain"];
   panel.classList.remove("hidden");
@@ -316,6 +347,13 @@ function setStatus(text, failed = false) {
 
 async function saveDecision(decision, inputSource = "click") {
   const caseData = activeCase();
+  if (uiConfig.spatial_annotation_enabled && window.ReviewAnnotationCanvas) {
+    const errors = window.ReviewAnnotationCanvas.validateDecision(decision, $("note").value);
+    if (errors.length) {
+      setStatus(`Annotation required: ${errors.join(" ")}`, true);
+      return;
+    }
+  }
   const body = {
     case_id: caseData.case_id,
     decision,

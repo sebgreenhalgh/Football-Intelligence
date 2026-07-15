@@ -114,6 +114,10 @@ from football_intelligence.replay.third_unseen_review_correction import (
 from football_intelligence.replay.followup_candidate_supply_diagnostic import (
     build_m5_4j_candidate_supply_diagnostic,
 )
+from football_intelligence.replay.interactive_spatial_review_ui import (
+    build_m5_4j_interactive_spatial_review_ui,
+    validate_m5_4j_interactive_review_pack,
+)
 from football_intelligence.replay.occlusion_pro_context_pack import build_occlusion_pro_context_pack
 from football_intelligence.replay.m5_5a_occlusion_stage import (
     build_m5_5a_occlusion_root_cause_stateful_baseline,
@@ -1838,6 +1842,34 @@ def counterfactual_review_build_followup_candidate_supply_diagnostic(
         stage_root=stage_root.resolve(),
         repo_root=repo_root.resolve(),
     )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-interactive-spatial-review-ui")
+def counterfactual_review_build_interactive_spatial_review_ui(
+    repo_root: Path = typer.Option(Path.cwd(), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    prompt_root: Path = typer.Option(..., "--prompt-root", exists=True, file_okay=False, dir_okay=True),
+    output_root: Path | None = typer.Option(None, "--output-root", file_okay=False, dir_okay=True),
+) -> None:
+    """Build the bounded M5.4J full-resolution interactive spatial review package."""
+
+    result = build_m5_4j_interactive_spatial_review_ui(
+        repo_root=repo_root.resolve(),
+        prompt_root=prompt_root.resolve(),
+        output_root=output_root.resolve() if output_root is not None else None,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("validate-interactive-spatial-review-pack")
+def counterfactual_review_validate_interactive_spatial_review_pack(
+    review_pack_root: Path = typer.Option(..., "--review-pack-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    """Validate the flat maximum-20-file M5.4J interactive review pack."""
+
+    result = validate_m5_4j_interactive_review_pack(review_pack_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
