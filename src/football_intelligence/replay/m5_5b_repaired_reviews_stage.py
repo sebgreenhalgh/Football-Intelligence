@@ -1968,6 +1968,18 @@ def _source_diff_with_untracked(repo_root: Path) -> str:
     combined = tracked
     if untracked_patch_parts:
         combined = combined.rstrip() + "\n\n" + "\n".join(untracked_patch_parts)
+    if not combined.strip():
+        combined = _git(
+            repo_root,
+            "diff",
+            f"{BASELINE_COMMIT}..HEAD",
+            "--",
+            "src",
+            "tests",
+            "pyproject.toml",
+            "uv.lock",
+            timeout=120,
+        )["stdout"]
     return combined or "No source diff captured at review-pack build time.\n"
 
 
@@ -1981,6 +1993,20 @@ def _files_changed_with_untracked(repo_root: Path) -> str:
         relative = line[3:].strip()
         if relative.startswith("src/") or relative.startswith("tests/"):
             rows.append(f"A\t{relative}")
+    if not rows:
+        committed = _git(
+            repo_root,
+            "diff",
+            "--name-status",
+            f"{BASELINE_COMMIT}..HEAD",
+            "--",
+            "src",
+            "tests",
+            "pyproject.toml",
+            "uv.lock",
+        )["stdout"].strip()
+        if committed:
+            rows.append(committed)
     return "\n".join(rows)
 
 
