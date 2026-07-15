@@ -137,7 +137,7 @@
     return JSON.stringify({spatial_annotation: annotation}, null, 2);
   }
 
-  function validationForDecision(decision, annotation) {
+  function validationForDecision(decision, annotation, caseData = null) {
     const errors = [];
     if (decision === "TARGET_VISIBLE_DRAW_BBOX" && !bboxValid(annotation.reviewer_bbox)) {
       errors.push("Draw or type a valid target bbox first.");
@@ -147,6 +147,16 @@
       && !annotation.existing_candidate_number
     ) {
       errors.push("Select an anonymous detection box first.");
+    }
+    if (decision === "DUPLICATE_OF_ANOTHER_DETECTION"
+      && caseData?.visible_metadata?.duplicate_counterpart_required === true) {
+      const counterpart = Number(annotation.duplicate_counterpart_number);
+      const target = Number(caseData.visible_metadata.target_anonymous_candidate_number);
+      if (!Number.isFinite(counterpart) || counterpart < 1) {
+        errors.push("Select an anonymous same-frame counterpart before marking a duplicate.");
+      } else if (Number.isFinite(target) && counterpart === target) {
+        errors.push("The duplicate counterpart must differ from the highlighted target.");
+      }
     }
     if (annotation.partial_or_occluded === true) {
       const hasPoint = Array.isArray(annotation.occlusion_points) && annotation.occlusion_points.length > 0;
@@ -180,6 +190,7 @@
         MERGED_OBSERVATION_CANDIDATES: true,
         OUTGOING_SEGMENT_HYPOTHESES: true,
         REVIEWER_ANNOTATIONS: true,
+        ...(options.layerVisibility || {}),
       };
       this.noteElement = options.noteElement;
       this.onChange = options.onChange;
@@ -227,6 +238,9 @@
       if (number) {
         annotation.existing_candidate_number = Number(number);
         annotation.selected_anonymous_candidate_number = Number(number);
+      }
+      if (parsed.duplicate_counterpart_number !== undefined) {
+        annotation.duplicate_counterpart_number = Number(parsed.duplicate_counterpart_number);
       }
       const footpoint = parsed.footpoint || (
         parsed.footpoint_x !== undefined ? {x: parsed.footpoint_x, y: parsed.footpoint_y} : null
@@ -682,12 +696,20 @@
       this.overlapPanel.classList.toggle("hidden", hits.length <= 1);
       if (!hits.length) return;
       if (hits.length > 1) {
-        this.overlapPanel.innerHTML = `<strong>Overlapping detections</strong>${hits.map((candidate) => `
-          <button type="button" data-overlap-candidate="${candidate.anonymous_candidate_number}">#${candidate.anonymous_candidate_number}</button>`).join("")}`;
+        this.overlapPanel.innerHTML = `<strong>Overlapping detections</strong><span>Select one as the duplicate counterpart:</span>${hits.map((candidate) => `
+          <button type="button" data-overlap-candidate="${candidate.anonymous_candidate_number}">Inspect #${candidate.anonymous_candidate_number}</button>
+          <button type="button" data-overlap-counterpart="${candidate.anonymous_candidate_number}">Use #${candidate.anonymous_candidate_number} as counterpart</button>`).join("")}`;
         this.overlapPanel.querySelectorAll("[data-overlap-candidate]").forEach((button) => {
           button.addEventListener("click", () => {
             const selected = hits.find((item) => Number(item.anonymous_candidate_number) === Number(button.dataset.overlapCandidate));
             if (selected) this.applyCandidate(selected, hits);
+          });
+        });
+        this.overlapPanel.querySelectorAll("[data-overlap-counterpart]").forEach((button) => {
+          button.addEventListener("click", () => {
+            this.saveHistory();
+            this.annotation.duplicate_counterpart_number = Number(button.dataset.overlapCounterpart);
+            this.commit();
           });
         });
       }
@@ -750,6 +772,7 @@
         <label>bbox x2<input data-field="bbox_x2" type="number" step="0.1" value="${box.x2 ?? ""}"></label>
         <label>bbox y2<input data-field="bbox_y2" type="number" step="0.1" value="${box.y2 ?? ""}"></label>
         <label>candidate #<input data-field="existing_candidate_number" type="number" step="1" min="1" value="${this.annotation.existing_candidate_number ?? ""}"></label>
+        <label>duplicate counterpart #<input data-field="duplicate_counterpart_number" type="number" step="1" min="1" value="${this.annotation.duplicate_counterpart_number ?? ""}"></label>
         <label>foot x<input data-field="footpoint_x" type="number" step="0.1" value="${foot.x ?? ""}"></label>
         <label>foot y<input data-field="footpoint_y" type="number" step="0.1" value="${foot.y ?? ""}"></label>
         <label>occlusion x<input data-field="occlusion_x" type="number" step="0.1" value="${occ.x ?? ""}"></label>
@@ -771,6 +794,9 @@
       if (values.existing_candidate_number) {
         this.annotation.existing_candidate_number = Number(values.existing_candidate_number);
         this.annotation.selected_anonymous_candidate_number = Number(values.existing_candidate_number);
+      }
+      if (values.duplicate_counterpart_number) {
+        this.annotation.duplicate_counterpart_number = Number(values.duplicate_counterpart_number);
       }
       if (values.footpoint_x !== "" && values.footpoint_y !== "") this.annotation.footpoint = this.clampPoint({x: values.footpoint_x, y: values.footpoint_y});
       if (values.occlusion_x !== "" && values.occlusion_y !== "") {
@@ -809,8 +835,8 @@
     }
   }
 
-  function validateDecision(decision, noteText) {
-    return validationForDecision(decision, parseNote(noteText, ""));
+  function validateDecision(decision, noteText, caseData = null) {
+    return validationForDecision(decision, parseNote(noteText, ""), caseData);
   }
 
   window.ReviewAnnotationCanvas = {
