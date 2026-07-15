@@ -131,6 +131,10 @@ from football_intelligence.replay.m5_5b_repaired_reviews_stage import (
     build_m5_5b_repaired_reviews_evaluation,
     validate_m5_5b_review_pack,
 )
+from football_intelligence.replay.m5_5c_true_sequence_stage import (
+    build_m5_5c_true_sequence_stage,
+    validate_m5_5c_review_pack,
+)
 from football_intelligence.replay.third_unseen_geometry_challenge import (
     build_m5_4h_third_unseen_geometry_challenge,
 )
@@ -1976,6 +1980,38 @@ def counterfactual_review_validate_m5_5b_review_pack(
     """Validate the flat maximum-20-file M5.5B ChatGPT review pack."""
 
     result = validate_m5_5b_review_pack(review_pack_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-m5-5c-true-sequence-stage")
+def counterfactual_review_build_m5_5c_true_sequence_stage(
+    repo_root: Path = typer.Option(Path("."), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    prompt_root: Path = typer.Option(..., "--prompt-root", exists=True, file_okay=False, dir_okay=True),
+    output_root: Path | None = typer.Option(None, "--output-root", file_okay=False, dir_okay=True),
+    model_path: Path | None = typer.Option(None, "--model-path", exists=True, readable=True, dir_okay=False),
+    skip_detector: bool = typer.Option(False, "--skip-detector"),
+) -> None:
+    """Build the M5.5C true-sequence, detector-control and blind-review stage."""
+
+    result = build_m5_5c_true_sequence_stage(
+        repo_root=repo_root.resolve(),
+        prompt_root=prompt_root.resolve(),
+        output_root=output_root.resolve() if output_root is not None else None,
+        model_path=model_path.resolve() if model_path is not None else None,
+        run_detector=not skip_detector,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("validate-m5-5c-review-pack")
+def counterfactual_review_validate_m5_5c_review_pack(
+    review_pack_root: Path = typer.Option(..., "--review-pack-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    """Validate the flat maximum-20-file M5.5C ChatGPT review pack."""
+
+    result = validate_m5_5c_review_pack(review_pack_root.resolve())
     if not result["passed"]:
         raise typer.BadParameter(json.dumps(result, sort_keys=True))
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
