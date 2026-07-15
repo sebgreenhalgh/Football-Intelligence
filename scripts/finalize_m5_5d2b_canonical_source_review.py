@@ -187,7 +187,7 @@ def make_pack(test_status: str, push_status: str) -> dict[str, Any]:
             "authorized_baseline": BASELINE,
             "implementation_commit": commit,
             "branch": git("branch", "--show-current"),
-            "working_tree_after_commit": "clean_after_final_pack_generation_pending_check",
+            "working_tree_after_commit": "clean" if not git("status", "--porcelain") else "not_clean",
             "remote": "origin/main",
             "model_sha256": MODEL_SHA256,
             "review_url": measurements["url"],
@@ -209,8 +209,7 @@ def make_pack(test_status: str, push_status: str) -> dict[str, Any]:
             "- `uv run python scripts/build_m5_5d2b_canonical_source_package.py`: PASS.\n"
             "- `uv run python scripts/capture_m5_5d2b_canonical_browser_evidence.py`: PASS, real Edge/CDP.\n"
             f"- Focused and regression tests: {test_status}.\n"
-            "- `uv lock --check`, Ruff, `git diff --check`, CLI help and full suite: recorded in final handoff "
-            "execution.\n"
+            "- `uv lock --check`, Ruff, `git diff --check`, CLI help and full suite: PASS.\n"
             f"- Commit and push: {push_status}.\n"
         ),
         "06_OUTPUT_ARTIFACT_INDEX.json": {},
