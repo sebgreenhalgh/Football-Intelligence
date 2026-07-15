@@ -311,6 +311,8 @@ textarea {
 .layer-INCOMING_PREDICTED_STATES rect { stroke: #ffb000; stroke-dasharray: 5 4; }
 .layer-MERGED_OBSERVATION_CANDIDATES rect { stroke: #ff4d6d; }
 .layer-OUTGOING_SEGMENT_HYPOTHESES rect { stroke: #00c2d7; stroke-dasharray: 4 3; }
+.layer-TARGET_HIGHLIGHT rect { fill: rgba(255, 221, 87, 0.14); stroke: #ffdd57; stroke-width: 5; }
+.layer-CANONICAL_CONTEXT rect { fill: rgba(154, 167, 179, 0.05); stroke: #9aa7b3; stroke-dasharray: 5 4; }
 
 .candidateBox text {
   fill: #ffffff;

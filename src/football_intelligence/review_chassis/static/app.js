@@ -67,7 +67,8 @@ function currentAnnotationAsset(caseData) {
   const assets = annotationFrameAssets(caseData);
   if (!assets.length) return null;
   const key = `${caseData.case_id}:annotation_frames`;
-  frameStepper[key] = Math.max(0, Math.min(frameStepper[key] || 0, assets.length - 1));
+  const defaultIndex = Number(caseData.visible_metadata?.target_frame_index ?? 0);
+  frameStepper[key] = Math.max(0, Math.min(frameStepper[key] ?? defaultIndex, assets.length - 1));
   return assets[frameStepper[key]];
 }
 
@@ -321,6 +322,7 @@ function renderSpatialAnnotation(caseData) {
         imageUrl: evidenceUrl(caseData.case_id, asset.relative_path),
         candidates: currentAnnotationCandidates(caseData, asset),
         layerRows: caseData.visible_metadata?.geometry_layers || [],
+        layerVisibility: caseData.visible_metadata?.layer_visibility || {},
         frameAssets,
         selectedFrameIndex: frameStepper[`${caseData.case_id}:annotation_frames`] || 0,
         noteElement: $("note"),
@@ -424,7 +426,7 @@ function setStatus(text, failed = false) {
 async function saveDecision(decision, inputSource = "click") {
   const caseData = activeCase();
   if (uiConfig.spatial_annotation_enabled && window.ReviewAnnotationCanvas) {
-    const errors = window.ReviewAnnotationCanvas.validateDecision(decision, $("note").value);
+    const errors = window.ReviewAnnotationCanvas.validateDecision(decision, $("note").value, caseData);
     if (errors.length) {
       setStatus(`Annotation required: ${errors.join(" ")}`, true);
       return;
