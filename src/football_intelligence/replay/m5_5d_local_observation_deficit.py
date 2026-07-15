@@ -874,6 +874,10 @@ def _write_pack(
     case_rows: list[dict[str, Any]],
     result: dict[str, Any],
 ) -> Path:
+    commit_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, check=False
+    )
+    implementation_commit = commit_result.stdout.strip() or None
     pack_root = output_root / "11_REVIEW_PACK_FOR_CHATGPT"
     pack_root.mkdir(parents=True, exist_ok=True)
     for existing in pack_root.iterdir():
@@ -889,6 +893,7 @@ def _write_pack(
         "02_RUN_AND_GIT_CONTEXT.json": {
             "stage_id": STAGE_ID,
             "baseline_commit": BASELINE_COMMIT,
+            "implementation_commit": implementation_commit,
             "working_tree_clean_before_stage": True,
             "historical_artifacts_mutated": False,
         },
@@ -964,7 +969,10 @@ def _write_pack(
             )
         )
     builder = ReviewPackBuilder(
-        root=pack_root, stage_id=STAGE_ID, repository_commit_before=BASELINE_COMMIT, repository_commit_after=None
+        root=pack_root,
+        stage_id=STAGE_ID,
+        repository_commit_before=BASELINE_COMMIT,
+        repository_commit_after=implementation_commit,
     )
     for item in items:
         builder.add_file(item)
