@@ -9,6 +9,7 @@ SPATIAL_ANNOTATION_SCHEMA_VERSION = "football_intelligence.review_chassis.spatia
 COORDINATE_SPACE = "original_image_pixels"
 MIN_BBOX_SIZE_PX = 2.0
 DEFAULT_SCREEN_HIT_TARGET_PX = 10.0
+OCCLUSION_INTERVAL_SCHEMA_VERSION = "football_intelligence.review_chassis.occlusion_interval_annotation.v1"
 
 FORBIDDEN_BROWSER_KEYS = {
     "accepted_target",
@@ -304,6 +305,112 @@ def validate_spatial_annotation_for_decision(
     )
     if partial and not (has_occlusion_point or has_not_localizable_reason):
         errors.append("partial_or_occluded_requires_point_or_reason")
+    return {"passed": not errors, "errors": errors}
+
+
+def normalize_occlusion_interval_annotation(
+    note: str | dict[str, Any] | None,
+    *,
+    case_id: str,
+    frame_sequences: list[int] | None = None,
+    image_size: ImageSize | None = None,
+) -> dict[str, Any]:
+    """Normalize interval controls while retaining the original-pixel contract."""
+
+    payload = parse_note_payload(note)
+    annotation = payload.get("spatial_annotation") if isinstance(payload.get("spatial_annotation"), dict) else payload
+    annotation = annotation if isinstance(annotation, dict) else {}
+    allowed_frames = sorted({int(frame) for frame in (frame_sequences or [])})
+
+    def integer_field(name: str) -> int | None:
+        value = annotation.get(name)
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be an integer frame sequence") from exc
+
+    start = integer_field("deficit_start_frame")
+    end = integer_field("deficit_end_frame")
+    merged = integer_field("merged_detection_number")
+    path = str(annotation.get("reentry_path_selection") or "UNRESOLVED")
+    allowed_paths = {"PATH_A", "PATH_B", "PATH_C", "NO_REENTRY", "UNRESOLVED"}
+    if path not in allowed_paths:
+        raise ValueError("reentry_path_selection is not an allowed anonymous option")
+    if allowed_frames:
+        for name, value in (("deficit_start_frame", start), ("deficit_end_frame", end)):
+            if value is not None and value not in allowed_frames:
+                raise ValueError(f"{name} is outside the supplied frame stepper")
+    if start is not None and end is not None and end < start:
+        raise ValueError("deficit_end_frame must not precede deficit_start_frame")
+    normalized: dict[str, Any] = {
+        "schema_version": OCCLUSION_INTERVAL_SCHEMA_VERSION,
+        "case_id": case_id,
+        "coordinate_space": COORDINATE_SPACE,
+        "deficit_start_frame": start,
+        "deficit_end_frame": end,
+        "merged_detection_number": merged,
+        "partial_or_occluded": bool(annotation.get("partial_or_occluded") in (True, "true", "True", "1", 1)),
+        "reentry_path_selection": path,
+        "autosave_supported": True,
+    }
+    if image_size is not None:
+        spatial = normalize_spatial_annotation_note(
+            note, case_id=case_id, image_size=image_size, target_frame_sequence=end
+        )
+        for key in (
+            "reviewer_bbox",
+            "bbox_x1",
+            "bbox_y1",
+            "bbox_x2",
+            "bbox_y2",
+            "footpoint",
+            "footpoint_x",
+            "footpoint_y",
+            "occlusion_points",
+            "occlusion_location_status",
+        ):
+            if key in spatial:
+                normalized[key] = spatial[key]
+    return normalized
+
+
+def validate_occlusion_interval_annotation(
+    annotation: dict[str, Any],
+    *,
+    decision: str,
+    frame_sequences: list[int] | None = None,
+    merged_detection_numbers: set[int] | None = None,
+) -> dict[str, Any]:
+    """Validate the explicit interval actions without imposing a scientific label."""
+
+    errors: list[str] = []
+    start, end = annotation.get("deficit_start_frame"), annotation.get("deficit_end_frame")
+    if decision not in {"EVIDENCE_UNRESOLVED", "TARGET_PRESENT_BUT_FAILURE_TYPE_UNCERTAIN"}:
+        if start is None:
+            errors.append("deficit_start_frame_required")
+        if end is None:
+            errors.append("deficit_end_frame_required")
+    if start is not None and end is not None and int(end) < int(start):
+        errors.append("deficit_interval_reversed")
+    allowed_frames = set(frame_sequences or [])
+    if allowed_frames:
+        if start is not None and int(start) not in allowed_frames:
+            errors.append("deficit_start_frame_outside_stepper")
+        if end is not None and int(end) not in allowed_frames:
+            errors.append("deficit_end_frame_outside_stepper")
+    merged = annotation.get("merged_detection_number")
+    if decision in {"TRUE_TWO_TO_ONE_COLLAPSE", "TRUE_INFLATED_OR_MERGED_OBSERVATION"} and merged in (None, ""):
+        errors.append("merged_detection_required")
+    if merged_detection_numbers and merged not in (None, "") and int(merged) not in merged_detection_numbers:
+        errors.append("merged_detection_not_in_case_candidates")
+    if (
+        annotation.get("partial_or_occluded")
+        and not annotation.get("occlusion_points")
+        and annotation.get("occlusion_location_status") != "not_localizable"
+    ):
+        errors.append("partial_or_occluded_requires_occlusion_point")
     return {"passed": not errors, "errors": errors}
 
 

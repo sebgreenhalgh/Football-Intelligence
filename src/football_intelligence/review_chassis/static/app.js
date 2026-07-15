@@ -218,6 +218,54 @@ function annotationValue(key) {
   return parsed?.spatial_annotation?.[key] ?? "";
 }
 
+function intervalAnnotationValues() {
+  const parsed = parseAnnotationNote();
+  return parsed?.spatial_annotation || {};
+}
+
+function renderIntervalControls(caseData) {
+  const root = $("intervalAnnotationControls");
+  if (!root) return;
+  const values = intervalAnnotationValues();
+  const frames = caseData.visible_metadata?.frame_sequences || [];
+  const candidates = caseData.visible_metadata?.safe_anonymous_candidates || [];
+  const optionList = (items, selected, emptyLabel) => [
+    `<option value="">${emptyLabel}</option>`,
+    ...items.map((item) => `<option value="${item}"${String(selected) === String(item) ? " selected" : ""}>${item}</option>`),
+  ].join("");
+  root.innerHTML = `
+    <h4>Interval controls</h4>
+    <div class="annotationGrid intervalControlGrid">
+      <label>Deficit start frame<select data-interval-field="deficit_start_frame">${optionList(frames, values.deficit_start_frame, "Unselected")}</select></label>
+      <label>Deficit end frame<select data-interval-field="deficit_end_frame">${optionList(frames, values.deficit_end_frame, "Unselected")}</select></label>
+      <label>Merged detection<select data-interval-field="merged_detection_number">${optionList(candidates.map((item) => item.anonymous_candidate_number), values.merged_detection_number, "None / unresolved")}</select></label>
+      <label>Re-entry path<select data-interval-field="reentry_path_selection">${optionList(["PATH_A", "PATH_B", "PATH_C", "NO_REENTRY", "UNRESOLVED"], values.reentry_path_selection || "UNRESOLVED", "Choose a path")}</select></label>
+      <label>Partial / occluded<select data-interval-field="partial_or_occluded">${optionList(["false", "true"], String(values.partial_or_occluded), "Unspecified")}</select></label>
+    </div>
+    <button type="button" data-interval-apply="true">Save interval annotation</button>
+    <p class="annotationHint">All coordinates remain in original-image pixels. Decisions remain visual review labels only.</p>`;
+}
+
+function applyIntervalAnnotation() {
+  const caseData = activeCase();
+  const current = intervalAnnotationValues();
+  const annotation = {
+    ...current,
+    schema_version: "football_intelligence.review_chassis.occlusion_interval_annotation.v1",
+    case_id: caseData.case_id,
+    coordinate_space: "original_image_pixels",
+  };
+  document.querySelectorAll("[data-interval-field]").forEach((input) => {
+    const key = input.dataset.intervalField;
+    if (!key || input.value === "") return;
+    annotation[key] = key === "merged_detection_number" || key.endsWith("_frame")
+      ? Number(input.value)
+      : key === "partial_or_occluded" ? input.value === "true" : input.value;
+  });
+  $("note").value = JSON.stringify({spatial_annotation: annotation}, null, 2);
+  saveNote();
+}
+
 function renderSpatialAnnotation(caseData) {
   const panel = $("annotationPanel");
   activeAnnotationEditor = null;
@@ -241,7 +289,8 @@ function renderSpatialAnnotation(caseData) {
     panel.classList.remove("hidden");
     panel.innerHTML = `
       <h3>${schema.title || "Interactive spatial annotation"}</h3>
-      <div id="interactiveAnnotationRoot"></div>`;
+      <div id="interactiveAnnotationRoot"></div>
+      <div id="intervalAnnotationControls"></div>`;
     activeAnnotationEditor = new window.ReviewAnnotationCanvas.SpatialAnnotationCanvas(
       $("interactiveAnnotationRoot"),
       {
@@ -253,6 +302,7 @@ function renderSpatialAnnotation(caseData) {
         onChange: () => {},
       },
     );
+    if (uiConfig.spatial_annotation_mode === "occlusion_interval") renderIntervalControls(caseData);
     return;
   }
   const sizeCategories = schema.bbox_size_categories || ["small", "medium", "large", "uncertain"];
@@ -484,6 +534,7 @@ document.addEventListener("click", (event) => {
     reveal(revealAsset, group);
   }
   if (target.closest("[data-annotation-apply]")) applySpatialAnnotation();
+  if (target.closest("[data-interval-apply]")) applyIntervalAnnotation();
 });
 
 let noteTimer = null;

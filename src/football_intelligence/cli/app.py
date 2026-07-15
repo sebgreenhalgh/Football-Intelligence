@@ -143,6 +143,11 @@ from football_intelligence.replay.m5_5d_local_observation_deficit import (
     build_m5_5d_local_observation_deficit_stage,
     validate_m5_5d_review_pack,
 )
+from football_intelligence.replay.m5_5d1_true_local_occlusion import (
+    build_m5_5d1_true_local_occlusion_stage,
+    refresh_m5_5d1_review_pack,
+    validate_m5_5d1_review_pack,
+)
 from football_intelligence.replay.third_unseen_geometry_challenge import (
     build_m5_4h_third_unseen_geometry_challenge,
 )
@@ -2080,6 +2085,51 @@ def counterfactual_review_validate_m5_5d_review_pack(
     """Validate the flat maximum-20-file M5.5D ChatGPT review pack."""
 
     result = validate_m5_5d_review_pack(review_pack_root.resolve())
+    if not result["passed"]:
+        raise typer.BadParameter(json.dumps(result, sort_keys=True))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("build-m5-5d1-true-local-occlusion")
+def counterfactual_review_build_m5_5d1_true_local_occlusion(
+    repo_root: Path = typer.Option(Path("."), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    prompt_root: Path = typer.Option(..., "--prompt-root", exists=True, file_okay=False, dir_okay=True),
+    output_root: Path | None = typer.Option(None, "--output-root", file_okay=False, dir_okay=True),
+    model_path: Path | None = typer.Option(
+        None, "--model-path", exists=True, readable=True, file_okay=True, dir_okay=False
+    ),
+    unseen_root: Path | None = typer.Option(None, "--unseen-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    """Build the corrected M5.5D.1 local-observation occlusion stage."""
+
+    result = build_m5_5d1_true_local_occlusion_stage(
+        repo_root=repo_root.resolve(),
+        prompt_root=prompt_root.resolve(),
+        output_root=output_root.resolve() if output_root is not None else None,
+        model_path=model_path.resolve() if model_path is not None else None,
+        unseen_root=unseen_root.resolve() if unseen_root is not None else None,
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("refresh-m5-5d1-review-pack")
+def counterfactual_review_refresh_m5_5d1_review_pack(
+    repo_root: Path = typer.Option(Path("."), "--repo-root", exists=True, file_okay=False, dir_okay=True),
+    output_root: Path = typer.Option(..., "--output-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    """Regenerate the M5.5D.1 pack against the current implementation commit."""
+
+    result = refresh_m5_5d1_review_pack(repo_root.resolve(), output_root.resolve())
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@counterfactual_review_app.command("validate-m5-5d1-review-pack")
+def counterfactual_review_validate_m5_5d1_review_pack(
+    review_pack_root: Path = typer.Option(..., "--review-pack-root", exists=True, file_okay=False, dir_okay=True),
+) -> None:
+    """Validate the M5.5D.1 flat maximum-20-file ChatGPT review pack."""
+
+    result = validate_m5_5d1_review_pack(review_pack_root.resolve())
     if not result["passed"]:
         raise typer.BadParameter(json.dumps(result, sort_keys=True))
     typer.echo(json.dumps(result, indent=2, sort_keys=True))
