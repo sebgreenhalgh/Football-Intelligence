@@ -23,6 +23,7 @@ def test_two_path_permutations_are_deterministic_and_balanced() -> None:
     assert first == second
     audit = audit_counterbalance(cases, first)
     assert audit["by_hypothesis_count"]["2"]["difference_between_extremes"] <= 1
+    assert all(details["difference_between_extremes"] <= 1 for details in audit["two_path_by_stratum"].values())
     assert audit["globally_balanced_within_one"] is True
 
 
