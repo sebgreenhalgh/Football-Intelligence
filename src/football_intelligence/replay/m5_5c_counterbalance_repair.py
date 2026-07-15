@@ -658,6 +658,9 @@ def _write_pack(
         diff.replace("PATH_A_CONTINUES_SOURCE", "[OLD_LABEL_A]")
         .replace("PATH_B_CONTINUES_SOURCE", "[OLD_LABEL_B]")
         .replace("PATH_C_CONTINUES_SOURCE", "[OLD_LABEL_C]")
+        .replace("m5_4h1_pc_", "[CANDIDATE_PREFIX]")
+        .replace("review_decisions.json", "[DECISION_STATE_FILE]")
+        .replace("server_mapping.json", "[SEALED_MAPPING_FILE]")
     )
     document("04_SOURCE_DIFF.patch", diff + ("\n" if diff and not diff.endswith("\n") else ""))
     document(
