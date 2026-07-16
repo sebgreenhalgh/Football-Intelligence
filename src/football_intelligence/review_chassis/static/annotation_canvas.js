@@ -148,14 +148,25 @@
     ) {
       errors.push("Select an anonymous detection box first.");
     }
-    if (decision === "DUPLICATE_OF_ANOTHER_DETECTION"
-      && caseData?.visible_metadata?.duplicate_counterpart_required === true) {
+    const configuredCounterpartDecisions = caseData?.visible_metadata?.counterpart_required_decisions;
+    const counterpartRequired = Array.isArray(configuredCounterpartDecisions)
+      ? configuredCounterpartDecisions.includes(decision)
+      : decision === "DUPLICATE_OF_ANOTHER_DETECTION"
+        && caseData?.visible_metadata?.duplicate_counterpart_required === true;
+    if (counterpartRequired) {
       const counterpart = Number(annotation.duplicate_counterpart_number);
       const target = Number(caseData.visible_metadata.target_anonymous_candidate_number);
       if (!Number.isFinite(counterpart) || counterpart < 1) {
         errors.push("Select an anonymous same-frame counterpart before marking a duplicate.");
       } else if (Number.isFinite(target) && counterpart === target) {
         errors.push("The duplicate counterpart must differ from the highlighted target.");
+      } else {
+        const targetFrame = Number(caseData.target_frame_sequence ?? caseData.visible_metadata.target_frame);
+        const candidatesByFrame = caseData.visible_metadata.safe_anonymous_candidates_by_frame || {};
+        const candidates = candidatesByFrame[String(targetFrame)] || caseData.visible_metadata.safe_anonymous_candidates || [];
+        const available = candidates.some((candidate) => Number(candidate.anonymous_candidate_number) === counterpart
+          && Number(candidate.frame_sequence) === targetFrame);
+        if (!available) errors.push("The counterpart must be one visible numbered candidate on the target frame.");
       }
     }
     if (annotation.partial_or_occluded === true) {

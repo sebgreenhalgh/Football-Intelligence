@@ -7,6 +7,9 @@ from pathlib import Path
 
 from football_intelligence.review_chassis.server import _sanitize_browser_payload
 from football_intelligence.review_chassis.spatial_annotations import scan_forbidden_browser_payload
+from football_intelligence.review_chassis.config import load_ui_config
+from football_intelligence.review_chassis.manifest import load_manifest
+from football_intelligence.review_chassis.persistence import GenericReviewPersistence
 
 
 ROOT = Path(r"C:\Users\sebgr\Documents\football-intelligence")
@@ -55,11 +58,20 @@ def test_reviewer_safe_browser_payload_has_no_canonical_ids_or_server_inventory(
     assert "visible_person_base_id" not in encoded
 
 
-def test_duplicate_decision_requires_anonymous_counterpart_and_no_history_ingestion() -> None:
+def test_duplicate_decision_requires_anonymous_counterpart_and_no_history_ingestion(tmp_path: Path) -> None:
     manifest = read_json(PACKAGE / "reviewer_manifest.json")
     assert all("DUPLICATE_OF_ANOTHER_DETECTION" in case["allowed_decisions"] for case in manifest["cases"])
     assert all(case["visible_metadata"]["duplicate_counterpart_required"] is True for case in manifest["cases"])
-    state = read_json(PACKAGE / "decisions" / "review_decisions.json")
+    # The completed historical package is immutable. Validate the fresh-root
+    # invariant using a temporary chassis state rather than its live history.
+    temporary_root = tmp_path / "empty_decisions"
+    persistence = GenericReviewPersistence(
+        manifest=load_manifest(PACKAGE / "reviewer_manifest.json"),
+        ui_config=load_ui_config(PACKAGE / "ui_config.json"),
+        decisions_root=temporary_root,
+        reviewer_session_id="test_empty_root",
+    )
+    state = persistence.ensure_state()
     assert state["decisions"] == {}
     assert "duplicate_counterpart_number" in (
         Path(
