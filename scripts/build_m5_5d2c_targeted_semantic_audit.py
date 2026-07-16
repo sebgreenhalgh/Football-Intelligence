@@ -101,7 +101,8 @@ SAFETY = {
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    # Historical Windows-generated manifests may carry a UTF-8 BOM.
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError(f"{path} must contain an object")
     return payload

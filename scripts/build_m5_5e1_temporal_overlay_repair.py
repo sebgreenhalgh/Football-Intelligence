@@ -1213,6 +1213,7 @@ def build_review_pack(
         "--",
         "scripts/build_m5_5e1_temporal_overlay_repair.py",
         "tests/test_m5_5e1_temporal_overlay_repair.py",
+        "scripts/build_m5_5d2c_targeted_semantic_audit.py",
     )
     if not source_diff:
         source_diff = git(
@@ -1239,6 +1240,7 @@ def build_review_pack(
             "# Source changes\n\n"
             "- `scripts/build_m5_5e1_temporal_overlay_repair.py`\n"
             "- `tests/test_m5_5e1_temporal_overlay_repair.py`\n\n"
+            "- Narrow UTF-8 BOM-safe loader correction in `scripts/build_m5_5d2c_targeted_semantic_audit.py`.\n\n"
             "Prior M5.5E artifacts remain read-only and are not committed.\n"
         ),
         "04_SOURCE_DIFF.patch": source_diff,
