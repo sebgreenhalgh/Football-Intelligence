@@ -196,6 +196,8 @@ class ReviewUIConfig(BaseModel):
     spatial_annotation_enabled: bool = False
     spatial_annotation_mode: str = "none"
     spatial_annotation_schema: dict[str, Any] = Field(default_factory=dict)
+    presentation_mode: str = "classic"
+    question_contract: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("decisions")
     @classmethod

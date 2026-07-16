@@ -7,40 +7,170 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <aside>
-    <header>
-      <h1 id="reviewTitle">Review</h1>
-      <p id="warning"></p>
+  <div id="legacyShell">
+    <aside>
+      <header>
+        <h1 id="reviewTitle">Review</h1>
+        <p id="warning"></p>
+      </header>
+      <div id="counts"></div>
+      <div id="caseList"></div>
+      <button id="prevBtn" type="button">Previous</button>
+      <button id="nextBtn" type="button">Next</button>
+      <button id="undoBtn" type="button">Undo</button>
+      <button id="completeBtn" type="button">Complete</button>
+      <button id="exportBtn" type="button">Export</button>
+      <div id="status"></div>
+    </aside>
+    <main>
+      <section class="question">
+        <h2 id="caseTitle"></h2>
+        <p id="instructions"></p>
+        <p id="question"></p>
+        <div id="decisionButtons"></div>
+      </section>
+      <section id="annotationPanel" class="hidden"></section>
+      <section id="assetPanels"></section>
+      <section id="metadataPanel"></section>
+      <details id="revealPanel">
+        <summary>Reveal hidden context</summary>
+        <pre id="hiddenMetadata"></pre>
+      </details>
+      <section id="notesPanel">
+        <label for="note">Notes</label>
+        <textarea id="note" rows="4"></textarea>
+      </section>
+      <pre id="exportBox" class="hidden"></pre>
+    </main>
+  </div>
+
+  <div id="premiumShell" class="premiumShell isHidden" aria-hidden="true">
+    <header class="premiumHeader">
+      <div class="brandBlock">
+        <span class="eyebrow">FOOTBALL INTELLIGENCE</span>
+        <h1 id="premiumReviewTitle">Temporal review</h1>
+      </div>
+      <div class="caseProgress" aria-live="polite">
+        <strong id="premiumCaseProgress">Case 1 of 20</strong>
+        <div class="progressTrack"><span id="premiumProgressBar"></span></div>
+      </div>
+      <nav class="headerActions" aria-label="Case navigation">
+        <button class="ghostButton" id="premiumPrev" type="button">Previous</button>
+        <button class="ghostButton" id="premiumNext" type="button">Next</button>
+        <span class="saveState" id="premiumSaveState" role="status">Unsaved</span>
+        <button class="iconButton" id="premiumHelp" type="button" aria-label="Open help">?</button>
+      </nav>
     </header>
-    <div id="counts"></div>
-    <div id="caseList"></div>
-    <button id="prevBtn" type="button">Previous</button>
-    <button id="nextBtn" type="button">Next</button>
-    <button id="undoBtn" type="button">Undo</button>
-    <button id="completeBtn" type="button">Complete</button>
-    <button id="exportBtn" type="button">Export</button>
-    <div id="status"></div>
-  </aside>
-  <main>
-    <section class="question">
-      <h2 id="caseTitle"></h2>
-      <p id="instructions"></p>
-      <p id="question"></p>
-      <div id="decisionButtons"></div>
-    </section>
-    <section id="annotationPanel" class="hidden"></section>
-    <section id="assetPanels"></section>
-    <section id="metadataPanel"></section>
-    <details id="revealPanel">
-      <summary>Reveal hidden context</summary>
-      <pre id="hiddenMetadata"></pre>
-    </details>
-    <section id="notesPanel">
-      <label for="note">Notes</label>
-      <textarea id="note" rows="4"></textarea>
-    </section>
-    <pre id="exportBox" class="hidden"></pre>
-  </main>
+
+    <main class="premiumMain">
+      <section class="viewerColumn" aria-label="Synchronized temporal evidence">
+        <div class="viewerHeader">
+          <div>
+            <span class="eyebrow">PRIMARY EVIDENCE</span>
+            <h2 id="premiumCaseTitle">Case 1</h2>
+            <p id="premiumQuestion" class="primaryQuestion"></p>
+          </div>
+          <div class="viewSwitch" role="group" aria-label="Viewer mode">
+            <button type="button" data-premium-view="focal" class="active">Focal encounter</button>
+            <button type="button" data-premium-view="panorama">Full panorama</button>
+          </div>
+        </div>
+
+        <div class="viewerCard">
+          <div class="viewerToolbar">
+            <div class="layerChips" role="group" aria-label="Overlay controls">
+              <label class="toggleChip"><input id="premiumObservedToggle" type="checkbox" checked><span>Observed detections</span></label>
+              <label class="toggleChip"><input id="premiumPredictedToggle" type="checkbox"><span>Predicted states</span></label>
+              <label class="toggleChip"><input id="premiumLabelsToggle" type="checkbox"><span>Labels</span></label>
+              <label class="toggleChip"><input id="premiumLocatorToggle" type="checkbox"><span>Locate encounter</span></label>
+            </div>
+            <span class="syncBadge" id="premiumSyncStatus">Synchronized</span>
+          </div>
+          <div id="premiumViewer" class="premiumViewer" tabindex="0" aria-label="Frame viewer. Use left and right arrows to step frames.">
+            <div id="premiumStage" class="premiumStage">
+              <img id="premiumBaseLayer" class="premiumLayer" alt="Clean temporal frame">
+              <img id="premiumObservedLayer" class="premiumLayer" alt="Observed detections">
+              <img id="premiumPredictedLayer" class="premiumLayer isHidden" alt="Predicted states">
+              <img id="premiumLabelsLayer" class="premiumLayer isHidden" alt="Detection labels">
+              <img id="premiumLocatorLayer" class="premiumLayer isHidden" alt="Encounter locator">
+              <div id="premiumEvidenceBlocker" class="evidenceBlocker isHidden" role="alert">Evidence unavailable for this frame.</div>
+            </div>
+            <div class="viewerReadout">
+              <strong id="premiumFrameReadout">Frame --</strong>
+              <span id="premiumTimeReadout">Time --</span>
+              <span class="phasePill" id="premiumPhaseReadout">BEFORE</span>
+            </div>
+          </div>
+          <div class="timelineWrap">
+            <div class="timelineLabels"><span>BEFORE</span><span>INTERVAL</span><span>AFTER</span></div>
+            <input id="premiumTimeline" class="premiumTimeline" type="range" min="0" max="1" value="0" aria-label="Temporal frame timeline">
+            <div class="timelineMarkerLabels"><span id="premiumBeforeMarker">Before</span><span id="premiumIntervalStartMarker">Interval start</span><span id="premiumIntervalMiddleMarker">Interval middle</span><span id="premiumIntervalEndMarker">Interval end</span><span id="premiumAfterMarker">After</span></div>
+          </div>
+          <div class="frameControls" role="group" aria-label="Frame controls">
+            <button type="button" data-premium-jump="start">Jump start</button>
+            <button type="button" data-premium-step="-1" aria-label="Previous frame">&#8592; Previous</button>
+            <button type="button" id="premiumPlay" aria-pressed="false">Play</button>
+            <button type="button" data-premium-step="1" aria-label="Next frame">Next &#8594;</button>
+            <button type="button" data-premium-jump="end">Jump end</button>
+            <span class="speedLabel">Speed</span>
+            <button type="button" data-premium-speed="0.5">0.5x</button>
+            <button type="button" data-premium-speed="1" class="activeSpeed">1x</button>
+            <button type="button" data-premium-speed="2">2x</button>
+          </div>
+          <div class="legendRow"><span><i class="legendSwatch observed"></i>Solid cyan = observed detection</span><span><i class="legendSwatch predicted"></i>Dashed amber = predicted state</span><span><i class="legendSwatch locator"></i>Gold locator = focal area only</span></div>
+        </div>
+        <details class="metadataDrawer">
+          <summary>Evidence details</summary>
+          <div id="premiumMetadata" class="metadataGrid"></div>
+        </details>
+      </section>
+
+      <aside class="reviewColumn" aria-label="Review decision panel">
+        <div class="taskCard">
+          <span class="eyebrow">REVIEW TASK</span>
+          <p>You are not identifying people, assigning slots, correcting every detector box, interpreting track IDs, or judging whether a spatial rectangle follows a person.</p>
+        </div>
+        <form id="premiumReviewForm" novalidate>
+          <fieldset class="evidenceQuestion" data-question="incoming_people_supported">
+            <legend><span class="questionNumber">1</span> Before the interval, are at least two distinct people independently visible?</legend>
+            <div class="radioGrid"><label><input type="radio" name="incoming_people_supported" value="yes">Yes</label><label><input type="radio" name="incoming_people_supported" value="no">No</label><label><input type="radio" name="incoming_people_supported" value="unclear">Unclear</label></div>
+            <p class="helper">Look for two separately visible people across more than one frame.</p>
+          </fieldset>
+          <fieldset class="evidenceQuestion" data-question="during_state">
+            <legend><span class="questionNumber">2</span> What happens during the interval?</legend>
+            <div class="radioStack"><label><input type="radio" name="during_state" value="both_remain_independently_visible">Both remain independently visible</label><label><input type="radio" name="during_state" value="one_person_becomes_missing">One person becomes missing</label><label><input type="radio" name="during_state" value="one_shared_or_merged_observation">One shared or merged observation covers multiple people</label><label><input type="radio" name="during_state" value="partial_body_or_fragment_only">Only a partial body or fragment remains</label><label><input type="radio" name="during_state" value="other_two_to_one_collapse">Two people collapse into one observation in another way</label><label><input type="radio" name="during_state" value="detector_duplicate_or_false_positive_artifact">Detector duplicate or false-positive artifact</label><label><input type="radio" name="during_state" value="unclear">Unclear</label></div>
+          </fieldset>
+          <fieldset class="evidenceQuestion" data-question="outgoing_people_supported">
+            <legend><span class="questionNumber">3</span> After the interval, are at least two distinct people independently visible again?</legend>
+            <div class="radioGrid"><label><input type="radio" name="outgoing_people_supported" value="yes">Yes</label><label><input type="radio" name="outgoing_people_supported" value="no">No</label><label><input type="radio" name="outgoing_people_supported" value="unclear">Unclear</label></div>
+          </fieldset>
+          <fieldset class="evidenceQuestion" data-question="path_continuity_plausible">
+            <legend><span class="questionNumber">4</span> Is it visually plausible that the incoming paths continue into the outgoing paths?</legend>
+            <div class="radioGrid"><label><input type="radio" name="path_continuity_plausible" value="yes">Yes</label><label><input type="radio" name="path_continuity_plausible" value="no">No</label><label><input type="radio" name="path_continuity_plausible" value="unclear">Unclear</label></div>
+            <p class="helper">Exact incoming-to-outgoing identity mapping is not required.</p>
+          </fieldset>
+          <section class="conclusionCard" aria-live="polite">
+            <div class="conclusionHeader"><span class="eyebrow">DERIVED CONCLUSION</span><span id="premiumSuggestionState" class="suggestionState">Answer the questions</span></div>
+            <h3 id="premiumSuggestionTitle">Complete the four evidence questions</h3>
+            <p id="premiumSuggestionReason">The viewer will suggest a human-facing conclusion after the evidence answers are complete.</p>
+            <label for="premiumConclusion">Conclusion</label>
+            <select id="premiumConclusion"><option value="">Select after answering</option><option value="G">G - Genuine observation-deficit interval</option><option value="O">O - Ordinary crossing; observations remain independent</option><option value="X">X - Detector or duplicate artifact</option><option value="I">I - Insufficient incoming evidence</option><option value="P">P - Insufficient outgoing evidence</option><option value="U">U - Unresolved</option></select>
+            <div id="premiumSubtypeWrap" class="isHidden"><label for="premiumSubtype">Genuine subtype</label><select id="premiumSubtype"><option value="">Select subtype</option><option value="two_to_one_collapse">Two-to-one collapse</option><option value="observed_missing_observed">Observed-missing-observed</option><option value="shared_or_merged_observation">Shared or merged observation</option><option value="partial_or_fragment_observation">Partial or fragment observation</option></select></div>
+            <div id="premiumOverrideWrap" class="isHidden"><label for="premiumOverrideReason">Brief override reason</label><input id="premiumOverrideReason" type="text" maxlength="240" autocomplete="off"></div>
+            <label class="confirmCheck"><input id="premiumConfirm" type="checkbox"> I confirm this conclusion reflects what I saw.</label>
+          </section>
+          <label class="noteLabel" for="premiumNote">Briefly describe what you saw before, during and after.</label>
+          <textarea id="premiumNote" rows="4" maxlength="1000" placeholder="One concise note is required."></textarea>
+          <details class="advancedDrawer"><summary>Advanced annotation - normally not needed</summary><div class="advancedContent"><p>Optional corrections are retained in original-image pixels and never required for a normal review.</p><label>Interval start frame<input id="premiumAnnotationStart" type="number"></label><label>Interval end frame<input id="premiumAnnotationEnd" type="number"></label><label>Merge region note<input id="premiumMergeRegion" type="text" maxlength="240"></label></div></details>
+          <div id="premiumError" class="formError isHidden" role="alert"></div>
+          <button id="premiumSaveNext" class="saveNext" type="submit">Save &amp; Next</button>
+        </form>
+        <button id="premiumComplete" class="completeReview" type="button" disabled>Complete review</button>
+      </aside>
+    </main>
+    <div id="premiumHelpDialog" class="helpDialog isHidden" role="dialog" aria-modal="true" aria-labelledby="premiumHelpTitle"><div class="helpDialogCard"><button id="premiumHelpClose" class="iconButton closeHelp" type="button" aria-label="Close help">&#10005;</button><h2 id="premiumHelpTitle">How to review</h2><p>Step through the one viewer or play the interval. Observed detections are solid cyan; predictions are dashed amber and off by default. Answer the four questions, confirm the suggested conclusion, add one concise note, then save.</p><p>Keyboard: Left/Right step frames, Space play/pause, Shift+Left/Shift+Right jump phases, Escape close help.</p></div></div>
+  </div>
+
   <script src="/annotation_canvas.js"></script>
   <script src="/app.js"></script>
 </body>

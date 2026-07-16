@@ -91,6 +91,7 @@ class GenericReviewPersistence:
             "event_sequence": 0,
             "decisions": {},
             "notes": {},
+            "structured_reviews": {},
             "reveal_state": {},
             "server_reveal_payloads": {},
             "last_viewed_case_id": None,
@@ -213,6 +214,7 @@ class GenericReviewPersistence:
         note: str | None = None,
         input_source: str = "unknown",
         reveal_state: dict[str, Any] | None = None,
+        structured_review: dict[str, Any] | None = None,
         last_viewed_case_id: str | None = None,
         elapsed_active_seconds: int | None = None,
     ) -> dict[str, Any]:
@@ -226,6 +228,10 @@ class GenericReviewPersistence:
         state["decisions"][case_id] = decision
         if note is not None:
             state.setdefault("notes", {})[case_id] = note
+        if structured_review is not None:
+            if not isinstance(structured_review, dict):
+                raise ValueError("structured_review must be an object")
+            state.setdefault("structured_reviews", {})[case_id] = structured_review
         if reveal_state is not None:
             state.setdefault("reveal_state", {})[case_id] = reveal_state
         if last_viewed_case_id:
@@ -244,6 +250,7 @@ class GenericReviewPersistence:
             extra={
                 "last_viewed_case_id": state.get("last_viewed_case_id"),
                 "elapsed_active_seconds": state.get("elapsed_active_seconds"),
+                "structured_review": structured_review,
             },
         )
         return self._persist(state, event)

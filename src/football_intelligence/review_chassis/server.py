@@ -152,6 +152,9 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                         note=body.get("note"),
                         input_source=str(body.get("input_source", "unknown")),
                         reveal_state=body.get("reveal_state") if isinstance(body.get("reveal_state"), dict) else None,
+                        structured_review=body.get("structured_review")
+                        if isinstance(body.get("structured_review"), dict)
+                        else None,
                         last_viewed_case_id=body.get("last_viewed_case_id"),
                         elapsed_active_seconds=body.get("elapsed_active_seconds"),
                     ),

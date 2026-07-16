@@ -6,6 +6,15 @@ let elapsedSeconds = 0;
 let timerStarted = Date.now();
 let activeAnnotationEditor = null;
 const frameStepper = {};
+let premiumMode = false;
+let premiumInitialized = false;
+const premiumFrames = {};
+const premiumDrafts = {};
+let premiumView = "focal";
+let premiumPlaying = false;
+let premiumSpeed = 1;
+let premiumPlayTimer = null;
+let premiumRenderToken = 0;
 
 const $ = (id) => document.getElementById(id);
 const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -506,6 +515,7 @@ function decisionForKey(key) {
 }
 
 document.addEventListener("keydown", (event) => {
+  if (premiumMode) return;
   if (isTyping()) {
     if (event.key === "Escape") document.activeElement.blur();
     return;
@@ -596,10 +606,419 @@ setInterval(() => {
   timerStarted = Date.now();
 }, 1000);
 
+function premiumCase() {
+  return manifest.cases[activeIndex];
+}
+
+function premiumDraftKey(caseData) {
+  return `m5_5e2_draft_${manifest.review_id}_${caseData.case_id}`;
+}
+
+function premiumDefaultDraft() {
+  return {
+    answers: {},
+    conclusion: "",
+    subtype: "",
+    overrideReason: "",
+    confirmed: false,
+    note: "",
+    annotation: {},
+  };
+}
+
+function premiumGetDraft(caseData) {
+  if (premiumDrafts[caseData.case_id]) return premiumDrafts[caseData.case_id];
+  const saved = localStorage.getItem(premiumDraftKey(caseData));
+  try {
+    premiumDrafts[caseData.case_id] = {...premiumDefaultDraft(), ...(saved ? JSON.parse(saved) : {})};
+  } catch {
+    premiumDrafts[caseData.case_id] = premiumDefaultDraft();
+  }
+  return premiumDrafts[caseData.case_id];
+}
+
+function premiumSaveDraft(caseData) {
+  localStorage.setItem(premiumDraftKey(caseData), JSON.stringify(premiumGetDraft(caseData)));
+  $("premiumSaveState").textContent = "Unsaved";
+  $("premiumSaveState").className = "saveState unsaved";
+}
+
+function premiumEvidenceAssets(caseData) {
+  return Object.fromEntries(caseData.evidence_assets.map((item) => [item.asset_id, item]));
+}
+
+function premiumRecord(caseData) {
+  const records = caseData.visible_metadata?.frame_records || [];
+  return records[Math.max(0, Math.min(premiumFrames[caseData.case_id] || 0, records.length - 1))];
+}
+
+function premiumFrameIndex(caseData) {
+  const records = caseData.visible_metadata?.frame_records || [];
+  premiumFrames[caseData.case_id] = Math.max(0, Math.min(premiumFrames[caseData.case_id] || 0, Math.max(0, records.length - 1)));
+  return premiumFrames[caseData.case_id];
+}
+
+function premiumAssetUrl(caseData, assetId) {
+  const asset = premiumEvidenceAssets(caseData)[assetId];
+  return asset ? evidenceUrl(caseData.case_id, asset.relative_path) : "";
+}
+
+function premiumSetStatus(text, kind = "") {
+  const target = $("premiumSaveState");
+  target.textContent = text;
+  target.className = `saveState ${kind}`.trim();
+}
+
+function premiumAnswerValues(caseData) {
+  const draft = premiumGetDraft(caseData);
+  return draft.answers || {};
+}
+
+function premiumCollectAnswers(caseData) {
+  const answers = {};
+  document.querySelectorAll("#premiumReviewForm input[type=radio]:checked").forEach((input) => {
+    answers[input.name] = input.value;
+  });
+  premiumGetDraft(caseData).answers = answers;
+  return answers;
+}
+
+function premiumSuggestion(answers) {
+  if (answers.incoming_people_supported === "no") return {code: "I", reason: "The before evidence does not support two independently visible people."};
+  if (answers.incoming_people_supported === "unclear") return {code: "U", reason: "The before evidence is not decisive enough for a supported precondition."};
+  if (answers.during_state === "both_remain_independently_visible") return {code: "O", reason: "Both people remain independently visible during the interval."};
+  if (answers.during_state === "detector_duplicate_or_false_positive_artifact") return {code: "X", reason: "The during evidence is more consistent with a detector or duplicate artifact."};
+  if (answers.outgoing_people_supported === "no") return {code: "P", reason: "The after evidence does not support two independently visible people again."};
+  if (answers.outgoing_people_supported === "unclear" || answers.path_continuity_plausible === "unclear") return {code: "U", reason: "One or more required after or continuity answers remains unclear."};
+  if (answers.path_continuity_plausible === "no") return {code: "U", reason: "The incoming and outgoing paths are not visually plausible as a continuation."};
+  const subtype = {
+    one_person_becomes_missing: "observed_missing_observed",
+    one_shared_or_merged_observation: "shared_or_merged_observation",
+    partial_body_or_fragment_only: "partial_or_fragment_observation",
+    other_two_to_one_collapse: "two_to_one_collapse",
+  }[answers.during_state];
+  if (answers.incoming_people_supported === "yes" && answers.outgoing_people_supported === "yes" && subtype) return {code: "G", subtype, reason: "The before, during, after and continuity answers support a genuine observation-deficit interval."};
+  return {code: "U", reason: "The four answers do not support a more specific conclusion."};
+}
+
+function premiumConclusionLabel(code) {
+  return ({G: "G - Genuine observation-deficit interval", O: "O - Ordinary crossing; observations remain independent", X: "X - Detector or duplicate artifact", I: "I - Insufficient incoming evidence", P: "P - Insufficient outgoing evidence", U: "U - Unresolved"})[code] || "Select after answering";
+}
+
+function premiumCanonicalLabel(code, subtype) {
+  if (code === "G") return ({two_to_one_collapse: "GENUINE_TWO_TO_ONE_COLLAPSE", observed_missing_observed: "GENUINE_OBSERVED_MISSING_OBSERVED", shared_or_merged_observation: "GENUINE_MERGED_OBSERVATION_INTERVAL", partial_or_fragment_observation: "PARTIAL_FRAGMENT_OBSERVATION_DEFICIT"})[subtype] || "";
+  return ({O: "ORDINARY_CROSSING_INDEPENDENT_OBSERVATIONS_REMAIN", X: "DETECTOR_DUPLICATE_OR_FALSE_POSITIVE_ARTIFACT", I: "INSUFFICIENT_INCOMING_PRECONDITION", P: "INSUFFICIENT_OUTGOING_POSTCONDITION", U: "EVIDENCE_UNRESOLVED"})[code] || "";
+}
+
+function premiumRenderQuestions(caseData) {
+  const values = premiumAnswerValues(caseData);
+  document.querySelectorAll("#premiumReviewForm input[type=radio]").forEach((input) => {
+    input.checked = values[input.name] === input.value;
+  });
+  const draft = premiumGetDraft(caseData);
+  $("premiumNote").value = draft.note || "";
+  $("premiumConclusion").value = draft.conclusion || "";
+  $("premiumSubtype").value = draft.subtype || "";
+  $("premiumOverrideReason").value = draft.overrideReason || "";
+  $("premiumConfirm").checked = draft.confirmed === true;
+  $("premiumAnnotationStart").value = draft.annotation?.start_frame ?? "";
+  $("premiumAnnotationEnd").value = draft.annotation?.end_frame ?? "";
+  $("premiumMergeRegion").value = draft.annotation?.merge_region ?? "";
+  premiumRenderSuggestion(caseData);
+}
+
+function premiumRenderSuggestion(caseData) {
+  const draft = premiumGetDraft(caseData);
+  const answers = premiumAnswerValues(caseData);
+  const required = ["incoming_people_supported", "during_state", "outgoing_people_supported", "path_continuity_plausible"];
+  const complete = required.every((key) => answers[key]);
+  const suggestion = complete ? premiumSuggestion(answers) : null;
+  const selected = draft.conclusion || suggestion?.code || "";
+  $("premiumSuggestionTitle").textContent = suggestion ? `Suggested: ${premiumConclusionLabel(suggestion.code)}` : "Complete the four evidence questions";
+  $("premiumSuggestionReason").textContent = suggestion?.reason || "The viewer will suggest a human-facing conclusion after the evidence answers are complete.";
+  $("premiumSuggestionState").textContent = suggestion ? (draft.confirmed ? "Confirmed" : "Confirmation required") : "Answer the questions";
+  $("premiumSuggestionState").className = `suggestionState ${draft.confirmed ? "confirmed" : ""}`;
+  if (suggestion && !draft.conclusion) {
+    draft.conclusion = suggestion.code;
+    draft.subtype = suggestion.subtype || "";
+  }
+  $("premiumConclusion").value = selected;
+  $("premiumSubtypeWrap").classList.toggle("isHidden", selected !== "G");
+  $("premiumOverrideWrap").classList.toggle("isHidden", !suggestion || selected === suggestion.code);
+  if (selected === "G" && !draft.subtype && suggestion?.subtype) {
+    draft.subtype = suggestion.subtype;
+    $("premiumSubtype").value = draft.subtype;
+  }
+}
+
+function premiumApplyView() {
+  const stage = $("premiumStage");
+  stage.dataset.view = premiumView;
+  const caseData = premiumCase();
+  const region = caseData.visible_metadata?.focal_region || {};
+  const width = Number(caseData.visible_metadata?.source_width || 2730);
+  const height = Number(caseData.visible_metadata?.source_height || 720);
+  const rw = Math.max(1, Number(region.x2 || width * 0.3) - Number(region.x1 || width * 0.2));
+  const rh = Math.max(1, Number(region.y2 || height * 0.8) - Number(region.y1 || height * 0.2));
+  const scale = Math.min(3.2, Math.max(1.35, Math.min(width / rw, height / rh) * 0.82));
+  const cx = ((Number(region.x1 || width / 2) + Number(region.x2 || width / 2)) / 2) / width;
+  const cy = ((Number(region.y1 || height / 2) + Number(region.y2 || height / 2)) / 2) / height;
+  stage.style.setProperty("--focal-scale", String(premiumView === "focal" ? scale : 1));
+  stage.style.setProperty("--focal-shift-x", `${(0.5 - cx) * 100}%`);
+  stage.style.setProperty("--focal-shift-y", `${(0.5 - cy) * 100}%`);
+  document.querySelectorAll("[data-premium-view]").forEach((button) => button.classList.toggle("active", button.dataset.premiumView === premiumView));
+  $("premiumLocatorToggle").disabled = premiumView !== "panorama";
+  if (premiumView !== "panorama") $("premiumLocatorToggle").checked = false;
+}
+
+function premiumSetLayerVisibility() {
+  const predicted = $("premiumPredictedToggle").checked;
+  const labels = $("premiumLabelsToggle").checked;
+  const locator = $("premiumLocatorToggle").checked && premiumView === "panorama";
+  $("premiumObservedLayer").classList.toggle("isHidden", !$("premiumObservedToggle").checked);
+  $("premiumPredictedLayer").classList.toggle("isHidden", !predicted);
+  $("premiumLabelsLayer").classList.toggle("isHidden", !labels);
+  $("premiumLocatorLayer").classList.toggle("isHidden", !locator);
+}
+
+function premiumPrimeFrame(caseData) {
+  const record = premiumRecord(caseData);
+  if (!record) return;
+  const assets = premiumEvidenceAssets(caseData);
+  const base = assets[record.assets.base];
+  const observed = assets[record.assets.observed];
+  if (base) $("premiumBaseLayer").src = premiumAssetUrl(caseData, base.asset_id);
+  if (observed) $("premiumObservedLayer").src = premiumAssetUrl(caseData, observed.asset_id);
+}
+
+async function premiumLoadFrame(caseData) {
+  const record = premiumRecord(caseData);
+  if (!record) return;
+  const assets = premiumEvidenceAssets(caseData);
+  const enabled = ["base", "observed", "predicted", "labels", "locator"].filter((layer) => {
+    if (layer === "predicted") return $("premiumPredictedToggle").checked;
+    if (layer === "labels") return $("premiumLabelsToggle").checked;
+    if (layer === "locator") return $("premiumLocatorToggle").checked && premiumView === "panorama";
+    return true;
+  });
+  const token = ++premiumRenderToken;
+  $("premiumSyncStatus").textContent = "Checking frame...";
+  const loaded = await Promise.all(enabled.map((layer) => new Promise((resolve, reject) => {
+    const item = assets[record.assets[layer]];
+    if (!item) return reject(new Error(`${layer} layer is unavailable`));
+    const image = new Image();
+    image.onload = () => resolve({layer, image, item});
+    image.onerror = () => reject(new Error(`${layer} image failed to load`));
+    image.src = premiumAssetUrl(caseData, item.asset_id);
+  })));
+  if (token !== premiumRenderToken) return;
+  const width = loaded[0].image.naturalWidth;
+  const height = loaded[0].image.naturalHeight;
+  if (loaded.some((item) => item.image.naturalWidth !== width || item.image.naturalHeight !== height)) throw new Error("enabled evidence layers have mismatched dimensions");
+  const targets = {base: $("premiumBaseLayer"), observed: $("premiumObservedLayer"), predicted: $("premiumPredictedLayer"), labels: $("premiumLabelsLayer"), locator: $("premiumLocatorLayer")};
+  loaded.forEach(({layer, item}) => { targets[layer].src = premiumAssetUrl(caseData, item.asset_id); targets[layer].dataset.frame = String(record.frame_sequence); targets[layer].dataset.timestamp = String(record.timestamp_seconds); });
+  $("premiumEvidenceBlocker").classList.add("isHidden");
+  $("premiumSyncStatus").textContent = "Synchronized";
+  $("premiumFrameReadout").textContent = `Frame ${record.frame_sequence}`;
+  $("premiumTimeReadout").textContent = `Time ${Number(record.timestamp_seconds).toFixed(1)}s`;
+  $("premiumPhaseReadout").textContent = record.phase;
+  $("premiumTimeline").value = String(premiumFrameIndex(caseData));
+  premiumApplyView();
+  premiumSetLayerVisibility();
+}
+
+function premiumRenderMetadata(caseData) {
+  const metadata = caseData.visible_metadata || {};
+  const interval = metadata.candidate_interval || {};
+  const frames = metadata.frame_window || {};
+  const records = metadata.frame_records || [];
+  const timestamps = records.length ? [records[0].timestamp_seconds, records[records.length - 1].timestamp_seconds] : [];
+  $("premiumMetadata").innerHTML = `<div><span>Frames</span><strong>${frames.start ?? "-"}-${frames.end ?? "-"}</strong></div><div><span>Candidate interval</span><strong>${interval.start ?? "-"}-${interval.end ?? "-"}</strong></div><div><span>Time</span><strong>${timestamps.length ? `${Number(timestamps[0]).toFixed(1)}-${Number(timestamps[1]).toFixed(1)} seconds` : "-"}</strong></div><div><span>Source</span><strong>${metadata.source_rate || "canonical 10 FPS"}</strong></div>`;
+}
+
+function premiumRenderTimeline(caseData) {
+  const records = caseData.visible_metadata?.frame_records || [];
+  const phases = {BEFORE: [], INTERVAL: [], AFTER: []};
+  records.forEach((record, index) => phases[record.phase]?.push(index));
+  const marker = (id, phase, fallback) => { const values = phases[phase] || []; $(id).style.left = `${100 * (values[0] ?? fallback) / Math.max(1, records.length - 1)}%`; };
+  marker("premiumBeforeMarker", "BEFORE", 0);
+  marker("premiumIntervalStartMarker", "INTERVAL", Math.floor(records.length / 2));
+  marker("premiumIntervalMiddleMarker", "INTERVAL", Math.floor(records.length / 2));
+  const interval = phases.INTERVAL || [];
+  $("premiumIntervalEndMarker").style.left = `${100 * (interval[interval.length - 1] ?? Math.floor(records.length / 2)) / Math.max(1, records.length - 1)}%`;
+  marker("premiumAfterMarker", "AFTER", records.length - 1);
+}
+
+function premiumRender() {
+  if (!premiumMode || !manifest) return;
+  const caseData = premiumCase();
+  premiumFrameIndex(caseData);
+  const reviewed = Object.keys(state?.decisions || {}).length;
+  $("premiumReviewTitle").textContent = uiConfig.review_title || "Simplified temporal review";
+  $("premiumCaseProgress").textContent = `Case ${activeIndex + 1} of ${manifest.cases.length}`;
+  $("premiumProgressBar").style.width = `${100 * reviewed / Math.max(1, manifest.cases.length)}%`;
+  $("premiumCaseTitle").textContent = `Case ${activeIndex + 1}`;
+  $("premiumQuestion").textContent = uiConfig.question_contract?.primary_question || "Review the synchronized before, during and after evidence.";
+  $("premiumComplete").disabled = reviewed < manifest.cases.length;
+  premiumRenderQuestions(caseData);
+  premiumRenderMetadata(caseData);
+  premiumRenderTimeline(caseData);
+  premiumApplyView();
+  premiumSetLayerVisibility();
+  premiumPrimeFrame(caseData);
+  premiumLoadFrame(caseData).catch((error) => {
+    $("premiumEvidenceBlocker").textContent = `Evidence unavailable: ${error.message}`;
+    $("premiumEvidenceBlocker").classList.remove("isHidden");
+    $("premiumSyncStatus").textContent = "Evidence blocked";
+  });
+  window.setTimeout(() => {
+    if ($( "premiumBaseLayer").naturalWidth === 0 && premiumCase()?.case_id === caseData.case_id) {
+      premiumLoadFrame(caseData).catch(() => {});
+    }
+  }, 350);
+}
+
+function premiumGo(delta) {
+  activeIndex = Math.max(0, Math.min(manifest.cases.length - 1, activeIndex + delta));
+  premiumPlaying = false;
+  clearInterval(premiumPlayTimer);
+  $("premiumPlay").textContent = "Play";
+  premiumRender();
+}
+
+function premiumStep(delta) {
+  const caseData = premiumCase();
+  const count = (caseData.visible_metadata?.frame_records || []).length;
+  premiumFrames[caseData.case_id] = Math.max(0, Math.min(count - 1, premiumFrameIndex(caseData) + delta));
+  premiumLoadFrame(caseData).catch(() => {});
+}
+
+function premiumJump(phase) {
+  const records = premiumCase().visible_metadata?.frame_records || [];
+  const index = phase === "start" ? 0 : records.length - 1;
+  const target = phase === "start" ? records.findIndex((item) => item.phase === "BEFORE") : [...records].reverse().findIndex((item) => item.phase === "AFTER");
+  premiumFrames[premiumCase().case_id] = target >= 0 ? (phase === "start" ? target : records.length - 1 - target) : index;
+  premiumLoadFrame(premiumCase()).catch(() => {});
+}
+
+function premiumJumpPhase(delta) {
+  const records = premiumCase().visible_metadata?.frame_records || [];
+  const current = records[premiumFrameIndex(premiumCase())]?.phase;
+  const order = ["BEFORE", "INTERVAL", "AFTER"];
+  const next = order[Math.max(0, Math.min(order.length - 1, order.indexOf(current) + delta))];
+  const index = records.findIndex((item) => item.phase === next);
+  if (index >= 0) { premiumFrames[premiumCase().case_id] = index; premiumLoadFrame(premiumCase()).catch(() => {}); }
+}
+
+function premiumTogglePlay() {
+  premiumPlaying = !premiumPlaying;
+  $("premiumPlay").textContent = premiumPlaying ? "Pause" : "Play";
+  $("premiumPlay").setAttribute("aria-pressed", String(premiumPlaying));
+  clearInterval(premiumPlayTimer);
+  if (premiumPlaying) premiumPlayTimer = setInterval(() => {
+    const records = premiumCase().visible_metadata?.frame_records || [];
+    if (premiumFrameIndex(premiumCase()) >= records.length - 1) { premiumPlaying = false; clearInterval(premiumPlayTimer); $("premiumPlay").textContent = "Play"; return; }
+    premiumStep(1);
+  }, 300 / premiumSpeed);
+}
+
+function premiumValidateDraft(caseData) {
+  const draft = premiumGetDraft(caseData);
+  const required = ["incoming_people_supported", "during_state", "outgoing_people_supported", "path_continuity_plausible"];
+  const errors = [];
+  if (!required.every((key) => draft.answers?.[key])) errors.push("Answer all four evidence questions.");
+  if (!draft.conclusion) errors.push("Choose the suggested conclusion or an override.");
+  if (draft.conclusion === "G" && !draft.subtype) errors.push("Choose a genuine subtype.");
+  const suggestion = premiumSuggestion(draft.answers || {});
+  if (suggestion && draft.conclusion !== suggestion.code && !String(draft.overrideReason || "").trim()) errors.push("Add a brief reason for overriding the suggestion.");
+  if (!draft.confirmed) errors.push("Confirm the conclusion before saving.");
+  if (!String(draft.note || "").trim()) errors.push("Add one concise note describing before, during and after.");
+  return errors;
+}
+
+async function premiumSaveAndNext(event) {
+  event.preventDefault();
+  const caseData = premiumCase();
+  const draft = premiumGetDraft(caseData);
+  premiumCollectAnswers(caseData);
+  draft.note = $("premiumNote").value;
+  draft.conclusion = $("premiumConclusion").value;
+  draft.subtype = $("premiumSubtype").value;
+  draft.overrideReason = $("premiumOverrideReason").value;
+  draft.confirmed = $("premiumConfirm").checked;
+  draft.annotation = {start_frame: $("premiumAnnotationStart").value || null, end_frame: $("premiumAnnotationEnd").value || null, merge_region: $("premiumMergeRegion").value || null};
+  const errors = premiumValidateDraft(caseData);
+  if (errors.length) { $("premiumError").textContent = errors.join(" "); $("premiumError").classList.remove("isHidden"); return; }
+  $("premiumError").classList.add("isHidden");
+  const canonical = premiumCanonicalLabel(draft.conclusion, draft.subtype);
+  if (!canonical) { $("premiumError").textContent = "The conclusion could not be mapped safely."; $("premiumError").classList.remove("isHidden"); return; }
+  const structuredReview = {answers: draft.answers, suggested_conclusion: premiumSuggestion(draft.answers).code, confirmed_conclusion: draft.conclusion, canonical_label: canonical, genuine_subtype: draft.conclusion === "G" ? draft.subtype : null, override_reason: draft.conclusion === premiumSuggestion(draft.answers).code ? null : draft.overrideReason.trim(), note: draft.note.trim(), optional_annotation: draft.annotation};
+  premiumSetStatus("Saving", "saving");
+  $("premiumSaveNext").disabled = true;
+  try {
+    state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({case_id: caseData.case_id, decision: canonical, note: draft.note.trim(), structured_review: structuredReview, input_source: "save_and_next", last_viewed_case_id: caseData.case_id})});
+    localStorage.removeItem(premiumDraftKey(caseData));
+    delete premiumDrafts[caseData.case_id];
+    premiumSetStatus("Saved", "saved");
+    if (activeIndex < manifest.cases.length - 1) activeIndex += 1;
+    premiumRender();
+  } catch (error) {
+    premiumSetStatus("Error", "error");
+    $("premiumError").textContent = `Save failed: ${error.message}`;
+    $("premiumError").classList.remove("isHidden");
+  } finally {
+    $("premiumSaveNext").disabled = false;
+  }
+}
+
+function premiumBind() {
+  if (premiumInitialized) return;
+  premiumInitialized = true;
+  document.querySelectorAll("[data-premium-view]").forEach((button) => button.addEventListener("click", () => { premiumView = button.dataset.premiumView; premiumApplyView(); premiumSetLayerVisibility(); premiumLoadFrame(premiumCase()).catch(() => {}); }));
+  document.querySelectorAll("[data-premium-step]").forEach((button) => button.addEventListener("click", () => premiumStep(Number(button.dataset.premiumStep))));
+  document.querySelectorAll("[data-premium-jump]").forEach((button) => button.addEventListener("click", () => premiumJump(button.dataset.premiumJump)));
+  document.querySelectorAll("[data-premium-speed]").forEach((button) => button.addEventListener("click", () => { premiumSpeed = Number(button.dataset.premiumSpeed); document.querySelectorAll("[data-premium-speed]").forEach((item) => item.classList.toggle("activeSpeed", item === button)); if (premiumPlaying) { premiumTogglePlay(); premiumTogglePlay(); } }));
+  $("premiumPlay").addEventListener("click", premiumTogglePlay);
+  $("premiumPrev").addEventListener("click", () => premiumGo(-1));
+  $("premiumNext").addEventListener("click", () => premiumGo(1));
+  $("premiumTimeline").addEventListener("input", (event) => { premiumFrames[premiumCase().case_id] = Number(event.target.value); premiumLoadFrame(premiumCase()).catch(() => {}); });
+  ["premiumObservedToggle", "premiumPredictedToggle", "premiumLabelsToggle", "premiumLocatorToggle"].forEach((id) => $(id).addEventListener("change", () => { premiumSetLayerVisibility(); premiumLoadFrame(premiumCase()).catch(() => {}); }));
+  $("premiumReviewForm").addEventListener("change", () => { const draft = premiumGetDraft(premiumCase()); premiumCollectAnswers(premiumCase()); premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
+  $("premiumReviewForm").addEventListener("input", () => { const draft = premiumGetDraft(premiumCase()); draft.note = $("premiumNote").value; draft.overrideReason = $("premiumOverrideReason").value; draft.annotation = {start_frame: $("premiumAnnotationStart").value || null, end_frame: $("premiumAnnotationEnd").value || null, merge_region: $("premiumMergeRegion").value || null}; premiumSaveDraft(premiumCase()); });
+  $("premiumConclusion").addEventListener("change", () => { premiumGetDraft(premiumCase()).conclusion = $("premiumConclusion").value; premiumGetDraft(premiumCase()).confirmed = false; premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
+  $("premiumSubtype").addEventListener("change", () => { premiumGetDraft(premiumCase()).subtype = $("premiumSubtype").value; premiumGetDraft(premiumCase()).confirmed = false; premiumSaveDraft(premiumCase()); });
+  $("premiumConfirm").addEventListener("change", () => { premiumGetDraft(premiumCase()).confirmed = $("premiumConfirm").checked; premiumSaveDraft(premiumCase()); });
+  $("premiumReviewForm").addEventListener("submit", premiumSaveAndNext);
+  $("premiumComplete").addEventListener("click", async () => { try { state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({})}); premiumSetStatus("Completed", "saved"); } catch (error) { $("premiumError").textContent = `Completion blocked: ${error.message}`; $("premiumError").classList.remove("isHidden"); } });
+  $("premiumHelp").addEventListener("click", () => $("premiumHelpDialog").classList.remove("isHidden"));
+  $("premiumHelpClose").addEventListener("click", () => $("premiumHelpDialog").classList.add("isHidden"));
+  $("premiumHelpDialog").addEventListener("click", (event) => { if (event.target === $("premiumHelpDialog")) $("premiumHelpDialog").classList.add("isHidden"); });
+  document.addEventListener("keydown", (event) => {
+    if (!premiumMode) return;
+    if (event.key === "Escape") { $("premiumHelpDialog").classList.add("isHidden"); return; }
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
+    if (event.key === "ArrowLeft" && event.shiftKey) { event.preventDefault(); premiumJumpPhase(-1); }
+    else if (event.key === "ArrowRight" && event.shiftKey) { event.preventDefault(); premiumJumpPhase(1); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); premiumStep(-1); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); premiumStep(1); }
+    else if (event.key === " ") { event.preventDefault(); premiumTogglePlay(); }
+  });
+}
+
 async function load() {
   manifest = await api("/api/review/manifest");
   uiConfig = await api("/api/review/ui-config");
   state = await api("/api/review/state");
+  premiumMode = uiConfig.presentation_mode === "simplified_temporal";
+  if (premiumMode) {
+    document.body.dataset.presentation = "simplified_temporal";
+    $("legacyShell").classList.add("isHidden");
+    $("premiumShell").classList.remove("isHidden");
+    $("premiumShell").setAttribute("aria-hidden", "false");
+    premiumBind();
+    premiumRender();
+    return;
+  }
   const resume = state.resume_case_id;
   activeIndex = Math.max(0, manifest.cases.findIndex((caseData) => caseData.case_id === resume));
   render();

@@ -24,4 +24,9 @@ def ui_config_hash(ui_config: ReviewUIConfig) -> str:
     if payload.get("schema_version") == GENERIC_UI_CONFIG_SCHEMA_VERSION_V1:
         payload.pop("comparison_panels", None)
         payload.pop("decision_to_output_mapping", None)
+    # Preserve hashes for historical configs that predate optional presentation
+    # fields while including those fields whenever a new stage sets them.
+    for field_name in ("presentation_mode", "question_contract"):
+        if field_name not in ui_config.model_fields_set:
+            payload.pop(field_name, None)
     return stable_hash(payload)
