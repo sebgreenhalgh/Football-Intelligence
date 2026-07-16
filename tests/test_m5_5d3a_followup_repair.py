@@ -23,6 +23,9 @@ from build_m5_5d3a_followup_repair import (  # noqa: E402
     is_same_source_row,
     replay_historical_ledger,
 )
+from football_intelligence.review_chassis.config import load_ui_config
+from football_intelligence.review_chassis.manifest import load_manifest
+from football_intelligence.review_chassis.persistence import GenericReviewPersistence
 
 
 PACKAGE = STAGE_ROOT / "03_REPAIRED_FOLLOWUP_REVIEW_PACKAGE"
@@ -30,7 +33,7 @@ MANIFEST_PATH = PACKAGE / "reviewer_manifest.json"
 
 
 def read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def require_stage() -> None:
@@ -164,9 +167,15 @@ def test_target_has_exact_and_padded_crops() -> None:
         assert {"target_exact", "target_padded", "candidate_comparison_strip"} <= assets
 
 
-def test_decisions_root_is_fresh_and_empty() -> None:
+def test_decisions_root_is_fresh_and_empty(tmp_path: Path) -> None:
     require_stage()
-    state = read_json(PACKAGE / "decisions" / "review_decisions.json")
+    persistence = GenericReviewPersistence(
+        manifest=load_manifest(MANIFEST_PATH),
+        ui_config=load_ui_config(PACKAGE / "ui_config.json"),
+        decisions_root=tmp_path / "decisions",
+        reviewer_session_id="m5_5d3a_repaired_followup_human_reviewer",
+    )
+    state = persistence.ensure_state()
     assert state["decisions"] == {}
     assert state["completed"] is False
     assert state["reviewer_session_id"] == "m5_5d3a_repaired_followup_human_reviewer"
