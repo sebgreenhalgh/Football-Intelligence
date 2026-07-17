@@ -1950,14 +1950,22 @@ def make_failure_contact_sheet(
         event = event_map.get(row["review_case_id"], {})
         frame = int(row["first_failure_frame"])
         lookup = event.get("frame_lookup", {}).get(str(frame))
+        fallback = None
         if not lookup:
-            continue
+            try:
+                case_number = int(str(row["review_case_id"]).rsplit("_", 1)[-1])
+                fallback = PRIOR_PACKAGE / "evidence" / f"case_{case_number:03d}" / "focal" / "frame_000.jpg"
+            except (TypeError, ValueError):
+                fallback = None
         try:
-            with Image.open(lookup["frame_file"]).convert("RGB") as image:
+            source = Path(lookup["frame_file"]) if lookup else fallback
+            if source is None or not source.exists():
+                continue
+            with Image.open(source).convert("RGB") as image:
                 tile = image.resize((480, 127))
                 draw = ImageDraw.Draw(tile)
                 draw.rectangle((4, 4, 475, 122), outline=(240, 90, 90), width=3)
-                draw.text((8, 8), f"{row['review_case_id']} | frame {frame}", fill=(255, 255, 255), font=font())
+                draw.text((8, 8), f"human-confirmed inconsistency {len(tiles) + 1}", fill=(255, 255, 255), font=font())
                 tiles.append(tile.copy())
         except (FileNotFoundError, OSError):
             continue
