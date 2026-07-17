@@ -80,6 +80,7 @@
           <div class="viewerToolbar">
             <div class="layerChips" role="group" aria-label="Overlay controls">
               <label class="toggleChip"><input id="premiumObservedToggle" type="checkbox" checked><span>Observed detections</span></label>
+              <label class="toggleChip"><input id="premiumAllDetectionsToggle" type="checkbox"><span>All local detections</span></label>
               <label class="toggleChip"><input id="premiumPredictedToggle" type="checkbox"><span>Predicted states</span></label>
               <label class="toggleChip"><input id="premiumLabelsToggle" type="checkbox"><span>Labels</span></label>
               <label class="toggleChip"><input id="premiumLocatorToggle" type="checkbox"><span>Locate encounter</span></label>
@@ -90,6 +91,7 @@
             <div id="premiumStage" class="premiumStage">
               <img id="premiumBaseLayer" class="premiumLayer" alt="Clean temporal frame">
               <img id="premiumObservedLayer" class="premiumLayer" alt="Observed detections">
+              <img id="premiumAllDetectionsLayer" class="premiumLayer isHidden" alt="All local detections">
               <img id="premiumPredictedLayer" class="premiumLayer isHidden" alt="Predicted states">
               <img id="premiumLabelsLayer" class="premiumLayer isHidden" alt="Detection labels">
               <img id="premiumLocatorLayer" class="premiumLayer isHidden" alt="Encounter locator">
@@ -117,7 +119,7 @@
             <button type="button" data-premium-speed="1" class="activeSpeed">1x</button>
             <button type="button" data-premium-speed="2">2x</button>
           </div>
-          <div class="legendRow"><span><i class="legendSwatch observed"></i>Solid cyan = observed detection</span><span><i class="legendSwatch predicted"></i>Dashed amber = predicted state</span><span><i class="legendSwatch locator"></i>Gold locator = focal area only</span></div>
+          <div class="legendRow"><span><i class="legendSwatch observed"></i>Solid cyan = Strand A</span><span><i class="legendSwatch observed magenta"></i>Solid magenta = Strand B</span><span><i class="legendSwatch locator"></i>Solid gold = shared observation</span><span><i class="legendSwatch predicted"></i>Dashed amber = predicted state, off by default</span></div>
         </div>
         <details class="metadataDrawer">
           <summary>Evidence details</summary>

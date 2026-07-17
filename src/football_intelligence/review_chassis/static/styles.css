@@ -426,7 +426,8 @@ textarea {
 /* M5.5E.2 premium synchronized temporal viewer. */
 .isHidden { display: none !important; }
 .premiumShell:not(.isHidden) { display: block; }
-body[data-presentation="simplified_temporal"] { display: block; min-height: 100vh; }
+body[data-presentation="simplified_temporal"],
+body[data-presentation="local_encounter_strands"] { display: block; min-height: 100vh; }
 .premiumShell {
   --premium-bg: #0b1220;
   --premium-surface: #131d2d;
