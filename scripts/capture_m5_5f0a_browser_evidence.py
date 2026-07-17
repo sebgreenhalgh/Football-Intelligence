@@ -105,7 +105,7 @@ def main() -> None:
         initial = cdp.evaluate("""(() => ({
           presentation: document.body.dataset.presentation || null,
           viewer_count: document.querySelectorAll('#premiumViewer').length,
-          case_count: document.querySelectorAll('#premiumCaseSelect option').length,
+          case_count: Number((document.body.innerText.match(/Case\\s+1\\s+of\\s+(\\d+)/) || [])[1] || 0),
           question_count: document.querySelectorAll('#premiumReviewForm fieldset').length,
           seed_action_count: document.querySelectorAll('input[name=seed_action]').length,
           outcome_count: document.querySelectorAll('input[name=continuity_outcome]').length,
