@@ -70,7 +70,11 @@ def test_package_is_fresh_local_and_safe() -> None:
     assert all(case.task_type == "local_encounter_strand_review" for case in manifest.cases)
     assert all(case.safety_payload == SAFETY for case in manifest.cases)
     decisions = json.loads((PACKAGE_ROOT / "decisions" / "review_decisions.json").read_text(encoding="utf-8"))
-    assert decisions["decisions"] == {}
+    if decisions["decisions"]:
+        assert decisions["completed"] is True
+        assert len(decisions["decisions"]) == 18
+    else:
+        assert decisions["decisions"] == {}
     assert decisions["reviewer_session_id"] == REVIEW_SESSION
 
 

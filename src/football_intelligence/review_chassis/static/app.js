@@ -16,6 +16,7 @@ let premiumSpeed = 1;
 let premiumPlayTimer = null;
 let premiumRenderToken = 0;
 let localPremiumConfigured = false;
+let stablePremiumConfigured = false;
 
 const $ = (id) => document.getElementById(id);
 const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -612,7 +613,8 @@ function premiumCase() {
 }
 
 function premiumDraftKey(caseData) {
-  return `m5_5e2_draft_${manifest.review_id}_${caseData.case_id}`;
+  const prefix = uiConfig?.presentation_mode === "stable_local_strand_continuity" ? "m5_5f0_draft" : "m5_5e2_draft";
+  return `${prefix}_${manifest.review_id}_${caseData.case_id}`;
 }
 
 function premiumDefaultDraft() {
@@ -624,6 +626,9 @@ function premiumDefaultDraft() {
     confirmed: false,
     note: "",
     annotation: {},
+    seed_action: "",
+    first_failure_frame: "",
+    seed_correction: "",
   };
 }
 
@@ -685,7 +690,10 @@ function premiumCollectAnswers(caseData) {
 }
 
 function premiumSuggestion(answers) {
-  if (uiConfig?.presentation_mode === "local_encounter_strands") {
+  if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
+    return answers.continuity_outcome ? {code: answers.continuity_outcome, reason: "The selected structured continuity outcome is ready to save."} : null;
+  }
+  if (["local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig?.presentation_mode)) {
     if (answers.incoming_people_supported === "no") return {code: "I", reason: "The local evidence does not support two independently observed incoming strands."};
     if (answers.incoming_people_supported === "unclear") return {code: "U", reason: "The incoming local evidence is unresolved."};
     if (answers.during_state === "both_remain_independently_visible") return {code: "O", reason: "Both local strands remain independently observed through the interval."};
@@ -761,6 +769,44 @@ function premiumConfigureLocalContract() {
   if (conclusion && !conclusion.querySelector('option[value="S"]')) conclusion.insertAdjacentHTML("beforeend", '<option value="S">S - Strand evidence inconsistent</option>');
 }
 
+function stableOutcomeLabel(value) {
+  return ({PASS: "PASS - Stable local continuation", A_SWITCH: "A_SWITCH - Strand A switches", B_SWITCH: "B_SWITCH - Strand B switches", BOTH_SWITCH: "BOTH_SWITCH - Both strands switch", A_LOST: "A_LOST - Strand A is lost", B_LOST: "B_LOST - Strand B is lost", BOTH_LOST: "BOTH_LOST - Both strands are lost", DETECTION_SUPPLY_FAILURE: "DETECTION_SUPPLY_FAILURE - Local supply is insufficient", AMBIGUOUS_BUT_SAFE_ABSTENTION: "AMBIGUOUS_BUT_SAFE_ABSTENTION - Tracker abstains safely", BAD_CASE: "BAD_CASE - Case is not suitable", UNRESOLVED: "UNRESOLVED - Evidence is unresolved"})[value] || value || "Select a structured outcome";
+}
+
+function stableSeedLabel(value) {
+  return ({CONFIRM: "CONFIRM - Proposed A/B seeds are usable", SWAP_A_B: "SWAP_A_B - Swap the proposed A/B seeds", CORRECT_A: "CORRECT_A - Correct Strand A seed", CORRECT_B: "CORRECT_B - Correct Strand B seed", REJECT_BAD_SEED_CASE: "REJECT_BAD_SEED_CASE - Reject this seed case"})[value] || value || "No seed action selected";
+}
+
+function stableAutoSummary(draft) {
+  const frame = draft.first_failure_frame ? ` First failure frame: ${draft.first_failure_frame}.` : "";
+  return `Seed action: ${stableSeedLabel(draft.answers?.seed_action)}. Outcome: ${stableOutcomeLabel(draft.answers?.continuity_outcome)}.${frame}`;
+}
+
+function premiumConfigureStableContract() {
+  if (stablePremiumConfigured || uiConfig?.presentation_mode !== "stable_local_strand_continuity") return;
+  stablePremiumConfigured = true;
+  $("premiumReviewTitle").textContent = uiConfig.review_title || "Stable local strand benchmark";
+  const task = document.querySelector(".taskCard p");
+  if (task) task.textContent = "Confirm or correct the temporary anonymous seeds first. Then judge continuity only. Cyan is Strand A, magenta is Strand B, predictions are off by default, and notes are optional for structured outcomes.";
+  const fields = document.querySelectorAll(".evidenceQuestion");
+  const seedOptions = [["CONFIRM", "Confirm proposed seeds"], ["SWAP_A_B", "Swap A/B"], ["CORRECT_A", "Correct A"], ["CORRECT_B", "Correct B"], ["REJECT_BAD_SEED_CASE", "Reject bad seed case"]];
+  const outcomeOptions = [["PASS", "PASS"], ["A_SWITCH", "A_SWITCH"], ["B_SWITCH", "B_SWITCH"], ["BOTH_SWITCH", "BOTH_SWITCH"], ["A_LOST", "A_LOST"], ["B_LOST", "B_LOST"], ["BOTH_LOST", "BOTH_LOST"], ["DETECTION_SUPPLY_FAILURE", "Detection supply failure"], ["AMBIGUOUS_BUT_SAFE_ABSTENTION", "Ambiguous but safe abstention"], ["BAD_CASE", "Bad case"], ["UNRESOLVED", "Unresolved"]];
+  const radioMarkup = (name, options) => options.map(([value, label]) => `<label><input type="radio" name="${name}" value="${value}">${label}</label>`).join("");
+  if (fields[0]) { fields[0].dataset.question = "seed_action"; fields[0].innerHTML = `<legend><span class="questionNumber">1</span> Confirm or correct the proposed anonymous A/B seeds.</legend><div class="radioStack">${radioMarkup("seed_action", seedOptions)}</div><p class="helper">This action is local to this short sequence and does not create identity.</p>`; }
+  if (fields[1]) { fields[1].dataset.question = "continuity_outcome"; fields[1].innerHTML = `<legend><span class="questionNumber">2</span> What is the continuity outcome after reviewing the sequence?</legend><div class="radioStack">${radioMarkup("continuity_outcome", outcomeOptions)}</div>`; }
+  if (fields[2]) { fields[2].dataset.question = "first_failure_frame"; fields[2].innerHTML = `<legend><span class="questionNumber">3</span> First failure frame, only for a switch or loss.</legend><label>Frame number<input id="premiumFirstFailureFrame" type="number" min="0" step="1" placeholder="Optional unless switch/loss"></label><p class="helper">Leave blank for PASS, safe abstention, bad case or unresolved unless useful.</p>`; }
+  if (fields[3]) { fields[3].dataset.question = "seed_correction"; fields[3].innerHTML = `<legend><span class="questionNumber">4</span> Optional seed correction detail.</legend><label>Correction note<input id="premiumSeedCorrection" type="text" maxlength="240" autocomplete="off" placeholder="Required only for Correct A or Correct B"></label>`; }
+  const conclusionCard = document.querySelector(".conclusionCard");
+  if (conclusionCard) conclusionCard.classList.add("stableConclusionCard");
+  const noteLabel = document.querySelector('label[for="premiumNote"]');
+  if (noteLabel) noteLabel.textContent = "Optional note (required only for BAD_CASE, UNRESOLVED or manual override).";
+  $("premiumNote").placeholder = "Optional for structured outcomes.";
+  $("premiumConclusion").classList.add("isHidden");
+  $("premiumSubtypeWrap").classList.add("isHidden");
+  $("premiumOverrideWrap").classList.add("isHidden");
+  $("premiumConfirm").closest("label")?.classList.add("isHidden");
+}
+
 function premiumRenderQuestions(caseData) {
   const values = premiumAnswerValues(caseData);
   document.querySelectorAll("#premiumReviewForm input[type=radio]").forEach((input) => {
@@ -775,11 +821,23 @@ function premiumRenderQuestions(caseData) {
   $("premiumAnnotationStart").value = draft.annotation?.start_frame ?? "";
   $("premiumAnnotationEnd").value = draft.annotation?.end_frame ?? "";
   $("premiumMergeRegion").value = draft.annotation?.merge_region ?? "";
+  if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
+    if ($("premiumFirstFailureFrame")) $("premiumFirstFailureFrame").value = draft.first_failure_frame || "";
+    if ($("premiumSeedCorrection")) $("premiumSeedCorrection").value = draft.seed_correction || "";
+  }
   premiumRenderSuggestion(caseData);
 }
 
 function premiumRenderSuggestion(caseData) {
   const draft = premiumGetDraft(caseData);
+  if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
+    const outcome = draft.answers?.continuity_outcome;
+    $("premiumSuggestionTitle").textContent = outcome ? stableOutcomeLabel(outcome) : "Choose a continuity outcome";
+    $("premiumSuggestionReason").textContent = stableAutoSummary(draft);
+    $("premiumSuggestionState").textContent = outcome ? "Structured outcome" : "Awaiting outcome";
+    $("premiumSuggestionState").className = `suggestionState ${outcome ? "confirmed" : ""}`;
+    return;
+  }
   const answers = premiumAnswerValues(caseData);
   const required = ["incoming_people_supported", "during_state", "outgoing_people_supported", "path_continuity_plausible"];
   const complete = required.every((key) => answers[key]);
@@ -806,7 +864,7 @@ function premiumApplyView() {
   const stage = $("premiumStage");
   stage.dataset.view = premiumView;
   const caseData = premiumCase();
-  if (uiConfig?.presentation_mode === "local_encounter_strands") {
+  if (["local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig?.presentation_mode)) {
     stage.style.setProperty("--focal-scale", "1");
     stage.style.setProperty("--focal-shift-x", "0%");
     stage.style.setProperty("--focal-shift-y", "0%");
@@ -918,9 +976,10 @@ function premiumRender() {
   if (!premiumMode || !manifest) return;
   const caseData = premiumCase();
   premiumConfigureLocalContract();
+  premiumConfigureStableContract();
   premiumFrameIndex(caseData);
   const reviewed = Object.keys(state?.decisions || {}).length;
-  $("premiumReviewTitle").textContent = uiConfig.review_title || (uiConfig.presentation_mode === "local_encounter_strands" ? "Local encounter strand review" : "Simplified temporal review");
+  $("premiumReviewTitle").textContent = uiConfig.review_title || (["local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig.presentation_mode) ? "Local strand continuity review" : "Simplified temporal review");
   $("premiumCaseProgress").textContent = `Case ${activeIndex + 1} of ${manifest.cases.length}`;
   $("premiumProgressBar").style.width = `${100 * reviewed / Math.max(1, manifest.cases.length)}%`;
   $("premiumCaseTitle").textContent = `Case ${activeIndex + 1}`;
@@ -990,6 +1049,17 @@ function premiumTogglePlay() {
 
 function premiumValidateDraft(caseData) {
   const draft = premiumGetDraft(caseData);
+  if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
+    const seed = draft.answers?.seed_action;
+    const outcome = draft.answers?.continuity_outcome;
+    const errors = [];
+    if (!seed) errors.push("Confirm or correct the proposed seeds.");
+    if (!outcome) errors.push("Choose one continuity outcome.");
+    if (["CORRECT_A", "CORRECT_B"].includes(seed) && !String(draft.seed_correction || "").trim()) errors.push("Describe the corrected seed briefly.");
+    if (["A_SWITCH", "B_SWITCH", "BOTH_SWITCH", "A_LOST", "B_LOST", "BOTH_LOST"].includes(outcome) && !String(draft.first_failure_frame || "").trim()) errors.push("Choose the first failure frame for this outcome.");
+    if (["BAD_CASE", "UNRESOLVED"].includes(outcome) && !String(draft.note || "").trim()) errors.push("Add a note for this outcome.");
+    return errors;
+  }
   const required = ["incoming_people_supported", "during_state", "outgoing_people_supported", "path_continuity_plausible"];
   const errors = [];
   if (!required.every((key) => draft.answers?.[key])) errors.push("Answer all four evidence questions.");
@@ -1007,6 +1077,31 @@ async function premiumSaveAndNext(event) {
   const caseData = premiumCase();
   const draft = premiumGetDraft(caseData);
   premiumCollectAnswers(caseData);
+  if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
+    draft.note = $("premiumNote").value;
+    draft.first_failure_frame = $("premiumFirstFailureFrame")?.value || "";
+    draft.seed_correction = $("premiumSeedCorrection")?.value || "";
+    const errors = premiumValidateDraft(caseData);
+    if (errors.length) { $("premiumError").textContent = errors.join(" "); $("premiumError").classList.remove("isHidden"); return; }
+    $("premiumError").classList.add("isHidden");
+    const outcome = draft.answers.continuity_outcome;
+    const structuredReview = {seed_action: draft.answers.seed_action, continuity_outcome: outcome, first_failure_frame: draft.first_failure_frame || null, seed_correction: draft.seed_correction || null, auto_generated_summary: stableAutoSummary(draft), note: String(draft.note || "").trim() || null};
+    premiumSetStatus("Saving", "saving");
+    $("premiumSaveNext").disabled = true;
+    try {
+      state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({case_id: caseData.case_id, decision: outcome, note: String(draft.note || "").trim(), structured_review: structuredReview, input_source: "save_and_next", last_viewed_case_id: caseData.case_id})});
+      localStorage.removeItem(premiumDraftKey(caseData));
+      delete premiumDrafts[caseData.case_id];
+      premiumSetStatus("Saved", "saved");
+      if (activeIndex < manifest.cases.length - 1) activeIndex += 1;
+      premiumRender();
+    } catch (error) {
+      premiumSetStatus("Error", "error");
+      $("premiumError").textContent = `Save failed: ${error.message}`;
+      $("premiumError").classList.remove("isHidden");
+    } finally { $("premiumSaveNext").disabled = false; }
+    return;
+  }
   draft.note = $("premiumNote").value;
   draft.conclusion = $("premiumConclusion").value;
   draft.subtype = $("premiumSubtype").value;
@@ -1050,7 +1145,7 @@ function premiumBind() {
   $("premiumTimeline").addEventListener("input", (event) => { premiumFrames[premiumCase().case_id] = Number(event.target.value); premiumLoadFrame(premiumCase()).catch(() => {}); });
   ["premiumObservedToggle", "premiumAllDetectionsToggle", "premiumPredictedToggle", "premiumLabelsToggle", "premiumLocatorToggle"].forEach((id) => $(id).addEventListener("change", () => { premiumSetLayerVisibility(); premiumLoadFrame(premiumCase()).catch(() => {}); }));
   $("premiumReviewForm").addEventListener("change", () => { const draft = premiumGetDraft(premiumCase()); premiumCollectAnswers(premiumCase()); premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
-  $("premiumReviewForm").addEventListener("input", () => { const draft = premiumGetDraft(premiumCase()); draft.note = $("premiumNote").value; draft.overrideReason = $("premiumOverrideReason").value; draft.annotation = {start_frame: $("premiumAnnotationStart").value || null, end_frame: $("premiumAnnotationEnd").value || null, merge_region: $("premiumMergeRegion").value || null}; premiumSaveDraft(premiumCase()); });
+  $("premiumReviewForm").addEventListener("input", () => { const draft = premiumGetDraft(premiumCase()); draft.note = $("premiumNote").value; draft.overrideReason = $("premiumOverrideReason").value; draft.annotation = {start_frame: $("premiumAnnotationStart").value || null, end_frame: $("premiumAnnotationEnd").value || null, merge_region: $("premiumMergeRegion").value || null}; if (uiConfig?.presentation_mode === "stable_local_strand_continuity") { draft.first_failure_frame = $("premiumFirstFailureFrame")?.value || ""; draft.seed_correction = $("premiumSeedCorrection")?.value || ""; } premiumSaveDraft(premiumCase()); });
   $("premiumConclusion").addEventListener("change", () => { premiumGetDraft(premiumCase()).conclusion = $("premiumConclusion").value; premiumGetDraft(premiumCase()).confirmed = false; premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
   $("premiumSubtype").addEventListener("change", () => { premiumGetDraft(premiumCase()).subtype = $("premiumSubtype").value; premiumGetDraft(premiumCase()).confirmed = false; premiumSaveDraft(premiumCase()); });
   $("premiumConfirm").addEventListener("change", () => { premiumGetDraft(premiumCase()).confirmed = $("premiumConfirm").checked; premiumSaveDraft(premiumCase()); });
@@ -1075,7 +1170,7 @@ async function load() {
   manifest = await api("/api/review/manifest");
   uiConfig = await api("/api/review/ui-config");
   state = await api("/api/review/state");
-  premiumMode = ["simplified_temporal", "local_encounter_strands"].includes(uiConfig.presentation_mode);
+  premiumMode = ["simplified_temporal", "local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig.presentation_mode);
   if (premiumMode) {
     document.body.dataset.presentation = uiConfig.presentation_mode;
     $("legacyShell").classList.add("isHidden");
