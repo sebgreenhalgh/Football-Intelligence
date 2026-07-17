@@ -629,6 +629,7 @@ function premiumDefaultDraft() {
     seed_action: "",
     first_failure_frame: "",
     seed_correction: "",
+    seed_rejection_reason: "",
   };
 }
 
@@ -779,6 +780,9 @@ function stableSeedLabel(value) {
 
 function stableAutoSummary(draft) {
   const frame = draft.first_failure_frame ? ` First failure frame: ${draft.first_failure_frame}.` : "";
+  if (draft.answers?.seed_action === "REJECT_BAD_SEED_CASE") {
+    return `Seed action: ${stableSeedLabel(draft.answers.seed_action)}. Rejection reason: ${draft.seed_rejection_reason || "not selected"}.`;
+  }
   return `Seed action: ${stableSeedLabel(draft.answers?.seed_action)}. Outcome: ${stableOutcomeLabel(draft.answers?.continuity_outcome)}.${frame}`;
 }
 
@@ -795,7 +799,13 @@ function premiumConfigureStableContract() {
   if (fields[0]) { fields[0].dataset.question = "seed_action"; fields[0].innerHTML = `<legend><span class="questionNumber">1</span> Confirm or correct the proposed anonymous A/B seeds.</legend><div class="radioStack">${radioMarkup("seed_action", seedOptions)}</div><p class="helper">This action is local to this short sequence and does not create identity.</p>`; }
   if (fields[1]) { fields[1].dataset.question = "continuity_outcome"; fields[1].innerHTML = `<legend><span class="questionNumber">2</span> What is the continuity outcome after reviewing the sequence?</legend><div class="radioStack">${radioMarkup("continuity_outcome", outcomeOptions)}</div>`; }
   if (fields[2]) { fields[2].dataset.question = "first_failure_frame"; fields[2].innerHTML = `<legend><span class="questionNumber">3</span> First failure frame, only for a switch or loss.</legend><label>Frame number<input id="premiumFirstFailureFrame" type="number" min="0" step="1" placeholder="Optional unless switch/loss"></label><p class="helper">Leave blank for PASS, safe abstention, bad case or unresolved unless useful.</p>`; }
-  if (fields[3]) { fields[3].dataset.question = "seed_correction"; fields[3].innerHTML = `<legend><span class="questionNumber">4</span> Optional seed correction detail.</legend><label>Correction note<input id="premiumSeedCorrection" type="text" maxlength="240" autocomplete="off" placeholder="Required only for Correct A or Correct B"></label>`; }
+  const rejection = uiConfig.question_contract?.seed_rejection_contract;
+  if (fields[3]) {
+    fields[3].dataset.question = "seed_correction";
+    const reasonOptions = (rejection?.rejection_reasons || []).map((value) => `<option value="${value}">${value.replaceAll("_", " ")}</option>`).join("");
+    const rejectionMarkup = rejection ? `<label id="premiumSeedRejectionWrap" class="isHidden">Structured rejection reason<select id="premiumSeedRejectionReason"><option value="">Select rejection reason</option>${reasonOptions}</select></label>` : "";
+    fields[3].innerHTML = `<legend><span class="questionNumber">4</span> Seed correction or rejection detail.</legend><label>Correction note<input id="premiumSeedCorrection" type="text" maxlength="240" autocomplete="off" placeholder="Required only for Correct A or Correct B"></label>${rejectionMarkup}`;
+  }
   const conclusionCard = document.querySelector(".conclusionCard");
   if (conclusionCard) conclusionCard.classList.add("stableConclusionCard");
   const noteLabel = document.querySelector('label[for="premiumNote"]');
@@ -805,6 +815,24 @@ function premiumConfigureStableContract() {
   $("premiumSubtypeWrap").classList.add("isHidden");
   $("premiumOverrideWrap").classList.add("isHidden");
   $("premiumConfirm").closest("label")?.classList.add("isHidden");
+}
+
+function premiumApplySeedRejectionState() {
+  if (uiConfig?.presentation_mode !== "stable_local_strand_continuity") return;
+  const contract = uiConfig.question_contract?.seed_rejection_contract;
+  if (!contract) return;
+  const rejected = document.querySelector('input[name="seed_action"]:checked')?.value === (contract.rejection_action || "REJECT_BAD_SEED_CASE");
+  document.querySelectorAll('input[name="continuity_outcome"]').forEach((input) => {
+    input.disabled = rejected;
+    if (rejected) input.checked = false;
+  });
+  const failure = $("premiumFirstFailureFrame");
+  if (failure) { failure.disabled = rejected; if (rejected) failure.value = ""; }
+  const outcomeField = document.querySelector('[data-question="continuity_outcome"]');
+  if (outcomeField) outcomeField.classList.toggle("isHidden", rejected);
+  const reasonWrap = $("premiumSeedRejectionWrap");
+  if (reasonWrap) reasonWrap.classList.toggle("isHidden", !rejected);
+  if (!rejected && $("premiumSeedRejectionReason")) $("premiumSeedRejectionReason").value = "";
 }
 
 function premiumRenderQuestions(caseData) {
@@ -824,6 +852,8 @@ function premiumRenderQuestions(caseData) {
   if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
     if ($("premiumFirstFailureFrame")) $("premiumFirstFailureFrame").value = draft.first_failure_frame || "";
     if ($("premiumSeedCorrection")) $("premiumSeedCorrection").value = draft.seed_correction || "";
+    if ($("premiumSeedRejectionReason")) $("premiumSeedRejectionReason").value = draft.seed_rejection_reason || "";
+    premiumApplySeedRejectionState();
   }
   premiumRenderSuggestion(caseData);
 }
@@ -1052,8 +1082,13 @@ function premiumValidateDraft(caseData) {
   if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
     const seed = draft.answers?.seed_action;
     const outcome = draft.answers?.continuity_outcome;
+    const rejection = uiConfig.question_contract?.seed_rejection_contract;
     const errors = [];
     if (!seed) errors.push("Confirm or correct the proposed seeds.");
+    if (rejection && seed === (rejection.rejection_action || "REJECT_BAD_SEED_CASE")) {
+      if (!draft.seed_rejection_reason || !(rejection.rejection_reasons || []).includes(draft.seed_rejection_reason)) errors.push("Choose a structured seed rejection reason.");
+      return errors;
+    }
     if (!outcome) errors.push("Choose one continuity outcome.");
     if (["CORRECT_A", "CORRECT_B"].includes(seed) && !String(draft.seed_correction || "").trim()) errors.push("Describe the corrected seed briefly.");
     if (["A_SWITCH", "B_SWITCH", "BOTH_SWITCH", "A_LOST", "B_LOST", "BOTH_LOST"].includes(outcome) && !String(draft.first_failure_frame || "").trim()) errors.push("Choose the first failure frame for this outcome.");
@@ -1081,11 +1116,14 @@ async function premiumSaveAndNext(event) {
     draft.note = $("premiumNote").value;
     draft.first_failure_frame = $("premiumFirstFailureFrame")?.value || "";
     draft.seed_correction = $("premiumSeedCorrection")?.value || "";
+    draft.seed_rejection_reason = $("premiumSeedRejectionReason")?.value || "";
     const errors = premiumValidateDraft(caseData);
     if (errors.length) { $("premiumError").textContent = errors.join(" "); $("premiumError").classList.remove("isHidden"); return; }
     $("premiumError").classList.add("isHidden");
-    const outcome = draft.answers.continuity_outcome;
-    const structuredReview = {seed_action: draft.answers.seed_action, continuity_outcome: outcome, first_failure_frame: draft.first_failure_frame || null, seed_correction: draft.seed_correction || null, auto_generated_summary: stableAutoSummary(draft), note: String(draft.note || "").trim() || null};
+    const rejection = uiConfig.question_contract?.seed_rejection_contract;
+    const isRejected = rejection && draft.answers.seed_action === (rejection.rejection_action || "REJECT_BAD_SEED_CASE");
+    const outcome = isRejected ? (rejection.rejection_decision || "BAD_SEED_CASE") : draft.answers.continuity_outcome;
+    const structuredReview = {seed_action: draft.answers.seed_action, continuity_outcome: isRejected ? null : outcome, first_failure_frame: isRejected ? null : (draft.first_failure_frame || null), seed_correction: draft.seed_correction || null, seed_rejection_reason: isRejected ? draft.seed_rejection_reason : null, auto_generated_summary: stableAutoSummary(draft), note: String(draft.note || "").trim() || null};
     premiumSetStatus("Saving", "saving");
     $("premiumSaveNext").disabled = true;
     try {
@@ -1144,8 +1182,8 @@ function premiumBind() {
   $("premiumNext").addEventListener("click", () => premiumGo(1));
   $("premiumTimeline").addEventListener("input", (event) => { premiumFrames[premiumCase().case_id] = Number(event.target.value); premiumLoadFrame(premiumCase()).catch(() => {}); });
   ["premiumObservedToggle", "premiumAllDetectionsToggle", "premiumPredictedToggle", "premiumLabelsToggle", "premiumLocatorToggle"].forEach((id) => $(id).addEventListener("change", () => { premiumSetLayerVisibility(); premiumLoadFrame(premiumCase()).catch(() => {}); }));
-  $("premiumReviewForm").addEventListener("change", () => { const draft = premiumGetDraft(premiumCase()); premiumCollectAnswers(premiumCase()); premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
-  $("premiumReviewForm").addEventListener("input", () => { const draft = premiumGetDraft(premiumCase()); draft.note = $("premiumNote").value; draft.overrideReason = $("premiumOverrideReason").value; draft.annotation = {start_frame: $("premiumAnnotationStart").value || null, end_frame: $("premiumAnnotationEnd").value || null, merge_region: $("premiumMergeRegion").value || null}; if (uiConfig?.presentation_mode === "stable_local_strand_continuity") { draft.first_failure_frame = $("premiumFirstFailureFrame")?.value || ""; draft.seed_correction = $("premiumSeedCorrection")?.value || ""; } premiumSaveDraft(premiumCase()); });
+  $("premiumReviewForm").addEventListener("change", () => { const draft = premiumGetDraft(premiumCase()); premiumApplySeedRejectionState(); premiumCollectAnswers(premiumCase()); premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
+  $("premiumReviewForm").addEventListener("input", () => { const draft = premiumGetDraft(premiumCase()); draft.note = $("premiumNote").value; draft.overrideReason = $("premiumOverrideReason").value; draft.annotation = {start_frame: $("premiumAnnotationStart").value || null, end_frame: $("premiumAnnotationEnd").value || null, merge_region: $("premiumMergeRegion").value || null}; if (uiConfig?.presentation_mode === "stable_local_strand_continuity") { draft.first_failure_frame = $("premiumFirstFailureFrame")?.value || ""; draft.seed_correction = $("premiumSeedCorrection")?.value || ""; draft.seed_rejection_reason = $("premiumSeedRejectionReason")?.value || ""; } premiumSaveDraft(premiumCase()); });
   $("premiumConclusion").addEventListener("change", () => { premiumGetDraft(premiumCase()).conclusion = $("premiumConclusion").value; premiumGetDraft(premiumCase()).confirmed = false; premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
   $("premiumSubtype").addEventListener("change", () => { premiumGetDraft(premiumCase()).subtype = $("premiumSubtype").value; premiumGetDraft(premiumCase()).confirmed = false; premiumSaveDraft(premiumCase()); });
   $("premiumConfirm").addEventListener("change", () => { premiumGetDraft(premiumCase()).confirmed = $("premiumConfirm").checked; premiumSaveDraft(premiumCase()); });

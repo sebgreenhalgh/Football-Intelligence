@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from football_intelligence.review_chassis.config import load_ui_config
+from football_intelligence.review_chassis.manifest import load_manifest
+from football_intelligence.review_chassis.persistence import GenericReviewPersistence
 
 
 REPO = Path(__file__).parents[1]
@@ -47,11 +52,21 @@ def test_gpu_rebuild_is_fresh_and_safe() -> None:
     tracker = read_json(STAGE / "05_GPU_REBUILT_ABSTENTION_FIRST_TRACKER" / "tracker_summary.json")
     level = read_json(STAGE / "06_BENCHMARK_REBUILD_AND_LEVEL4_SEARCH" / "level_summary.json")
     package = read_json(PACKAGE / "review_package_validation.json")
-    state = read_json(PACKAGE / "decisions" / "review_decisions.json")
+    completed = read_json(PACKAGE / "decisions" / "completed_review_summary.json")
     assert tracker["rebuilt_from_gpu_rows"] is True and tracker["stale_m5_5f0_rows_reused"] is False
     assert tracker["double_assignments"] == 0 and tracker["forced_below_margin"] == 0
     assert level["case_count"] == 12 and level["human_answers_used"] is False
-    assert package["passed"] is True and state["decisions"] == {}
+    assert package["passed"] is True and completed["completed"] is True and completed["reviewed"] == 12
+    # The historical package is intentionally completed. Check the fresh-root
+    # invariant in a disposable root instead of mutating provenance.
+    with TemporaryDirectory() as temporary:
+        fresh = GenericReviewPersistence(
+            load_manifest(PACKAGE / "reviewer_manifest.json"),
+            load_ui_config(PACKAGE / "ui_config.json"),
+            Path(temporary) / "decisions",
+            "test_m5_5f0a_fresh_root",
+        ).ensure_state()
+        assert fresh["decisions"] == {}
 
 
 def test_review_pack_is_flat_bounded_and_has_source_diff() -> None:

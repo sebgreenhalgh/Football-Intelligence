@@ -223,6 +223,7 @@ class GenericReviewPersistence:
             raise ValueError(f"unknown review case: {case_id}")
         if decision not in cases[case_id].allowed_decisions:
             raise ValueError(f"decision {decision!r} is not allowed for {case_id}")
+        self._validate_structured_review(case=cases[case_id], decision=decision, structured_review=structured_review)
         state = self.ensure_state()
         prior = state.setdefault("decisions", {}).get(case_id)
         state["decisions"][case_id] = decision
@@ -254,6 +255,44 @@ class GenericReviewPersistence:
             },
         )
         return self._persist(state, event)
+
+    def _validate_structured_review(
+        self,
+        *,
+        case: Any,
+        decision: str,
+        structured_review: dict[str, Any] | None,
+    ) -> None:
+        """Enforce optional cross-field contracts at the persistence boundary."""
+        contract = self.ui_config.question_contract.get("seed_rejection_contract")
+        if not isinstance(contract, dict):
+            return
+        if not isinstance(structured_review, dict):
+            raise ValueError("structured_review is required for seed-quality reviews")
+        reject_action = str(contract.get("rejection_action", "REJECT_BAD_SEED_CASE"))
+        reject_decision = str(contract.get("rejection_decision", "BAD_SEED_CASE"))
+        seed_action = structured_review.get("seed_action")
+        continuity_outcome = structured_review.get("continuity_outcome")
+        if seed_action == reject_action:
+            if decision != reject_decision:
+                raise ValueError("a rejected seed must use the configured rejection decision")
+            if continuity_outcome not in (None, ""):
+                raise ValueError("a rejected seed cannot also receive a continuity outcome")
+            reason = structured_review.get("seed_rejection_reason")
+            reasons = contract.get("rejection_reasons", [])
+            if not isinstance(reason, str) or reason not in reasons:
+                raise ValueError("a rejected seed requires a configured structured rejection reason")
+            if reason == "OTHER" and not str(structured_review.get("note") or "").strip():
+                raise ValueError("OTHER seed rejection requires a note")
+            if structured_review.get("first_failure_frame") not in (None, ""):
+                raise ValueError("a rejected seed cannot have a first failure frame")
+            return
+        if decision == reject_decision:
+            raise ValueError("the rejection decision requires the configured rejected-seed action")
+        if not isinstance(seed_action, str) or not seed_action:
+            raise ValueError("a continuity decision requires a seed action")
+        if continuity_outcome != decision:
+            raise ValueError("continuity outcome must match the saved decision")
 
     def save_note(self, *, case_id: str, note: str, elapsed_active_seconds: int | None = None) -> dict[str, Any]:
         if case_id not in self.case_map():
