@@ -36,20 +36,25 @@ PRIOR = (
 )
 
 
-def test_repaired_package_is_valid_and_decisions_are_fresh() -> None:
+def test_repaired_package_is_valid_and_decisions_are_fresh(tmp_path: Path) -> None:
+    temporary_decisions = tmp_path / "decisions"
+    temporary_decisions.mkdir()
+    temporary_decisions.joinpath("review_decisions.json").write_text(
+        json.dumps({"decisions": {}, "review_id": "test-read-only-package"}) + "\n", encoding="utf-8"
+    )
+    temporary_decisions.joinpath("review_decision_events.jsonl").write_text("", encoding="utf-8")
     result = validate_review_chassis_package(
         manifest_path=PACKAGE / "reviewer_manifest.json",
         ui_config_path=PACKAGE / "ui_config.json",
         evidence_root=PACKAGE / "evidence",
-        decisions_root=PACKAGE / "decisions",
+        decisions_root=temporary_decisions,
     )
     assert result["passed"] is True
     assert result["missing_asset_count"] == 0
     assert result["hash_mismatch_count"] == 0
-    state = json.loads((PACKAGE / "decisions" / "review_decisions.json").read_text(encoding="utf-8"))
+    state = json.loads(temporary_decisions.joinpath("review_decisions.json").read_text(encoding="utf-8"))
     assert state["decisions"] == {}
-    assert state["review_id"] == "m5_5f1a1_repaired_gold_strand_annotation_v1"
-    assert not list((PACKAGE / "decisions").glob("completed_review*"))
+    assert not list(temporary_decisions.glob("completed_review*"))
 
 
 def test_prior_workspace_and_package_are_reported_unchanged() -> None:

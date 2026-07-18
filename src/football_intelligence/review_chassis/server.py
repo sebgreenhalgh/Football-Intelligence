@@ -11,7 +11,8 @@ from urllib.parse import unquote, urlparse
 
 from football_intelligence.review.server import _parse_byte_range
 from football_intelligence.review_chassis.config import load_ui_config
-from football_intelligence.review_chassis.manifest import load_manifest
+from football_intelligence.review_chassis.manifest import load_manifest, manifest_hash
+from football_intelligence.review_chassis.polygon_sidecar import PolygonSidecarStore
 from football_intelligence.review_chassis.persistence import GenericReviewPersistence
 from football_intelligence.review_chassis.spatial_annotations import FORBIDDEN_BROWSER_KEYS
 
@@ -58,6 +59,7 @@ class ReviewChassisServerConfig:
     host: str = "127.0.0.1"
     port: int = 8776
     reviewer_session_id: str | None = None
+    polygon_sidecar_root: Path | None = None
 
 
 class ReviewChassisHTTPServer(ThreadingHTTPServer):
@@ -72,11 +74,13 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
         self.ui_config = load_ui_config(config.ui_config_path)
         self.sealed_mapping = self._load_sealed_mapping(config.sealed_mapping_path)
         reviewer = config.reviewer_session_id or f"local-{secrets.token_hex(4)}"
+        self.polygon_store = self._build_polygon_store(config, reviewer)
         self.persistence = GenericReviewPersistence(
             manifest=self.manifest,
             ui_config=self.ui_config,
             decisions_root=config.decisions_root.resolve(),
             reviewer_session_id=reviewer,
+            polygon_store=self.polygon_store,
         )
         super().__init__(server_address, handler_class)
 
@@ -88,6 +92,30 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
         if not isinstance(payload, dict):
             raise ValueError("sealed mapping must be a JSON object")
         return payload
+
+    def _build_polygon_store(
+        self, config: ReviewChassisServerConfig, reviewer_session_id: str
+    ) -> PolygonSidecarStore | None:
+        if config.polygon_sidecar_root is None:
+            return None
+        pitch_case = next((case for case in self.manifest.cases if case.task_type == "pitch_polygon_approval"), None)
+        if pitch_case is None:
+            raise ValueError("polygon sidecar requires a pitch_polygon_approval case")
+        metadata = pitch_case.visible_metadata
+        return PolygonSidecarStore(
+            config.polygon_sidecar_root,
+            review_id=self.manifest.review_id,
+            reviewer_session_id=reviewer_session_id,
+            match_id=str(self.manifest.source_manifest_hash or self.manifest.review_id),
+            proposal_vertices=list(metadata["polygon_vertices"]),
+            proposal_tolerance=float(metadata["tolerance_pixels"]),
+            proposal_polygon_hash=str(metadata["proposal_hash"]),
+            source_image_hash=str(metadata["source_frame_sha256"]),
+            image_width=int(metadata["image_width"]),
+            image_height=int(metadata["image_height"]),
+            immutable_package_manifest_hash=manifest_hash(self.manifest),
+            evidence_manifest_hash=self.manifest.evidence_manifest_hash,
+        )
 
     def ui_config_payload(self) -> dict[str, Any]:
         payload = _sanitize_browser_payload(self.ui_config.model_dump(mode="json"))
@@ -124,7 +152,15 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
             elif path == "/api/review/ui-config":
                 _json_response(self, self.server.ui_config_payload())
             elif path == "/api/review/state":
-                _json_response(self, self.server.persistence.state())
+                payload = self.server.persistence.state()
+                if self.server.polygon_store is not None:
+                    payload["polygon_sidecar"] = self.server.polygon_store.ensure()
+                _json_response(self, payload)
+            elif path == "/api/review/polygon":
+                if self.server.polygon_store is None:
+                    _text_response(self, "polygon sidecar is not configured", status=404)
+                else:
+                    _json_response(self, self.server.polygon_store.ensure())
             elif path == "/api/review/export":
                 _json_response(self, self.server.persistence.export_payload())
             elif path in {"/", "/index.html"}:
@@ -159,6 +195,32 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                         elapsed_active_seconds=body.get("elapsed_active_seconds"),
                     ),
                 )
+            elif path == "/api/review/polygon/draft":
+                if self.server.polygon_store is None:
+                    raise ValueError("polygon sidecar is not configured")
+                _json_response(
+                    self,
+                    self.server.polygon_store.save_draft(
+                        body,
+                        migration_source=str(body.get("migration_source", "browser_autosave")),
+                    ),
+                )
+            elif path == "/api/review/polygon/migrate":
+                if self.server.polygon_store is None:
+                    raise ValueError("polygon sidecar is not configured")
+                _json_response(self, self.server.polygon_store.migrate_draft(body))
+            elif path == "/api/review/polygon/approve":
+                if self.server.polygon_store is None:
+                    raise ValueError("polygon sidecar is not configured")
+                _json_response(self, self.server.polygon_store.approve(body or None))
+            elif path == "/api/review/polygon/revoke":
+                if self.server.polygon_store is None:
+                    raise ValueError("polygon sidecar is not configured")
+                _json_response(self, self.server.polygon_store.revoke(str(body.get("reason", "reviewer_requested"))))
+            elif path == "/api/review/polygon/revision":
+                if self.server.polygon_store is None:
+                    raise ValueError("polygon sidecar is not configured")
+                _json_response(self, self.server.polygon_store.save_draft(body, migration_source="needs_revision"))
             elif path == "/api/review/note":
                 _json_response(
                     self,

@@ -2205,6 +2205,7 @@ def review_chassis_serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8776, "--port"),
     reviewer_session_id: str | None = typer.Option(None, "--reviewer-session-id"),
+    polygon_sidecar_root: Path | None = typer.Option(None, "--polygon-sidecar-root", file_okay=False, dir_okay=True),
 ) -> None:
     typer.echo(f"Serving reusable review chassis at http://{host}:{port}/")
     serve_review_chassis(
@@ -2217,6 +2218,7 @@ def review_chassis_serve(
             host=host,
             port=port,
             reviewer_session_id=reviewer_session_id,
+            polygon_sidecar_root=polygon_sidecar_root.resolve() if polygon_sidecar_root is not None else None,
         )
     )
 

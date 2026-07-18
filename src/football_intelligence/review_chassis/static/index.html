@@ -222,8 +222,13 @@
           <div class="goldPitchActions">
             <label>Tolerance <input id="goldPitchTolerance" type="number" min="0" max="100" step="1"></label>
             <button id="goldResetPolygon" type="button">Reset proposal</button>
+            <button id="goldRedo" type="button" title="Redo polygon edit">Redo</button>
+            <button id="goldSaveRevisedPolygon" type="button">Save revised polygon</button>
             <button id="goldRequestRevision" type="button">Needs revision</button>
+            <button id="goldApproveRevisedPolygon" class="primaryCommand" type="button">Approve revised polygon</button>
             <button id="goldApprovePolygon" class="primaryCommand" type="button">Approve polygon</button>
+            <button id="goldEditApprovedPolygon" type="button">Edit approved polygon</button>
+            <button id="goldRevokeApproval" type="button">Revoke approval</button>
           </div>
           <p id="goldPitchValidation" class="goldHint">Evidence is loading.</p>
           <p id="goldPitchMessage" class="goldHint">Drag a vertex to inspect a change. Coordinates remain in original-image pixels.</p>

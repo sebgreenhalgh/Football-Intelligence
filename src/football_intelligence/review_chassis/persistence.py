@@ -15,6 +15,7 @@ from football_intelligence.review_chassis.config import ui_config_hash
 from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
 from football_intelligence.review_chassis.manifest import manifest_hash
 from football_intelligence.review_chassis.models import GenericReviewManifest, ReviewUIConfig
+from football_intelligence.review_chassis.polygon_sidecar import PolygonSidecarStore
 
 
 def utc_now() -> str:
@@ -71,6 +72,7 @@ class GenericReviewPersistence:
     ui_config: ReviewUIConfig
     decisions_root: Path
     reviewer_session_id: str
+    polygon_store: PolygonSidecarStore | None = None
     _persistence_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
     @property
@@ -345,6 +347,19 @@ class GenericReviewPersistence:
         if not isinstance(tolerance, (int, float)) or not 0 <= float(tolerance) <= 100:
             raise ValueError("pitch-polygon tolerance must be between 0 and 100 pixels")
         if decision == "PITCH_POLYGON_APPROVED":
+            if self.polygon_store is not None:
+                polygon = self.polygon_store.ensure()
+                if not polygon.get("is_approved"):
+                    raise ValueError("pitch approval is blocked until the revised polygon is approved")
+                if structured_review.get("source_frame_sha256") != self.polygon_store.source_image_hash:
+                    raise ValueError("source image hash mismatch")
+                if structured_review.get("approved_polygon_hash") != polygon.get("approved_polygon_hash"):
+                    raise ValueError("approved polygon hash mismatch")
+                if structured_review.get("approved_polygon_manifest_hash") != polygon.get(
+                    "approved_polygon_manifest_hash"
+                ):
+                    raise ValueError("approved polygon manifest hash mismatch")
+                return
             expected = self.ui_config.question_contract.get("pitch_polygon_proposal_hash")
             normalized_vertices = [{"x": float(vertex["x"]), "y": float(vertex["y"])} for vertex in vertices]
             actual = stable_hash({"vertices": normalized_vertices, "tolerance_pixels": float(tolerance)})
@@ -362,6 +377,14 @@ class GenericReviewPersistence:
             raise ValueError("gold strand sequences must save as SEQUENCE_ANNOTATED")
         if not isinstance(structured_review, dict):
             raise ValueError("gold strand review requires frame_annotations")
+        if self.polygon_store is not None:
+            polygon = self.polygon_store.ensure()
+            if not polygon.get("is_approved"):
+                raise ValueError("frame annotation is blocked until the revised pitch polygon is approved")
+            if structured_review.get("approved_polygon_hash") != polygon.get("approved_polygon_hash"):
+                raise ValueError("frame annotation approved polygon hash mismatch")
+            if structured_review.get("approved_polygon_manifest_hash") != polygon.get("approved_polygon_manifest_hash"):
+                raise ValueError("frame annotation approved polygon manifest hash mismatch")
         annotations = structured_review.get("frame_annotations")
         records = case.visible_metadata.get("frame_records", [])
         if not isinstance(annotations, list) or len(annotations) != len(records):
@@ -541,6 +564,15 @@ class GenericReviewPersistence:
             for case_id, allowed in required.items():
                 if not isinstance(allowed, list) or decisions.get(case_id) not in allowed:
                     raise ValueError(f"completion is blocked until {case_id} has an approved decision")
+        if contract.get("polygon_sidecar_required") and self.polygon_store is not None:
+            polygon = self.polygon_store.ensure()
+            if not polygon.get("is_approved"):
+                raise ValueError("completion is blocked until the revised pitch polygon is approved")
+            state["polygon_binding"] = {
+                "approved_polygon_hash": polygon.get("approved_polygon_hash"),
+                "approved_polygon_manifest_hash": polygon.get("approved_polygon_manifest_hash"),
+                "immutable_package_manifest_hash": polygon["proposal"].get("immutable_package_manifest_hash"),
+            }
         if contract.get("evidence_blockers_must_be_clear") and state.get("evidence_blockers"):
             raise ValueError("completion is blocked while evidence blockers remain")
         if contract.get("unsaved_drafts_must_be_clear") and state.get("unsaved_drafts"):
@@ -548,7 +580,7 @@ class GenericReviewPersistence:
 
     def export_payload(self, state: dict[str, Any] | None = None) -> dict[str, Any]:
         state = canonical_decision_state(state or self.ensure_state())
-        return {
+        payload = {
             "schema_version": "football_intelligence.review_chassis.export.v1",
             "created_at": utc_now(),
             "review_id": self.manifest.review_id,
@@ -565,6 +597,14 @@ class GenericReviewPersistence:
             },
             **safety_payload(),
         }
+        if self.polygon_store is not None:
+            polygon = self.polygon_store.ensure()
+            payload["polygon_binding"] = {
+                "approved_polygon_hash": polygon.get("approved_polygon_hash"),
+                "approved_polygon_manifest_hash": polygon.get("approved_polygon_manifest_hash"),
+                "immutable_package_manifest_hash": polygon["proposal"].get("immutable_package_manifest_hash"),
+            }
+        return payload
 
     @synchronized
     def export_completed_review(self, state: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -598,6 +638,10 @@ class GenericReviewPersistence:
             "human_approved": False,
             **safety_payload(),
         }
+        if self.polygon_store is not None:
+            binding = export.get("polygon_binding", {})
+            completed_manifest["polygon_binding"] = binding
+            summary["polygon_binding"] = binding
         write_completion_transaction(
             decisions_root=self.decisions_root,
             completed_review=export,

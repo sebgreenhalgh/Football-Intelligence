@@ -36,6 +36,11 @@ const goldViewport = {
 let goldEvidenceGeneration = 0;
 let goldEvidenceBlocked = false;
 let goldPointerPan = null;
+let goldPolygonSidecar = null;
+let goldPolygonSaveTimer = null;
+let goldPolygonHistory = [];
+let goldPolygonRedo = [];
+let goldPolygonGateBlocked = false;
 
 const $ = (id) => document.getElementById(id);
 const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -125,6 +130,24 @@ function goldClearEvidenceBlocker() {
   document.querySelectorAll("#goldShell button, #goldShell input, #goldShell textarea").forEach((control) => {
     if (!control.matches("#goldComplete")) control.disabled = false;
   });
+}
+
+function goldSetPolygonGate(message) {
+  goldPolygonGateBlocked = true;
+  const blocker = $("goldEvidenceBlockerFrame");
+  if (blocker) { blocker.textContent = message; blocker.classList.remove("isHidden"); }
+  document.querySelectorAll("#goldAnnotationPanel button, #goldAnnotationTools button, #goldAnnotationTools textarea").forEach((control) => { control.disabled = true; });
+  const status = $("goldEvidenceStatus");
+  if (status) status.textContent = message;
+  goldUpdateCompletionGate();
+}
+
+function goldClearPolygonGate() {
+  goldPolygonGateBlocked = false;
+  const blocker = $("goldEvidenceBlockerFrame");
+  if (blocker && !goldEvidenceBlocked) blocker.classList.add("isHidden");
+  document.querySelectorAll("#goldAnnotationPanel button, #goldAnnotationTools button, #goldAnnotationTools textarea").forEach((control) => { control.disabled = false; });
+  goldUpdateCompletionGate();
 }
 
 function assetSort(a, b) {
@@ -1309,6 +1332,115 @@ function goldDraftKey(caseData) {
   return `gold_strand_${manifest.review_id}_${caseData.case_id}`;
 }
 
+function goldPolygonStorageKey() {
+  return `gold_polygon_${manifest.review_id}_pitch`;
+}
+
+function goldPolygonPayload() {
+  const metadata = manifest?.cases?.find((item) => item.task_type === "pitch_polygon_approval")?.visible_metadata || {};
+  return {
+    vertices_original_pixels: goldPitchVertices.map((point) => ({x: Number(point.x), y: Number(point.y)})),
+    tolerance_pixels: Number($("goldPitchTolerance").value),
+    source_image_hash: metadata.source_frame_sha256,
+    image_width: Number(metadata.image_width),
+    image_height: Number(metadata.image_height),
+  };
+}
+
+function goldPolygonApproved() {
+  return Boolean(goldPolygonSidecar?.is_approved);
+}
+
+function goldPolygonBackup() {
+  try { localStorage.setItem(goldPolygonStorageKey(), JSON.stringify({...goldPolygonPayload(), saved_at: new Date().toISOString()})); } catch {}
+}
+
+function goldLegacyPolygonCandidate(key, raw) {
+  if (!key || /sequence|annotation/i.test(key) || /frame_annotations|annotations/i.test(raw)) return null;
+  let value;
+  try { value = JSON.parse(raw); } catch { return null; }
+  const candidate = value?.polygon || value?.pitch_polygon || value;
+  const vertices = candidate?.vertices_original_pixels || candidate?.polygon_vertices || candidate?.vertices;
+  if (!Array.isArray(vertices) || vertices.length < 4) return null;
+  const metadata = manifest.cases.find((item) => item.task_type === "pitch_polygon_approval")?.visible_metadata || {};
+  if (candidate.source_image_hash && candidate.source_image_hash !== metadata.source_frame_sha256) return null;
+  if (candidate.source_frame_sha256 && candidate.source_frame_sha256 !== metadata.source_frame_sha256) return null;
+  const dimensions = candidate.source_dimensions || {};
+  if (dimensions.width && Number(dimensions.width) !== Number(metadata.image_width)) return null;
+  if (dimensions.height && Number(dimensions.height) !== Number(metadata.image_height)) return null;
+  return {
+    key,
+    vertices_original_pixels: vertices,
+    tolerance_pixels: Number(candidate.tolerance_pixels ?? metadata.tolerance_pixels),
+    source_image_hash: metadata.source_frame_sha256,
+    image_width: Number(metadata.image_width),
+    image_height: Number(metadata.image_height),
+  };
+}
+
+async function goldLoadPolygonSidecar() {
+  if (!uiConfig.question_contract?.polygon_sidecar?.enabled) return;
+  goldPolygonSidecar = await api("/api/review/polygon");
+  const draft = goldPolygonSidecar.draft || {};
+  if (draft.vertices_original_pixels?.length && draft.status !== "PROPOSAL") {
+    goldPitchVertices = draft.vertices_original_pixels.map((point) => ({x: Number(point.x), y: Number(point.y)}));
+  }
+  if (draft.tolerance_pixels != null) $("goldPitchTolerance").value = String(draft.tolerance_pixels);
+  if (draft.status === "DRAFT") {
+    $("goldSaveState").textContent = "Saved draft";
+    $("goldSaveState").className = "saveState unsaved";
+  }
+  if (goldPolygonSidecar.is_approved) {
+    goldPitchVertices = goldPolygonSidecar.approved.vertices_original_pixels.map((point) => ({x: Number(point.x), y: Number(point.y)}));
+    $("goldSaveState").textContent = "Pitch approved";
+    $("goldSaveState").className = "saveState saved";
+    return;
+  }
+  const candidates = [];
+  for (const storage of [localStorage, sessionStorage]) {
+    for (const key of Object.keys(storage)) {
+      const candidate = goldLegacyPolygonCandidate(key, storage.getItem(key) || "");
+      if (candidate) candidates.push(candidate);
+    }
+  }
+  if (!candidates.length) return;
+  const candidate = candidates.sort((a, b) => a.key.localeCompare(b.key))[0];
+  try {
+    const migrated = await api("/api/review/polygon/migrate", {method: "POST", body: JSON.stringify(candidate)});
+    goldPolygonSidecar = migrated;
+    goldPitchVertices = migrated.draft.vertices_original_pixels.map((point) => ({x: Number(point.x), y: Number(point.y)}));
+    $("goldPitchTolerance").value = String(migrated.draft.tolerance_pixels);
+    $("goldSaveState").textContent = "Recovered";
+    $("goldSaveState").className = "saveState recovered";
+    $("goldPitchMessage").textContent = "Recovered your previous polygon edit";
+    try { localStorage.removeItem(candidate.key); sessionStorage.removeItem(candidate.key); } catch {}
+  } catch (error) {
+    $("goldPitchMessage").textContent = `Draft recovery needs review: ${error.message}`;
+  }
+}
+
+async function goldSavePolygonDraft(source = "explicit_save") {
+  if (!goldPolygonIsValid()) throw new Error("The polygon is not valid in the source image.");
+  goldPolygonBackup();
+  const saved = await api("/api/review/polygon/draft", {method: "POST", body: JSON.stringify({...goldPolygonPayload(), migration_source: source})});
+  goldPolygonSidecar = saved;
+  $("goldSaveState").textContent = "Saved";
+  $("goldSaveState").className = "saveState saved";
+  goldUpdateCompletionGate();
+  return saved;
+}
+
+function goldSchedulePolygonDraftSave() {
+  goldPolygonBackup();
+  clearTimeout(goldPolygonSaveTimer);
+  $("goldSaveState").textContent = "Saving";
+  $("goldSaveState").className = "saveState unsaved";
+  goldPolygonSaveTimer = setTimeout(() => goldSavePolygonDraft("vertex_drag").catch((error) => {
+    $("goldSaveState").textContent = "Error";
+    $("goldPitchMessage").textContent = `Draft save failed: ${error.message}`;
+  }), 180);
+}
+
 function goldDefaultDraft() {
   return {annotations: {}, note: "", clicks: 0, accepted_in_runs: 0, manual_bbox_count: 0};
 }
@@ -1471,7 +1603,7 @@ function goldRenderMetrics(caseData) {
   $("goldRunAccepted").textContent = `${Math.round(100 * draft.accepted_in_runs / Math.max(1, total))}%`;
   $("goldManualCount").textContent = String(draft.manual_bbox_count);
   $("goldClickCount").textContent = String(draft.clicks);
-  $("goldSaveSequence").disabled = annotated !== total || goldEvidenceBlocked;
+  $("goldSaveSequence").disabled = annotated !== total || goldEvidenceBlocked || goldPolygonGateBlocked || !goldPolygonApproved();
   $("goldFrameProgress").textContent = `${annotated} of ${total} strand-frames annotated`;
   $("goldProgressBar").style.width = `${100 * annotated / Math.max(1, total)}%`;
   goldUpdateCompletionGate();
@@ -1567,6 +1699,8 @@ async function goldRenderFrame() {
   $("goldAState").textContent = goldStateLabel(annotation.A);
   $("goldBState").textContent = goldStateLabel(annotation.B);
   goldRenderMetrics(caseData);
+  if (goldPolygonApproved()) goldClearPolygonGate();
+  else goldSetPolygonGate("Approve the revised pitch polygon before annotating frames.");
 }
 
 function goldPoint(event, svg) {
@@ -1579,23 +1713,31 @@ function goldPoint(event, svg) {
 }
 
 function goldPolygonIsValid() {
-  const caseData = goldCase();
-  const metadata = caseData?.visible_metadata || {};
+  const metadata = manifest?.cases?.find((item) => item.task_type === "pitch_polygon_approval")?.visible_metadata || {};
   if (goldPitchVertices.length < 4) return false;
-  return goldPitchVertices.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)
-    && point.x >= 0 && point.y >= 0 && point.x <= Number(metadata.image_width) && point.y <= Number(metadata.image_height));
+  if (!goldPitchVertices.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)
+    && point.x >= 0 && point.y >= 0 && point.x <= Number(metadata.image_width) && point.y <= Number(metadata.image_height))) return false;
+  for (let index = 0; index < goldPitchVertices.length; index += 1) {
+    const next = goldPitchVertices[(index + 1) % goldPitchVertices.length];
+    if (Math.hypot(goldPitchVertices[index].x - next.x, goldPitchVertices[index].y - next.y) < 0.001) return false;
+  }
+  const area = Math.abs(goldPitchVertices.reduce((sum, point, index) => {
+    const next = goldPitchVertices[(index + 1) % goldPitchVertices.length];
+    return sum + point.x * next.y - next.x * point.y;
+  }, 0) / 2);
+  return area >= Number(metadata.image_width) * Number(metadata.image_height) * 0.001;
 }
 
 function goldUpdateCompletionGate() {
-  const pitchCase = manifest?.cases?.[0];
-  const pitchApproved = pitchCase && currentDecision(pitchCase) === "PITCH_POLYGON_APPROVED";
+  const pitchApproved = goldPolygonApproved();
   const annotationCases = (manifest?.cases || []).filter((item) => item.task_type === "gold_strand_frame_annotation");
   const allFrames = annotationCases.every((caseData) => currentDecision(caseData) === "SEQUENCE_ANNOTATED");
-  const drafts = Object.values(goldDrafts).some((draft) => Object.keys(draft.annotations || {}).length > 0 || String(draft.note || "").trim());
+  const frameDrafts = Object.values(goldDrafts).some((draft) => Object.keys(draft.annotations || {}).length > 0 || String(draft.note || "").trim());
+  const polygonDraft = Boolean(goldPolygonSidecar?.draft?.status === "DRAFT" && !pitchApproved);
   const complete = $("goldComplete");
-  if (complete) complete.disabled = !(pitchApproved && allFrames && !goldEvidenceBlocked && !drafts && !document.querySelector(".goldInvalidBBox"));
+  if (complete) complete.disabled = !(pitchApproved && allFrames && !goldEvidenceBlocked && !frameDrafts && !polygonDraft && !document.querySelector(".goldInvalidBBox"));
   const checklist = $("goldCompletionChecklist");
-  if (checklist) checklist.textContent = `Pitch ${pitchApproved ? "approved" : "pending"} | Frames ${allFrames ? "complete" : "pending"} | Evidence ${goldEvidenceBlocked ? "blocked" : "clear"} | Draft ${drafts ? "unsaved" : "clear"}`;
+  if (checklist) checklist.textContent = `Pitch ${pitchApproved ? "approved" : "pending"} | Frames ${allFrames ? "complete" : "pending"} | Evidence ${goldEvidenceBlocked ? "blocked" : "clear"} | Draft ${frameDrafts || polygonDraft ? "unsaved" : "clear"}`;
 }
 
 function goldRenderPitch() {
@@ -1631,7 +1773,12 @@ function goldRenderPitch() {
     vertex.setAttribute("cy", point.y);
     vertex.setAttribute("r", 9);
     vertex.setAttribute("class", "goldVertex");
-    vertex.addEventListener("pointerdown", (event) => { goldPitchDragIndex = index; vertex.setPointerCapture(event.pointerId); });
+    vertex.addEventListener("pointerdown", (event) => {
+      goldPolygonHistory.push(JSON.parse(JSON.stringify(goldPitchVertices)));
+      goldPolygonRedo = [];
+      goldPitchDragIndex = index;
+      vertex.setPointerCapture(event.pointerId);
+    });
     vertex.addEventListener("pointermove", (event) => {
       if (goldPitchDragIndex !== index) return;
       goldPitchVertices[index] = goldPoint(event, svg);
@@ -1643,7 +1790,10 @@ function goldRenderPitch() {
       $("goldPitchValidation").textContent = goldPolygonIsValid() ? "Polygon valid in original-image pixels." : "Polygon is outside the image bounds.";
       goldUpdateCompletionGate();
     });
-    vertex.addEventListener("pointerup", () => { goldPitchDragIndex = null; });
+    vertex.addEventListener("pointerup", () => {
+      goldPitchDragIndex = null;
+      goldSchedulePolygonDraftSave();
+    });
     svg.appendChild(vertex);
   });
   $("goldPitchValidation").textContent = goldPolygonIsValid() ? "Polygon valid in original-image pixels." : "Polygon is outside the image bounds.";
@@ -1655,29 +1805,68 @@ async function goldSavePitch(decision) {
     $("goldPitchMessage").textContent = "Approval is blocked until the evidence and polygon are valid.";
     return;
   }
-  const caseData = goldCase();
-  const structuredReview = {
-    polygon_vertices: goldPitchVertices.map((point) => ({x: Number(point.x), y: Number(point.y)})),
-    tolerance_pixels: Number($("goldPitchTolerance").value),
-    source_frame_sha256: caseData.visible_metadata.source_frame_sha256,
-    note: decision === "PITCH_POLYGON_REVISION_REQUIRED" ? "Proposal requires regeneration before benchmark approval." : null,
-  };
   try {
-    state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({
-      case_id: caseData.case_id,
-      decision,
-      structured_review: structuredReview,
-      input_source: "pitch_polygon_approval",
-      elapsed_active_seconds: activeTimeNow(),
-    })});
+    await goldSavePolygonDraft(decision === "PITCH_POLYGON_REVISION_REQUIRED" ? "needs_revision" : "before_approval");
     if (decision === "PITCH_POLYGON_APPROVED") {
+      goldPolygonSidecar = await api("/api/review/polygon/approve", {method: "POST", body: JSON.stringify(goldPolygonPayload())});
+      $("goldPitchMessage").textContent = `Pitch approved. Approved polygon hash: ${goldPolygonSidecar.approved_polygon_hash.slice(0, 12)}`;
       activeIndex = Math.min(manifest.cases.length - 1, activeIndex + 1);
       goldFrameIndex = 0;
+    } else {
+      goldPolygonSidecar = await api("/api/review/polygon/revision", {method: "POST", body: JSON.stringify(goldPolygonPayload())});
+      $("goldPitchMessage").textContent = "Needs revision recorded. The revised draft remains editable and unapproved.";
     }
     goldRender();
   } catch (error) {
-    $("goldPitchMessage").textContent = `Save blocked: ${error.message}`;
+    $("goldPitchMessage").textContent = `Polygon save blocked: ${error.message}`;
   }
+}
+
+async function goldSaveRevisedPolygon() {
+  try {
+    await goldSavePolygonDraft("explicit_save");
+    $("goldPitchMessage").textContent = "Revised polygon saved as a match-local draft.";
+    goldRenderPitch();
+  } catch (error) { $("goldPitchMessage").textContent = `Draft save failed: ${error.message}`; }
+}
+
+async function goldEditApprovedPolygon() {
+  if (!goldPolygonSidecar?.approved) return;
+  goldPolygonHistory.push(JSON.parse(JSON.stringify(goldPitchVertices)));
+  goldPolygonRedo = [];
+  goldPitchVertices = goldPolygonSidecar.approved.vertices_original_pixels.map((point) => ({x: Number(point.x), y: Number(point.y)}));
+  await goldSavePolygonDraft("edit_approved_polygon");
+  activeIndex = manifest.cases.findIndex((caseData) => caseData.task_type === "pitch_polygon_approval");
+  $("goldPitchMessage").textContent = "Approved polygon is being edited. Re-approve it before annotation.";
+  await goldRender();
+}
+
+async function goldRevokeApproval() {
+  if (!window.confirm("Revoke polygon approval? Frame annotation and completion will be blocked until reapproval.")) return;
+  try {
+    goldPolygonSidecar = await api("/api/review/polygon/revoke", {method: "POST", body: JSON.stringify({reason: "reviewer_requested"})});
+    activeIndex = 0;
+    $("goldPitchMessage").textContent = "Polygon approval revoked. Reapproval is required before annotation.";
+    goldRender();
+  } catch (error) { $("goldPitchMessage").textContent = `Revoke failed: ${error.message}`; }
+}
+
+function goldUndoPolygon() {
+  const prior = goldPolygonHistory.pop();
+  if (!prior) return;
+  goldPolygonRedo.push(JSON.parse(JSON.stringify(goldPitchVertices)));
+  goldPitchVertices = prior;
+  goldSchedulePolygonDraftSave();
+  goldRenderPitch();
+}
+
+function goldRedoPolygon() {
+  const next = goldPolygonRedo.pop();
+  if (!next) return;
+  goldPolygonHistory.push(JSON.parse(JSON.stringify(goldPitchVertices)));
+  goldPitchVertices = next;
+  goldSchedulePolygonDraftSave();
+  goldRenderPitch();
 }
 
 async function goldRenderPitchCase(caseData) {
@@ -1689,13 +1878,21 @@ async function goldRenderPitchCase(caseData) {
   $("goldQuestion").textContent = caseData.concise_question;
   $("goldSequenceProgress").textContent = "Pitch gate approval";
   $("goldFrameProgress").textContent = "Required before gold annotation";
-  $("goldProgressBar").style.width = currentDecision(caseData) ? "100%" : "0%";
+  $("goldProgressBar").style.width = goldPolygonApproved() ? "100%" : "0%";
   const metadata = caseData.visible_metadata;
   goldPitchOriginalVertices = metadata.polygon_vertices.map((point) => ({...point}));
-  if (!goldPitchVertices.length) goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point}));
-  $("goldPitchTolerance").value = String(metadata.tolerance_pixels);
+  const sourceVertices = goldPolygonSidecar?.is_approved
+    ? goldPolygonSidecar.approved.vertices_original_pixels
+    : goldPolygonSidecar?.draft?.vertices_original_pixels || goldPitchOriginalVertices;
+  goldPitchVertices = sourceVertices.map((point) => ({x: Number(point.x), y: Number(point.y)}));
+  $("goldPitchTolerance").value = String(goldPolygonSidecar?.draft?.tolerance_pixels ?? metadata.tolerance_pixels);
+  $("goldSaveRevisedPolygon").disabled = false;
+  $("goldApproveRevisedPolygon").disabled = goldPolygonApproved();
+  $("goldEditApprovedPolygon").disabled = !goldPolygonApproved();
+  $("goldRevokeApproval").disabled = !goldPolygonApproved();
   const generation = ++goldEvidenceGeneration;
   goldClearEvidenceBlocker();
+  goldClearPolygonGate();
   try {
     const asset = caseData.evidence_assets.find((item) => item.asset_id === metadata.base_asset_id);
     await goldAuditAndLoadImage(caseData, asset, $("goldPitchImage"));
@@ -1716,6 +1913,8 @@ function goldRenderAnnotationCase(caseData) {
   $("goldSequenceProgress").textContent = `Sequence ${activeIndex} of ${manifest.cases.length - 1}`;
   $("goldNote").value = goldDraft(caseData).note || "";
   goldRenderFrame();
+  if (!goldPolygonApproved()) goldSetPolygonGate("Approve the revised pitch polygon before annotating frames.");
+  else goldClearPolygonGate();
 }
 
 async function goldRender() {
@@ -1728,7 +1927,7 @@ async function goldRender() {
 }
 
 async function goldSaveSequence() {
-  if (goldEvidenceBlocked) return;
+  if (goldEvidenceBlocked || goldPolygonGateBlocked || !goldPolygonApproved()) return;
   const caseData = goldCase();
   const draft = goldDraft(caseData);
   const records = goldRecords(caseData);
@@ -1749,6 +1948,8 @@ async function goldSaveSequence() {
       note: String($("goldNote").value || "").trim(),
       structured_review: {
         frame_annotations: frameAnnotations,
+        approved_polygon_hash: goldPolygonSidecar?.approved_polygon_hash,
+        approved_polygon_manifest_hash: goldPolygonSidecar?.approved_polygon_manifest_hash,
         note: String($("goldNote").value || "").trim() || null,
         interaction_metrics: {
           clicks: draft.clicks,
@@ -1813,8 +2014,21 @@ function goldBind() {
     if (action === "fit" || action === "fit-polygon") goldFitViewport(kind);
     else goldZoomViewport(kind, action === "out" ? 0.8 : 1.25);
   }));
-  $("goldUndo").addEventListener("click", goldUndo);
-  $("goldResetPolygon").addEventListener("click", () => { goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point})); goldRenderPitch(); goldFitViewport("pitch"); });
+  $("goldUndo").addEventListener("click", () => goldCase()?.task_type === "pitch_polygon_approval" ? goldUndoPolygon() : goldUndo());
+  $("goldRedo").addEventListener("click", goldRedoPolygon);
+  $("goldResetPolygon").addEventListener("click", () => {
+    if (!window.confirm("Reset the polygon to the immutable proposal?")) return;
+    goldPolygonHistory.push(JSON.parse(JSON.stringify(goldPitchVertices)));
+    goldPolygonRedo = [];
+    goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point}));
+    goldSchedulePolygonDraftSave();
+    goldRenderPitch();
+    goldFitViewport("pitch");
+  });
+  $("goldSaveRevisedPolygon").addEventListener("click", goldSaveRevisedPolygon);
+  $("goldApproveRevisedPolygon").addEventListener("click", () => goldSavePitch("PITCH_POLYGON_APPROVED"));
+  $("goldEditApprovedPolygon").addEventListener("click", goldEditApprovedPolygon);
+  $("goldRevokeApproval").addEventListener("click", goldRevokeApproval);
   $("goldApprovePolygon").addEventListener("click", () => goldSavePitch("PITCH_POLYGON_APPROVED"));
   $("goldRequestRevision").addEventListener("click", () => goldSavePitch("PITCH_POLYGON_REVISION_REQUIRED"));
   $("goldStrandA").addEventListener("click", () => goldSetActiveStrand("A"));
@@ -1867,7 +2081,12 @@ async function load() {
   state = await api("/api/review/state");
   goldMode = uiConfig.presentation_mode === "gold_strand_annotation";
   if (goldMode) {
-    const resume = state.resume_case_id;
+    await goldLoadPolygonSidecar();
+    let resume = state.resume_case_id;
+    const pitchIndex = manifest.cases.findIndex((caseData) => caseData.task_type === "pitch_polygon_approval");
+    if (goldPolygonApproved() && resume === manifest.cases[pitchIndex]?.case_id) {
+      resume = manifest.cases.find((caseData) => caseData.task_type === "gold_strand_frame_annotation")?.case_id;
+    }
     activeIndex = Math.max(0, manifest.cases.findIndex((caseData) => caseData.case_id === resume));
     document.body.dataset.presentation = uiConfig.presentation_mode;
     document.body.classList.add("goldPresentation");
