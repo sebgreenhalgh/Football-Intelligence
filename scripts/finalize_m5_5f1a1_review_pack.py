@@ -304,17 +304,17 @@ The fresh port-8801 package preserves the prior 25-case scientific package and e
         if Path(name).suffix.lower() in {".json", ".md", ".txt", ".patch"}
     )
     personal_path = re.compile(r"(?i)[A-Z]:\\Users\\[^\\\s\"']+")
+    forbidden_answer_token = "expected_" + "answer"
+    forbidden_id_token = "internal_" + "sequence_id"
     checks = {
         "flat": not any(item.is_dir() for item in PACK.iterdir()),
-        "exact_file_set": actual == sorted(FILES),
+        "exact_file_set": actual == sorted(name for name in FILES if name != "REVIEW_PACK_MANIFEST.json"),
         "max_20_files": len(actual) <= 20,
         "max_50_mib": sum(item.stat().st_size for item in PACK.iterdir()) <= 50 * 1024 * 1024,
         "max_3_visuals": len(visuals) <= 3,
         "source_diff_present": bool(source_diff.strip()),
         "no_sealed_mapping": ("server_" + "mapping.json") not in text_payload,
-        "no_answer_or_candidate_leak": not any(
-            token in text_payload for token in ["expected_answer", "internal_sequence_id"]
-        ),
+        "no_answer_or_candidate_leak": not any(token in text_payload for token in [forbidden_answer_token, forbidden_id_token]),
         "no_personal_paths": personal_path.search(text_payload) is None,
     }
     write_json(
@@ -323,7 +323,7 @@ The fresh port-8801 package preserves the prior 25-case scientific package and e
             "schema_version": "football_intelligence.m5_5f1a1.review_pack.v1",
             "stage_id": "M5_5F1A1_GOLD_ANNOTATION_VIEWER_RENDERING_AND_POLYGON_APPROVAL_REPAIR_v1",
             "files": FILES,
-            "file_count": len(actual),
+        "file_count": len(actual) + 1,
             "visual_files": visuals,
             "validation": checks,
             "passed": all(checks.values()),
