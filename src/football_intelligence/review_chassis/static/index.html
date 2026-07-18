@@ -175,6 +175,95 @@
     <div id="premiumHelpDialog" class="helpDialog isHidden" role="dialog" aria-modal="true" aria-labelledby="premiumHelpTitle"><div class="helpDialogCard"><button id="premiumHelpClose" class="iconButton closeHelp" type="button" aria-label="Close help">&#10005;</button><h2 id="premiumHelpTitle">How to review</h2><p>Step through the one viewer or play the interval. Observed detections are solid cyan; predictions are dashed amber and off by default. Answer the four questions, confirm the suggested conclusion, add one concise note, then save.</p><p>Keyboard: Left/Right step frames, Space play/pause, Shift+Left/Shift+Right jump phases, Escape close help.</p></div></div>
   </div>
 
+  <div id="goldShell" class="goldShell isHidden" aria-hidden="true">
+    <header class="goldHeader">
+      <div>
+        <span class="eyebrow">FOOTBALL INTELLIGENCE</span>
+        <h1 id="goldTitle">Gold strand annotation</h1>
+      </div>
+      <div class="goldProgressBlock">
+        <strong id="goldSequenceProgress">Pitch gate</strong>
+        <span id="goldFrameProgress">0 annotated frames</span>
+        <div class="progressTrack"><span id="goldProgressBar"></span></div>
+      </div>
+      <div class="goldHeaderActions">
+        <button id="goldUndo" type="button" title="Undo (Ctrl+Z)">&#8630;</button>
+        <span id="goldSaveState" class="saveState" role="status">Draft</span>
+        <button id="goldComplete" type="button" disabled>Complete</button>
+      </div>
+    </header>
+
+    <main class="goldMain">
+      <section class="goldViewerColumn">
+        <div class="goldViewerHeader">
+          <div>
+            <span class="eyebrow" id="goldTaskEyebrow">PITCH GATE</span>
+            <h2 id="goldCaseTitle">Approve the playable-pitch boundary</h2>
+            <p id="goldQuestion">Review the image-space polygon before frame annotation.</p>
+          </div>
+          <div class="goldFrameReadout"><strong id="goldFrameNumber">Frame --</strong><span id="goldTimestamp">--</span></div>
+        </div>
+
+        <div id="goldPitchPanel" class="goldPitchPanel">
+          <div class="goldCanvasWrap" id="goldPitchCanvasWrap">
+            <img id="goldPitchImage" alt="Clean panorama for pitch boundary approval">
+            <svg id="goldPitchSvg" aria-label="Editable playable-pitch polygon"></svg>
+          </div>
+          <div class="goldPitchActions">
+            <label>Tolerance <input id="goldPitchTolerance" type="number" min="0" max="100" step="1"></label>
+            <button id="goldResetPolygon" type="button">Reset proposal</button>
+            <button id="goldRequestRevision" type="button">Needs revision</button>
+            <button id="goldApprovePolygon" class="primaryCommand" type="button">Approve polygon</button>
+          </div>
+          <p id="goldPitchMessage" class="goldHint">Drag a vertex to inspect a change. An edited proposal requires package regeneration before approval.</p>
+        </div>
+
+        <div id="goldAnnotationPanel" class="goldAnnotationPanel isHidden">
+          <div class="goldContextStrip" aria-label="Previous current and next frame context">
+            <figure><figcaption>Previous</figcaption><img id="goldPreviousImage" alt="Previous frame crop"></figure>
+            <figure class="current"><figcaption>Current</figcaption><div class="goldCanvasWrap" id="goldCurrentCanvasWrap"><img id="goldCurrentImage" alt="Current frame crop"><svg id="goldDetectionSvg" aria-label="Selectable anonymous detections and strand labels"></svg></div></figure>
+            <figure><figcaption>Next</figcaption><img id="goldNextImage" alt="Next frame crop"></figure>
+          </div>
+          <input id="goldTimeline" type="range" min="0" max="12" value="0" aria-label="Gold sequence frame">
+          <div class="goldFrameControls">
+            <button id="goldPreviousFrame" type="button" title="Previous frame">&#8592;</button>
+            <button id="goldAcceptFrame" class="primaryCommand" type="button">Accept proposal <kbd>Space</kbd></button>
+            <button id="goldAcceptRun" type="button">Accept stable run <kbd>Enter</kbd></button>
+            <button id="goldNextFrame" type="button" title="Next frame">&#8594;</button>
+          </div>
+          <div class="goldLegend"><span><i class="goldSwatch strandA"></i>Strand A</span><span><i class="goldSwatch strandB"></i>Strand B</span><span><i class="goldSwatch supply"></i>Available detection</span></div>
+        </div>
+      </section>
+
+      <aside id="goldAnnotationTools" class="goldTools isHidden">
+        <section>
+          <span class="eyebrow">ACTIVE STRAND</span>
+          <div class="goldSegmented" role="group" aria-label="Active strand"><button id="goldStrandA" class="activeA" type="button">A</button><button id="goldStrandB" type="button">B</button></div>
+        </section>
+        <section>
+          <h3>Frame state</h3>
+          <button data-gold-state="MISSING_VISIBLE_NO_VALID_DETECTION" type="button">Visible, no detection <kbd>1/2</kbd></button>
+          <button data-gold-state="NOT_VISIBLE" type="button">Not visible</button>
+          <button data-gold-state="AMBIGUOUS" type="button">Ambiguous <kbd>U</kbd></button>
+          <button data-gold-state="OUTSIDE_ROI" type="button">Outside ROI</button>
+          <button id="goldDrawManual" type="button">Draw manual bbox</button>
+        </section>
+        <section class="goldFrameState">
+          <h3>Current annotation</h3>
+          <div><span>A</span><strong id="goldAState">Not annotated</strong></div>
+          <div><span>B</span><strong id="goldBState">Not annotated</strong></div>
+        </section>
+        <section>
+          <h3>Efficiency</h3>
+          <dl><div><dt>Accepted in runs</dt><dd id="goldRunAccepted">0%</dd></div><div><dt>Manual bboxes</dt><dd id="goldManualCount">0</dd></div><div><dt>Clicks</dt><dd id="goldClickCount">0</dd></div></dl>
+        </section>
+        <label class="goldNote">Optional note<textarea id="goldNote" rows="3" maxlength="500" placeholder="Optional"></textarea></label>
+        <div id="goldError" class="formError isHidden" role="alert"></div>
+        <button id="goldSaveSequence" class="saveNext" type="button" disabled>Save sequence &amp; next</button>
+      </aside>
+    </main>
+  </div>
+
   <script src="/annotation_canvas.js"></script>
   <script src="/app.js"></script>
 </body>

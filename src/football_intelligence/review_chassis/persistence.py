@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from football_intelligence.review.schemas import safety_payload
+from football_intelligence.review_chassis.completion import write_completion_transaction
 from football_intelligence.review_chassis.config import ui_config_hash
 from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
 from football_intelligence.review_chassis.manifest import manifest_hash
@@ -47,12 +49,29 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
+def synchronized(method: Any) -> Any:
+    """Serialize mutations from the threaded local review server."""
+
+    def wrapped(self: GenericReviewPersistence, *args: Any, **kwargs: Any) -> Any:
+        with self._persistence_lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
+def canonical_decision_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Remove response-only fields before hashing or exporting a decision state."""
+    transient = {"counts", "resume_case_id", "last_saved_at", "last_snapshot_path"}
+    return {key: value for key, value in state.items() if key not in transient}
+
+
 @dataclass
 class GenericReviewPersistence:
     manifest: GenericReviewManifest
     ui_config: ReviewUIConfig
     decisions_root: Path
     reviewer_session_id: str
+    _persistence_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
     @property
     def state_path(self) -> Path:
@@ -100,6 +119,7 @@ class GenericReviewPersistence:
             **safety_payload(),
         }
 
+    @synchronized
     def ensure_state(self) -> dict[str, Any]:
         self.decisions_root.mkdir(parents=True, exist_ok=True)
         self.snapshots_root.mkdir(parents=True, exist_ok=True)
@@ -206,6 +226,7 @@ class GenericReviewPersistence:
         state["counts"] = self.counts(state)
         return state
 
+    @synchronized
     def save_decision(
         self,
         *,
@@ -225,6 +246,8 @@ class GenericReviewPersistence:
             raise ValueError(f"decision {decision!r} is not allowed for {case_id}")
         self._validate_structured_review(case=cases[case_id], decision=decision, structured_review=structured_review)
         state = self.ensure_state()
+        if state.get("completed") is True:
+            raise ValueError("completed reviews are immutable")
         prior = state.setdefault("decisions", {}).get(case_id)
         state["decisions"][case_id] = decision
         if note is not None:
@@ -264,6 +287,12 @@ class GenericReviewPersistence:
         structured_review: dict[str, Any] | None,
     ) -> None:
         """Enforce optional cross-field contracts at the persistence boundary."""
+        if case.task_type == "pitch_polygon_approval":
+            self._validate_pitch_polygon_review(decision=decision, structured_review=structured_review)
+            return
+        if case.task_type == "gold_strand_frame_annotation":
+            self._validate_gold_frame_review(case=case, decision=decision, structured_review=structured_review)
+            return
         contract = self.ui_config.question_contract.get("seed_rejection_contract")
         if not isinstance(contract, dict):
             return
@@ -294,10 +323,95 @@ class GenericReviewPersistence:
         if continuity_outcome != decision:
             raise ValueError("continuity outcome must match the saved decision")
 
+    def _validate_pitch_polygon_review(
+        self,
+        *,
+        decision: str,
+        structured_review: dict[str, Any] | None,
+    ) -> None:
+        if decision not in {"PITCH_POLYGON_APPROVED", "PITCH_POLYGON_REVISION_REQUIRED"}:
+            raise ValueError("invalid pitch-polygon decision")
+        if not isinstance(structured_review, dict):
+            raise ValueError("pitch-polygon review requires structured geometry")
+        vertices = structured_review.get("polygon_vertices")
+        if not isinstance(vertices, list) or len(vertices) < 4:
+            raise ValueError("pitch polygon requires at least four vertices")
+        for vertex in vertices:
+            if not isinstance(vertex, dict) or not all(
+                isinstance(vertex.get(axis), (int, float)) for axis in ("x", "y")
+            ):
+                raise ValueError("pitch-polygon vertices must use numeric original-image x/y coordinates")
+        tolerance = structured_review.get("tolerance_pixels")
+        if not isinstance(tolerance, (int, float)) or not 0 <= float(tolerance) <= 100:
+            raise ValueError("pitch-polygon tolerance must be between 0 and 100 pixels")
+        if decision == "PITCH_POLYGON_APPROVED":
+            expected = self.ui_config.question_contract.get("pitch_polygon_proposal_hash")
+            normalized_vertices = [{"x": float(vertex["x"]), "y": float(vertex["y"])} for vertex in vertices]
+            actual = stable_hash({"vertices": normalized_vertices, "tolerance_pixels": float(tolerance)})
+            if expected and actual != expected:
+                raise ValueError("edited pitch polygon requires package regeneration before approval")
+
+    def _validate_gold_frame_review(
+        self,
+        *,
+        case: Any,
+        decision: str,
+        structured_review: dict[str, Any] | None,
+    ) -> None:
+        if decision != "SEQUENCE_ANNOTATED":
+            raise ValueError("gold strand sequences must save as SEQUENCE_ANNOTATED")
+        if not isinstance(structured_review, dict):
+            raise ValueError("gold strand review requires frame_annotations")
+        annotations = structured_review.get("frame_annotations")
+        records = case.visible_metadata.get("frame_records", [])
+        if not isinstance(annotations, list) or len(annotations) != len(records):
+            raise ValueError("gold strand review must annotate every synchronized frame")
+        allowed = {
+            "OBSERVED_EXISTING_DETECTION",
+            "OBSERVED_MANUAL_BBOX",
+            "MISSING_VISIBLE_NO_VALID_DETECTION",
+            "NOT_VISIBLE",
+            "AMBIGUOUS",
+            "OUTSIDE_ROI",
+        }
+        records_by_frame = {int(record["frame_sequence"]): record for record in records}
+        seen_frames: set[int] = set()
+        for annotation in annotations:
+            if not isinstance(annotation, dict) or not isinstance(annotation.get("frame_sequence"), int):
+                raise ValueError("each gold annotation requires an integer frame_sequence")
+            frame = int(annotation["frame_sequence"])
+            if frame in seen_frames or frame not in records_by_frame:
+                raise ValueError("gold annotation frame is duplicated or outside the case")
+            seen_frames.add(frame)
+            available = {
+                str(item.get("anonymous_detection_id"))
+                for item in records_by_frame[frame].get("anonymous_detections", [])
+            }
+            for strand in ("A", "B"):
+                value = annotation.get(strand)
+                if not isinstance(value, dict) or value.get("state") not in allowed:
+                    raise ValueError(f"gold annotation requires a valid {strand} state")
+                if value["state"] == "OBSERVED_EXISTING_DETECTION":
+                    if str(value.get("anonymous_detection_id")) not in available:
+                        raise ValueError("selected observation is not available on the annotated frame")
+                if value["state"] == "OBSERVED_MANUAL_BBOX":
+                    bbox = value.get("bbox_original_pixels")
+                    if not isinstance(bbox, dict) or not all(
+                        isinstance(bbox.get(key), (int, float)) for key in ("x1", "y1", "x2", "y2")
+                    ):
+                        raise ValueError("manual observations require an original-image pixel bbox")
+                    if float(bbox["x2"]) <= float(bbox["x1"]) or float(bbox["y2"]) <= float(bbox["y1"]):
+                        raise ValueError("manual observation bbox is invalid")
+                    if not str(value.get("manual_correction_reason") or "").strip():
+                        raise ValueError("manual observations require a structured correction reason")
+
+    @synchronized
     def save_note(self, *, case_id: str, note: str, elapsed_active_seconds: int | None = None) -> dict[str, Any]:
         if case_id not in self.case_map():
             raise ValueError(f"unknown review case: {case_id}")
         state = self.ensure_state()
+        if state.get("completed") is True:
+            raise ValueError("completed reviews are immutable")
         state.setdefault("notes", {})[case_id] = note
         if elapsed_active_seconds is not None:
             state["elapsed_active_seconds"] = int(elapsed_active_seconds)
@@ -311,6 +425,7 @@ class GenericReviewPersistence:
         )
         return self._persist(state, event)
 
+    @synchronized
     def record_reveal(
         self,
         *,
@@ -325,6 +440,8 @@ class GenericReviewPersistence:
         if case_id not in cases:
             raise ValueError(f"unknown review case: {case_id}")
         state = self.ensure_state()
+        if state.get("completed") is True:
+            raise ValueError("completed reviews are immutable")
         decision = state.get("decisions", {}).get(case_id)
         reveal_key = reveal_group_id or asset_id
         if not reveal_key:
@@ -359,8 +476,11 @@ class GenericReviewPersistence:
         )
         return self._persist(state, event)
 
+    @synchronized
     def undo(self) -> dict[str, Any]:
         state = self.ensure_state()
+        if state.get("completed") is True:
+            raise ValueError("completed reviews are immutable")
         events = [
             json.loads(line) for line in self.events_path.read_text(encoding="utf-8").splitlines() if line.strip()
         ]
@@ -384,8 +504,12 @@ class GenericReviewPersistence:
         )
         return self._persist(state, event)
 
+    @synchronized
     def complete(self, *, elapsed_active_seconds: int | None = None) -> dict[str, Any]:
         state = self.ensure_state()
+        if state.get("completed") is True:
+            self.export_completed_review(state)
+            return state
         if self.ui_config.completion_requires_all_cases and self.counts(state)["remaining"] > 0:
             raise ValueError("completion is blocked until all required cases have decisions")
         if elapsed_active_seconds is not None:
@@ -401,12 +525,12 @@ class GenericReviewPersistence:
             state=state,
             extra={"elapsed_active_seconds": state.get("elapsed_active_seconds")},
         )
-        state = self._persist(state, event)
-        self.export_completed_review(state)
-        return state
+        response_state = self._persist(state, event)
+        self.export_completed_review(self.ensure_state())
+        return response_state
 
     def export_payload(self, state: dict[str, Any] | None = None) -> dict[str, Any]:
-        state = state or self.state()
+        state = canonical_decision_state(state or self.ensure_state())
         return {
             "schema_version": "football_intelligence.review_chassis.export.v1",
             "created_at": utc_now(),
@@ -425,16 +549,21 @@ class GenericReviewPersistence:
             **safety_payload(),
         }
 
+    @synchronized
     def export_completed_review(self, state: dict[str, Any] | None = None) -> dict[str, Any]:
-        state = state or self.state()
+        state = state or self.ensure_state()
         export = self.export_payload(state)
+        transaction_id = f"completion_{uuid.uuid4().hex}"
+        export["completion_transaction_id"] = transaction_id
         completed_manifest = {
             "schema_version": "football_intelligence.review_chassis.completed_manifest.v1",
             "created_at": utc_now(),
             "review_id": self.manifest.review_id,
+            "stage_id": self.manifest.stage_id,
             "manifest_hash": self.manifest_hash_value,
             "ui_config_hash": self.ui_config_hash_value,
             "decision_state_hash": export["decision_state_hash"],
+            "completion_transaction_id": transaction_id,
             "human_approved": False,
             **safety_payload(),
         }
@@ -442,18 +571,21 @@ class GenericReviewPersistence:
             "schema_version": "football_intelligence.review_chassis.completed_summary.v1",
             "created_at": utc_now(),
             **export["summary"],
+            "review_id": self.manifest.review_id,
+            "stage_id": self.manifest.stage_id,
             "manifest_hash": self.manifest_hash_value,
             "ui_config_hash": self.ui_config_hash_value,
             "decision_state_hash": export["decision_state_hash"],
+            "completion_transaction_id": transaction_id,
             "reviewer_session_id": self.reviewer_session_id,
             "human_approved": False,
             **safety_payload(),
         }
-        atomic_write_json(self.decisions_root / "completed_review.json", export)
-        atomic_write_json(self.decisions_root / "completed_review_manifest.json", completed_manifest)
-        atomic_write_json(self.decisions_root / "completed_review_summary.json", summary)
-        (self.decisions_root / "completed_review_events.jsonl").write_text(
-            self.events_path.read_text(encoding="utf-8"),
-            encoding="utf-8",
+        write_completion_transaction(
+            decisions_root=self.decisions_root,
+            completed_review=export,
+            completed_events=self.events_path.read_bytes(),
+            completed_manifest=completed_manifest,
+            completed_summary=summary,
         )
-        return export
+        return read_json(self.decisions_root / "completed_review.json")

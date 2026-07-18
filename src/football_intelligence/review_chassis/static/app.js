@@ -20,6 +20,15 @@ let premiumPlayTimer = null;
 let premiumRenderToken = 0;
 let localPremiumConfigured = false;
 let stablePremiumConfigured = false;
+let goldMode = false;
+let goldFrameIndex = 0;
+let goldActiveStrand = "A";
+let goldPitchVertices = [];
+let goldPitchOriginalVertices = [];
+let goldPitchDragIndex = null;
+let goldDrawingStart = null;
+const goldDrafts = {};
+const goldHistory = [];
 
 const $ = (id) => document.getElementById(id);
 const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -527,7 +536,7 @@ function decisionForKey(key) {
 }
 
 document.addEventListener("keydown", (event) => {
-  if (premiumMode) return;
+  if (premiumMode || goldMode) return;
   if (isTyping()) {
     if (event.key === "Escape") document.activeElement.blur();
     return;
@@ -1223,10 +1232,470 @@ function premiumBind() {
   });
 }
 
+function goldCase() {
+  return manifest.cases[activeIndex];
+}
+
+function goldDraftKey(caseData) {
+  return `gold_strand_${manifest.review_id}_${caseData.case_id}`;
+}
+
+function goldDefaultDraft() {
+  return {annotations: {}, note: "", clicks: 0, accepted_in_runs: 0, manual_bbox_count: 0};
+}
+
+function goldDraft(caseData) {
+  if (goldDrafts[caseData.case_id]) return goldDrafts[caseData.case_id];
+  try {
+    goldDrafts[caseData.case_id] = {
+      ...goldDefaultDraft(),
+      ...JSON.parse(localStorage.getItem(goldDraftKey(caseData)) || "{}"),
+    };
+  } catch {
+    goldDrafts[caseData.case_id] = goldDefaultDraft();
+  }
+  return goldDrafts[caseData.case_id];
+}
+
+function goldPersistDraft(caseData) {
+  localStorage.setItem(goldDraftKey(caseData), JSON.stringify(goldDraft(caseData)));
+  $("goldSaveState").textContent = "Draft saved";
+  $("goldSaveState").className = "saveState unsaved";
+}
+
+function goldRecords(caseData = goldCase()) {
+  return caseData.visible_metadata?.frame_records || [];
+}
+
+function goldRecord(caseData = goldCase(), index = goldFrameIndex) {
+  const records = goldRecords(caseData);
+  return records[Math.max(0, Math.min(index, records.length - 1))];
+}
+
+function goldAsset(caseData, assetId) {
+  const asset = caseData.evidence_assets.find((item) => item.asset_id === assetId);
+  return asset ? evidenceUrl(caseData.case_id, asset.relative_path) : "";
+}
+
+function goldAnnotation(caseData, frameSequence) {
+  const draft = goldDraft(caseData);
+  const key = String(frameSequence);
+  draft.annotations[key] = draft.annotations[key] || {A: null, B: null};
+  return draft.annotations[key];
+}
+
+function goldPushHistory(caseData) {
+  goldHistory.push({case_id: caseData.case_id, draft: JSON.parse(JSON.stringify(goldDraft(caseData)))});
+  if (goldHistory.length > 100) goldHistory.shift();
+}
+
+function goldUndo() {
+  const prior = goldHistory.pop();
+  if (!prior) return;
+  goldDrafts[prior.case_id] = prior.draft;
+  const caseData = goldCase();
+  if (caseData.case_id === prior.case_id) {
+    goldPersistDraft(caseData);
+    goldRenderFrame();
+  }
+}
+
+function goldSetActiveStrand(strand) {
+  goldActiveStrand = strand;
+  $("goldStrandA").className = strand === "A" ? "activeA" : "";
+  $("goldStrandB").className = strand === "B" ? "activeB" : "";
+}
+
+function goldSetState(strand, value, caseData = goldCase(), record = goldRecord(caseData)) {
+  if (!record) return;
+  goldPushHistory(caseData);
+  goldAnnotation(caseData, record.frame_sequence)[strand] = value;
+  goldDraft(caseData).clicks += 1;
+  goldPersistDraft(caseData);
+  goldRenderFrame();
+}
+
+function goldAcceptProposal(run = false) {
+  const caseData = goldCase();
+  if (caseData.task_type !== "gold_strand_frame_annotation") return;
+  goldPushHistory(caseData);
+  const records = goldRecords(caseData);
+  const indices = run ? records.map((_, index) => index).filter((index) => index >= goldFrameIndex) : [goldFrameIndex];
+  let accepted = 0;
+  for (const index of indices) {
+    const record = records[index];
+    const proposal = record.proposed_annotations || {};
+    if (!proposal.A || !proposal.B) continue;
+    goldAnnotation(caseData, record.frame_sequence).A = {...proposal.A};
+    goldAnnotation(caseData, record.frame_sequence).B = {...proposal.B};
+    accepted += 2;
+  }
+  const draft = goldDraft(caseData);
+  draft.clicks += 1;
+  if (run) draft.accepted_in_runs += accepted;
+  goldPersistDraft(caseData);
+  if (!run && goldFrameIndex < records.length - 1) goldFrameIndex += 1;
+  goldRenderFrame();
+}
+
+function goldStateLabel(value) {
+  if (!value) return "Not annotated";
+  if (value.state === "OBSERVED_EXISTING_DETECTION") return `Existing detection ${value.anonymous_detection_id}`;
+  if (value.state === "OBSERVED_MANUAL_BBOX") return "Manual observed bbox";
+  return String(value.state).replaceAll("_", " ").toLowerCase();
+}
+
+function goldCropBox(record, bbox) {
+  return {
+    x1: Number(bbox.x1) - Number(record.roi.x1),
+    y1: Number(bbox.y1) - Number(record.roi.y1),
+    x2: Number(bbox.x2) - Number(record.roi.x1),
+    y2: Number(bbox.y2) - Number(record.roi.y1),
+  };
+}
+
+function goldSvgRect(svg, box, className, data = {}) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  element.setAttribute("x", box.x1);
+  element.setAttribute("y", box.y1);
+  element.setAttribute("width", Math.max(1, box.x2 - box.x1));
+  element.setAttribute("height", Math.max(1, box.y2 - box.y1));
+  element.setAttribute("class", className);
+  Object.entries(data).forEach(([key, value]) => { element.dataset[key] = value; });
+  svg.appendChild(element);
+  return element;
+}
+
+function goldRenderDetections(caseData, record) {
+  const svg = $("goldDetectionSvg");
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", `0 0 ${record.crop_width} ${record.crop_height}`);
+  const annotation = goldAnnotation(caseData, record.frame_sequence);
+  for (const detection of record.anonymous_detections || []) {
+    const selectedA = annotation.A?.anonymous_detection_id === detection.anonymous_detection_id;
+    const selectedB = annotation.B?.anonymous_detection_id === detection.anonymous_detection_id;
+    const className = `goldDetection${selectedA ? " strandA" : ""}${selectedB ? " strandB" : ""}`;
+    const rectangle = goldSvgRect(svg, goldCropBox(record, detection.bbox_original_pixels), className, {
+      detectionId: detection.anonymous_detection_id,
+    });
+    rectangle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      goldSetState(goldActiveStrand, {
+        state: "OBSERVED_EXISTING_DETECTION",
+        anonymous_detection_id: detection.anonymous_detection_id,
+        observation_quality: detection.observation_quality || "UNRESOLVED",
+      });
+    });
+  }
+  for (const strand of ["A", "B"]) {
+    const value = annotation[strand];
+    if (value?.state === "OBSERVED_MANUAL_BBOX") {
+      goldSvgRect(svg, goldCropBox(record, value.bbox_original_pixels), `goldManualBox ${strand === "A" ? "strandA" : "strandB"}`);
+    }
+  }
+}
+
+function goldRenderMetrics(caseData) {
+  const draft = goldDraft(caseData);
+  const total = goldRecords(caseData).length * 2;
+  const annotated = Object.values(draft.annotations).reduce((count, value) => count + Number(Boolean(value.A)) + Number(Boolean(value.B)), 0);
+  $("goldRunAccepted").textContent = `${Math.round(100 * draft.accepted_in_runs / Math.max(1, total))}%`;
+  $("goldManualCount").textContent = String(draft.manual_bbox_count);
+  $("goldClickCount").textContent = String(draft.clicks);
+  $("goldSaveSequence").disabled = annotated !== total;
+  $("goldFrameProgress").textContent = `${annotated} of ${total} strand-frames annotated`;
+  $("goldProgressBar").style.width = `${100 * annotated / Math.max(1, total)}%`;
+}
+
+function goldLoadContextImage(target, caseData, index) {
+  const record = goldRecord(caseData, index);
+  if (!record) { target.removeAttribute("src"); return; }
+  target.src = goldAsset(caseData, record.base_asset_id);
+}
+
+function goldRenderFrame() {
+  const caseData = goldCase();
+  if (!caseData || caseData.task_type !== "gold_strand_frame_annotation") return;
+  const records = goldRecords(caseData);
+  goldFrameIndex = Math.max(0, Math.min(goldFrameIndex, records.length - 1));
+  const record = records[goldFrameIndex];
+  goldLoadContextImage($("goldPreviousImage"), caseData, goldFrameIndex - 1);
+  goldLoadContextImage($("goldCurrentImage"), caseData, goldFrameIndex);
+  goldLoadContextImage($("goldNextImage"), caseData, goldFrameIndex + 1);
+  $("goldCurrentImage").onload = () => goldRenderDetections(caseData, record);
+  if ($("goldCurrentImage").complete) goldRenderDetections(caseData, record);
+  $("goldTimeline").max = String(records.length - 1);
+  $("goldTimeline").value = String(goldFrameIndex);
+  $("goldFrameNumber").textContent = `Frame ${record.frame_sequence}`;
+  $("goldTimestamp").textContent = `${Number(record.timestamp_seconds).toFixed(1)} seconds`;
+  const annotation = goldAnnotation(caseData, record.frame_sequence);
+  $("goldAState").textContent = goldStateLabel(annotation.A);
+  $("goldBState").textContent = goldStateLabel(annotation.B);
+  goldRenderMetrics(caseData);
+}
+
+function goldPoint(event, svg) {
+  const rectangle = svg.getBoundingClientRect();
+  const view = svg.viewBox.baseVal;
+  return {
+    x: view.x + (event.clientX - rectangle.left) * view.width / rectangle.width,
+    y: view.y + (event.clientY - rectangle.top) * view.height / rectangle.height,
+  };
+}
+
+function goldRenderPitch() {
+  const caseData = goldCase();
+  const metadata = caseData.visible_metadata || {};
+  const svg = $("goldPitchSvg");
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", `0 0 ${metadata.image_width} ${metadata.image_height}`);
+  const points = goldPitchVertices.map((point) => `${point.x},${point.y}`).join(" ");
+  const tolerance = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  tolerance.setAttribute("points", points);
+  tolerance.setAttribute("class", "goldTolerance");
+  svg.appendChild(tolerance);
+  const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  polygon.setAttribute("points", points);
+  polygon.setAttribute("class", "goldPolygon");
+  svg.appendChild(polygon);
+  for (const sample of metadata.sample_footpoints || []) {
+    const marker = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    marker.setAttribute("cx", sample.x);
+    marker.setAttribute("cy", sample.y);
+    marker.setAttribute("r", 7);
+    marker.setAttribute("class", `goldPitchSample ${String(sample.zone || "").toLowerCase()}`);
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = String(sample.zone || "sample footpoint").replaceAll("_", " ");
+    marker.appendChild(title);
+    svg.appendChild(marker);
+  }
+  goldPitchVertices.forEach((point, index) => {
+    const vertex = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    vertex.setAttribute("cx", point.x);
+    vertex.setAttribute("cy", point.y);
+    vertex.setAttribute("r", 9);
+    vertex.setAttribute("class", "goldVertex");
+    vertex.addEventListener("pointerdown", (event) => { goldPitchDragIndex = index; vertex.setPointerCapture(event.pointerId); });
+    vertex.addEventListener("pointermove", (event) => {
+      if (goldPitchDragIndex !== index) return;
+      goldPitchVertices[index] = goldPoint(event, svg);
+      vertex.setAttribute("cx", goldPitchVertices[index].x);
+      vertex.setAttribute("cy", goldPitchVertices[index].y);
+      const updated = goldPitchVertices.map((value) => `${value.x},${value.y}`).join(" ");
+      polygon.setAttribute("points", updated);
+      tolerance.setAttribute("points", updated);
+    });
+    vertex.addEventListener("pointerup", () => { goldPitchDragIndex = null; });
+    svg.appendChild(vertex);
+  });
+}
+
+async function goldSavePitch(decision) {
+  const caseData = goldCase();
+  const structuredReview = {
+    polygon_vertices: goldPitchVertices.map((point) => ({x: Number(point.x), y: Number(point.y)})),
+    tolerance_pixels: Number($("goldPitchTolerance").value),
+    source_frame_sha256: caseData.visible_metadata.source_frame_sha256,
+    note: decision === "PITCH_POLYGON_REVISION_REQUIRED" ? "Proposal requires regeneration before benchmark approval." : null,
+  };
+  try {
+    state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({
+      case_id: caseData.case_id,
+      decision,
+      structured_review: structuredReview,
+      input_source: "pitch_polygon_approval",
+      elapsed_active_seconds: activeTimeNow(),
+    })});
+    if (decision === "PITCH_POLYGON_APPROVED") {
+      activeIndex = Math.min(manifest.cases.length - 1, activeIndex + 1);
+      goldFrameIndex = 0;
+    }
+    goldRender();
+  } catch (error) {
+    $("goldPitchMessage").textContent = `Save blocked: ${error.message}`;
+  }
+}
+
+function goldRenderPitchCase(caseData) {
+  $("goldPitchPanel").classList.remove("isHidden");
+  $("goldAnnotationPanel").classList.add("isHidden");
+  $("goldAnnotationTools").classList.add("isHidden");
+  $("goldTaskEyebrow").textContent = "PITCH GATE";
+  $("goldCaseTitle").textContent = "Approve the playable-pitch boundary";
+  $("goldQuestion").textContent = caseData.concise_question;
+  $("goldSequenceProgress").textContent = "Pitch gate approval";
+  $("goldFrameProgress").textContent = "Required before gold annotation";
+  $("goldProgressBar").style.width = currentDecision(caseData) ? "100%" : "0%";
+  const metadata = caseData.visible_metadata;
+  goldPitchOriginalVertices = metadata.polygon_vertices.map((point) => ({...point}));
+  if (!goldPitchVertices.length) goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point}));
+  $("goldPitchTolerance").value = String(metadata.tolerance_pixels);
+  $("goldPitchImage").src = goldAsset(caseData, metadata.base_asset_id);
+  $("goldPitchImage").onload = goldRenderPitch;
+  goldRenderPitch();
+}
+
+function goldRenderAnnotationCase(caseData) {
+  $("goldPitchPanel").classList.add("isHidden");
+  $("goldAnnotationPanel").classList.remove("isHidden");
+  $("goldAnnotationTools").classList.remove("isHidden");
+  $("goldTaskEyebrow").textContent = "FRAME-LEVEL A/B GOLD";
+  $("goldCaseTitle").textContent = `Sequence ${activeIndex} of ${manifest.cases.length - 1}`;
+  $("goldQuestion").textContent = "Confirm each temporary A/B strand frame state. Prefer an existing detection; draw only when supply is missing.";
+  $("goldSequenceProgress").textContent = `Sequence ${activeIndex} of ${manifest.cases.length - 1}`;
+  $("goldNote").value = goldDraft(caseData).note || "";
+  goldRenderFrame();
+}
+
+function goldRender() {
+  const caseData = goldCase();
+  if (!caseData) return;
+  $("goldTitle").textContent = uiConfig.review_title || "Gold strand annotation";
+  $("goldComplete").disabled = Object.keys(state?.decisions || {}).length < manifest.cases.length;
+  if (caseData.task_type === "pitch_polygon_approval") goldRenderPitchCase(caseData);
+  else goldRenderAnnotationCase(caseData);
+}
+
+async function goldSaveSequence() {
+  const caseData = goldCase();
+  const draft = goldDraft(caseData);
+  const records = goldRecords(caseData);
+  const frameAnnotations = records.map((record) => ({
+    frame_sequence: Number(record.frame_sequence),
+    A: draft.annotations[String(record.frame_sequence)]?.A,
+    B: draft.annotations[String(record.frame_sequence)]?.B,
+  }));
+  if (frameAnnotations.some((item) => !item.A || !item.B)) {
+    $("goldError").textContent = "Annotate both strands on every frame before saving.";
+    $("goldError").classList.remove("isHidden");
+    return;
+  }
+  try {
+    state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({
+      case_id: caseData.case_id,
+      decision: "SEQUENCE_ANNOTATED",
+      note: String($("goldNote").value || "").trim(),
+      structured_review: {
+        frame_annotations: frameAnnotations,
+        note: String($("goldNote").value || "").trim() || null,
+        interaction_metrics: {
+          clicks: draft.clicks,
+          accepted_in_runs: draft.accepted_in_runs,
+          manual_bbox_count: draft.manual_bbox_count,
+          active_seconds: activeTimeNow(),
+        },
+      },
+      input_source: "gold_keyboard_first_annotation",
+      elapsed_active_seconds: activeTimeNow(),
+    })});
+    localStorage.removeItem(goldDraftKey(caseData));
+    delete goldDrafts[caseData.case_id];
+    if (activeIndex < manifest.cases.length - 1) {
+      activeIndex += 1;
+      goldFrameIndex = 0;
+    }
+    $("goldSaveState").textContent = "Saved";
+    $("goldSaveState").className = "saveState saved";
+    goldRender();
+  } catch (error) {
+    $("goldError").textContent = `Save failed: ${error.message}`;
+    $("goldError").classList.remove("isHidden");
+  }
+}
+
+function goldBeginManualDraw(event) {
+  if (!$("goldDrawManual").classList.contains("drawing")) return;
+  goldDrawingStart = goldPoint(event, $("goldDetectionSvg"));
+}
+
+function goldFinishManualDraw(event) {
+  if (!goldDrawingStart) return;
+  const caseData = goldCase();
+  const record = goldRecord(caseData);
+  const end = goldPoint(event, $("goldDetectionSvg"));
+  const crop = {
+    x1: Math.min(goldDrawingStart.x, end.x), y1: Math.min(goldDrawingStart.y, end.y),
+    x2: Math.max(goldDrawingStart.x, end.x), y2: Math.max(goldDrawingStart.y, end.y),
+  };
+  goldDrawingStart = null;
+  $("goldDrawManual").classList.remove("drawing");
+  if (crop.x2 - crop.x1 < 3 || crop.y2 - crop.y1 < 3) return;
+  goldSetState(goldActiveStrand, {
+    state: "OBSERVED_MANUAL_BBOX",
+    bbox_original_pixels: {
+      x1: crop.x1 + Number(record.roi.x1), y1: crop.y1 + Number(record.roi.y1),
+      x2: crop.x2 + Number(record.roi.x1), y2: crop.y2 + Number(record.roi.y1),
+    },
+    manual_correction_reason: "VISIBLE_PERSON_WITHOUT_USABLE_OBSERVATION_BANK_ROW",
+  });
+  goldDraft(caseData).manual_bbox_count += 1;
+  goldPersistDraft(caseData);
+}
+
+function goldBind() {
+  $("goldUndo").addEventListener("click", goldUndo);
+  $("goldResetPolygon").addEventListener("click", () => { goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point})); goldRenderPitch(); });
+  $("goldApprovePolygon").addEventListener("click", () => goldSavePitch("PITCH_POLYGON_APPROVED"));
+  $("goldRequestRevision").addEventListener("click", () => goldSavePitch("PITCH_POLYGON_REVISION_REQUIRED"));
+  $("goldStrandA").addEventListener("click", () => goldSetActiveStrand("A"));
+  $("goldStrandB").addEventListener("click", () => goldSetActiveStrand("B"));
+  $("goldPreviousFrame").addEventListener("click", () => { goldFrameIndex = Math.max(0, goldFrameIndex - 1); goldRenderFrame(); });
+  $("goldNextFrame").addEventListener("click", () => { goldFrameIndex = Math.min(goldRecords().length - 1, goldFrameIndex + 1); goldRenderFrame(); });
+  $("goldTimeline").addEventListener("input", (event) => { goldFrameIndex = Number(event.target.value); goldRenderFrame(); });
+  $("goldAcceptFrame").addEventListener("click", () => goldAcceptProposal(false));
+  $("goldAcceptRun").addEventListener("click", () => goldAcceptProposal(true));
+  $("goldSaveSequence").addEventListener("click", goldSaveSequence);
+  $("goldNote").addEventListener("input", () => { goldDraft(goldCase()).note = $("goldNote").value; goldPersistDraft(goldCase()); });
+  $("goldDrawManual").addEventListener("click", () => $("goldDrawManual").classList.toggle("drawing"));
+  $("goldDetectionSvg").addEventListener("pointerdown", goldBeginManualDraw);
+  $("goldDetectionSvg").addEventListener("pointerup", goldFinishManualDraw);
+  document.querySelectorAll("[data-gold-state]").forEach((button) => button.addEventListener("click", () => goldSetState(goldActiveStrand, {state: button.dataset.goldState})));
+  $("goldComplete").addEventListener("click", async () => {
+    try {
+      state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({elapsed_active_seconds: activeTimeNow()})});
+      $("goldSaveState").textContent = "Completed";
+      $("goldSaveState").className = "saveState saved";
+    } catch (error) {
+      $("goldError").textContent = `Completion blocked: ${error.message}`;
+      $("goldError").classList.remove("isHidden");
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!goldMode || isTyping()) return;
+    if (event.ctrlKey && event.key.toLowerCase() === "z") { event.preventDefault(); goldUndo(); return; }
+    if (goldCase()?.task_type !== "gold_strand_frame_annotation") return;
+    if (event.key === " ") { event.preventDefault(); goldAcceptProposal(false); }
+    else if (event.key === "Enter") { event.preventDefault(); goldAcceptProposal(true); }
+    else if (event.key.toLowerCase() === "a") goldSetActiveStrand("A");
+    else if (event.key.toLowerCase() === "b") goldSetActiveStrand("B");
+    else if (event.key === "1") goldSetState("A", {state: "MISSING_VISIBLE_NO_VALID_DETECTION"});
+    else if (event.key === "2") goldSetState("B", {state: "MISSING_VISIBLE_NO_VALID_DETECTION"});
+    else if (event.key.toLowerCase() === "u") {
+      goldPushHistory(goldCase());
+      const annotation = goldAnnotation(goldCase(), goldRecord().frame_sequence);
+      annotation.A = {state: "AMBIGUOUS"}; annotation.B = {state: "AMBIGUOUS"};
+      goldPersistDraft(goldCase()); goldRenderFrame();
+    } else if (event.key === "ArrowLeft") { event.preventDefault(); goldFrameIndex = Math.max(0, goldFrameIndex - 1); goldRenderFrame(); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); goldFrameIndex = Math.min(goldRecords().length - 1, goldFrameIndex + 1); goldRenderFrame(); }
+  });
+}
+
 async function load() {
   manifest = await api("/api/review/manifest");
   uiConfig = await api("/api/review/ui-config");
   state = await api("/api/review/state");
+  goldMode = uiConfig.presentation_mode === "gold_strand_annotation";
+  if (goldMode) {
+    const resume = state.resume_case_id;
+    activeIndex = Math.max(0, manifest.cases.findIndex((caseData) => caseData.case_id === resume));
+    document.body.dataset.presentation = uiConfig.presentation_mode;
+    $("legacyShell").classList.add("isHidden");
+    $("goldShell").classList.remove("isHidden");
+    $("goldShell").setAttribute("aria-hidden", "false");
+    goldBind();
+    goldRender();
+    return;
+  }
   premiumMode = ["simplified_temporal", "local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig.presentation_mode);
   if (premiumMode) {
     const alternativeEnabled = uiConfig.question_contract?.alternative_hypothesis_toggle_enabled === true;

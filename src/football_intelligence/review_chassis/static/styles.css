@@ -583,6 +583,90 @@ body[data-presentation="stable_local_strand_continuity"] { display: block; min-h
 @media (prefers-reduced-motion: reduce) {
   .premiumShell *, .premiumShell *::before, .premiumShell *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+
+.goldShell { min-height: 100vh; color: #f4f6f5; background: #111513; }
+.goldShell:not(.isHidden) { display: block; }
+.goldShell button, .goldShell input, .goldShell textarea { font: inherit; letter-spacing: 0; }
+.goldHeader { position: sticky; z-index: 20; top: 0; display: grid; grid-template-columns: minmax(240px, 1fr) minmax(280px, 480px) auto; gap: 24px; align-items: center; min-height: 76px; padding: 12px 22px; background: #171d1a; border-bottom: 1px solid #344139; }
+.goldHeader h1 { margin: 3px 0 0; font-size: 1.15rem; }
+.goldProgressBlock { display: grid; gap: 5px; }
+.goldProgressBlock > span { color: #a9b4ae; font-size: 0.78rem; }
+.goldHeaderActions, .goldPitchActions, .goldFrameControls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.goldShell button { min-height: 36px; padding: 7px 11px; color: #edf3ef; background: #222c27; border: 1px solid #485950; border-radius: 6px; cursor: pointer; }
+.goldShell button:hover { background: #2c3932; border-color: #6d8176; }
+.goldShell button:disabled { cursor: not-allowed; opacity: 0.45; }
+.goldShell .primaryCommand { color: #08130e; font-weight: 750; background: #6cdd9c; border-color: #6cdd9c; }
+.goldMain { display: grid; grid-template-columns: minmax(0, 1fr) 280px; min-height: calc(100vh - 77px); }
+.goldViewerColumn { min-width: 0; padding: 18px 22px 26px; }
+.goldViewerHeader { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 12px; }
+.goldViewerHeader h2 { margin: 4px 0; font-size: 1.15rem; }
+.goldViewerHeader p { margin: 0; color: #aeb9b3; }
+.goldFrameReadout { display: grid; gap: 2px; text-align: right; }
+.goldFrameReadout span { color: #9ba9a1; font-size: 0.78rem; }
+.goldCanvasWrap { position: relative; overflow: hidden; background: #050706; border: 1px solid #3d4b43; border-radius: 6px; }
+.goldCanvasWrap img { display: block; width: 100%; height: auto; }
+.goldCanvasWrap svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.goldPitchPanel { display: grid; gap: 12px; }
+.goldPitchPanel .goldCanvasWrap { width: 100%; max-height: calc(100vh - 230px); }
+.goldPitchPanel img { max-height: calc(100vh - 230px); object-fit: contain; }
+.goldPitchActions label { display: flex; gap: 8px; align-items: center; color: #b8c3bd; }
+.goldPitchActions input { width: 70px; padding: 7px; color: #f4f6f5; background: #0b0f0d; border: 1px solid #485950; border-radius: 5px; }
+.goldHint { margin: 0; color: #9da9a3; font-size: 0.82rem; }
+.goldAnnotationPanel { display: grid; gap: 12px; }
+.goldContextStrip { display: grid; grid-template-columns: minmax(120px, 0.28fr) minmax(420px, 1fr) minmax(120px, 0.28fr); gap: 10px; align-items: center; }
+.goldContextStrip figure { min-width: 0; margin: 0; opacity: 0.62; }
+.goldContextStrip figure.current { opacity: 1; }
+.goldContextStrip figcaption { margin-bottom: 5px; color: #98a49e; font-size: 0.72rem; text-transform: uppercase; }
+.goldContextStrip img { display: block; width: 100%; border: 1px solid #344139; border-radius: 4px; }
+.goldContextStrip .current img { border: 0; border-radius: 0; }
+#goldTimeline { width: 100%; accent-color: #6cdd9c; }
+.goldFrameControls { justify-content: center; }
+.goldFrameControls kbd, .goldTools kbd { padding: 1px 4px; color: #cbd5cf; background: #101512; border: 1px solid #4c5d53; border-radius: 3px; font-size: 0.72rem; }
+.goldLegend { display: flex; gap: 18px; color: #aeb9b3; font-size: 0.78rem; }
+.goldSwatch { display: inline-block; width: 14px; height: 10px; margin-right: 6px; border: 2px solid #9aa7a0; }
+.goldSwatch.strandA { border-color: #21d4e6; }
+.goldSwatch.strandB { border-color: #f04fa8; }
+.goldSwatch.supply { border-color: #e8e7d7; }
+.goldTools { display: grid; align-content: start; gap: 16px; padding: 18px; background: #181e1b; border-left: 1px solid #344139; }
+.goldTools section { display: grid; gap: 8px; }
+.goldTools h3 { margin: 0; font-size: 0.86rem; }
+.goldTools section > button { width: 100%; text-align: left; }
+.goldSegmented { display: grid; grid-template-columns: 1fr 1fr; }
+.goldSegmented button { border-radius: 0; }
+.goldSegmented button:first-child { border-radius: 5px 0 0 5px; }
+.goldSegmented button:last-child { border-radius: 0 5px 5px 0; }
+.goldSegmented .activeA { color: #061417; background: #21d4e6; border-color: #21d4e6; }
+.goldSegmented .activeB { color: #190510; background: #f04fa8; border-color: #f04fa8; }
+.goldFrameState div { display: grid; grid-template-columns: 24px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid #303a35; }
+.goldFrameState strong { overflow-wrap: anywhere; font-size: 0.74rem; }
+.goldTools dl { display: grid; gap: 6px; margin: 0; }
+.goldTools dl div { display: flex; justify-content: space-between; gap: 10px; }
+.goldTools dt { color: #9eaaa3; }
+.goldTools dd { margin: 0; font-weight: 700; }
+.goldNote { display: grid; gap: 6px; color: #aeb9b3; font-size: 0.8rem; }
+.goldNote textarea { box-sizing: border-box; width: 100%; padding: 8px; color: #f4f6f5; background: #0d120f; border: 1px solid #46564d; border-radius: 5px; resize: vertical; }
+.goldDetection { fill: transparent; stroke: #e8e7d7; stroke-width: 2; vector-effect: non-scaling-stroke; cursor: pointer; }
+.goldDetection:hover { fill: rgba(255,255,255,0.1); stroke-width: 3; }
+.goldDetection.strandA { stroke: #21d4e6; stroke-width: 4; }
+.goldDetection.strandB { stroke: #f04fa8; stroke-width: 4; }
+.goldManualBox { fill: rgba(108,221,156,0.08); stroke: #6cdd9c; stroke-width: 3; stroke-dasharray: 8 5; vector-effect: non-scaling-stroke; }
+.goldPolygon { fill: rgba(108,221,156,0.1); stroke: #6cdd9c; stroke-width: 3; vector-effect: non-scaling-stroke; }
+.goldTolerance { fill: none; stroke: #f4c85f; stroke-width: 12; stroke-opacity: 0.35; vector-effect: non-scaling-stroke; }
+.goldVertex { fill: #f4c85f; stroke: #171d1a; stroke-width: 2; vector-effect: non-scaling-stroke; cursor: move; }
+.goldPitchSample { stroke: #101512; stroke-width: 3; vector-effect: non-scaling-stroke; }
+.goldPitchSample.inside_playable_pitch { fill: #56d48a; }
+.goldPitchSample.boundary_official_zone { fill: #f0c85a; }
+.goldPitchSample.off_pitch_staff_or_spectator { fill: #ea665f; }
+.goldError { color: #ff9b93; }
+
+@media (max-width: 1050px) {
+  .goldHeader { grid-template-columns: 1fr auto; }
+  .goldProgressBlock { grid-column: 1 / -1; grid-row: 2; }
+  .goldMain { grid-template-columns: 1fr; }
+  .goldTools { border-top: 1px solid #344139; border-left: 0; }
+  .goldContextStrip { grid-template-columns: 1fr; }
+  .goldContextStrip figure:not(.current) { display: none; }
+}
 @media (max-width: 1100px) {
   .premiumMain { grid-template-columns: 1fr; }
   .reviewColumn { max-width: none; }
