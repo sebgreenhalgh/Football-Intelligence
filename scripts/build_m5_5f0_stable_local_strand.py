@@ -885,6 +885,10 @@ def directional_tracker(
         states[frame] = {
             "a": selected[0],
             "b": selected[1] if strand_count == 2 else None,
+            "strand_states": {
+                "a": "OBSERVED_INDEPENDENT" if selected[0] else state,
+                "b": "OBSERVED_INDEPENDENT" if strand_count == 2 and selected[1] else state,
+            },
             "state": state,
             "margin": margin,
             "forward_backward_agreement": True,
@@ -944,17 +948,18 @@ def run_tracker(
         state = states[frame]
         for strand in ("a", "b"):
             row = state.get(strand)
+            strand_state = state.get("strand_states", {}).get(strand, state.get("state"))
             serial.append(
                 {
                     "benchmark_case_id": candidate["benchmark_case_id"],
                     "frame_sequence": frame,
                     "strand": strand,
-                    "state": state.get("state"),
+                    "state": strand_state,
                     "source_observation_id": observation_key(row) if row else None,
                     "bbox": box(row) if row else None,
-                    "rendered_observed": bool(row) and state.get("state") == "OBSERVED_INDEPENDENT",
-                    "render_style": "solid" if row and state.get("state") == "OBSERVED_INDEPENDENT" else "none",
-                    "missing_reason": None if row else state.get("state"),
+                    "rendered_observed": bool(row) and strand_state == "OBSERVED_INDEPENDENT",
+                    "render_style": "solid" if row and strand_state == "OBSERVED_INDEPENDENT" else "none",
+                    "missing_reason": None if row else strand_state,
                     "assignment_margin": state.get("margin"),
                     "forward_backward_agreement": state.get("forward_backward_agreement"),
                 }
@@ -1106,7 +1111,7 @@ def render_case_evidence(
         int(candidate["source_frame_lookup"][str(candidate["frames"][0])]["height"]),
     )
     source = candidate["source_id"]
-    event_source = prior_e3.source_rows()[1][source]
+    event_source = candidate.get("render_source_rows") or prior_e3.source_rows()[1][source]
     for offset, frame in enumerate(candidate["frames"]):
         lookup = candidate["source_frame_lookup"][str(frame)]
         source_path = Path(lookup["frame_file"])
@@ -1126,7 +1131,8 @@ def render_case_evidence(
             colors = {"a": (36, 206, 220, 255), "b": (230, 74, 180, 255)}
             for strand in ("a", "b"):
                 row = state.get(strand)
-                if row and state.get("state") == "OBSERVED_INDEPENDENT":
+                strand_state = state.get("strand_states", {}).get(strand, state.get("state"))
+                if row and strand_state == "OBSERVED_INDEPENDENT":
                     value = box(row)
                     local = local_box(value, crop)
                     od.rectangle(tuple(local[key] for key in ("x1", "y1", "x2", "y2")), outline=colors[strand], width=4)

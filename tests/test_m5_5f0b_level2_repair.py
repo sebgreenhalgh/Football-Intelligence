@@ -88,10 +88,11 @@ def test_normal_continuity_decision_must_match_structured_outcome(tmp_path: Path
     assert state["decisions"]["m5_5f0b_level2_case_001"] == "PASS"
 
 
-def test_package_is_fresh_eight_case_level2_review() -> None:
+def test_historical_package_remains_completed_eight_case_level2_review() -> None:
     manifest = json.loads((PACKAGE / "reviewer_manifest.json").read_text(encoding="utf-8"))
     state = json.loads((PACKAGE / "decisions" / "review_decisions.json").read_text(encoding="utf-8"))
     assert len(manifest["cases"]) == 8
     assert {case["visible_metadata"]["benchmark_level"] for case in manifest["cases"]} == {2}
-    assert state["decisions"] == {}
+    assert state["completed"] is True
+    assert len(state["decisions"]) == 8
     assert (PACKAGE / "launch_review.ps1").read_text(encoding="utf-8").count("8797") == 1

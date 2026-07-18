@@ -4,6 +4,9 @@ let state = null;
 let activeIndex = 0;
 let elapsedSeconds = 0;
 let timerStarted = Date.now();
+let activeTimeAccumulated = 0;
+let activeTimeLastTick = Date.now();
+let activeTimeVisible = document.visibilityState === "visible";
 let activeAnnotationEditor = null;
 const frameStepper = {};
 let premiumMode = false;
@@ -90,6 +93,13 @@ function currentAnnotationCandidates(caseData, asset) {
 
 function currentDecision(caseData) {
   return decisions()[caseData.case_id];
+}
+
+function activeTimeNow() {
+  const now = Date.now();
+  if (activeTimeVisible) activeTimeAccumulated += Math.max(0, now - activeTimeLastTick) / 1000;
+  activeTimeLastTick = now;
+  return Math.max(0, Math.floor(activeTimeAccumulated));
 }
 
 function revealMap(caseData) {
@@ -450,7 +460,7 @@ async function saveDecision(decision, inputSource = "click") {
     input_source: inputSource,
     reveal_state: {[caseData.case_id]: $("revealPanel").open},
     last_viewed_case_id: caseData.case_id,
-    elapsed_active_seconds: elapsedSeconds + Math.floor((Date.now() - timerStarted) / 1000),
+    elapsed_active_seconds: Math.max(elapsedSeconds + Math.floor((Date.now() - timerStarted) / 1000), activeTimeNow()),
   };
   state = await api("/api/review/decision", {method: "POST", body: JSON.stringify(body)});
   setStatus("Saved");
@@ -493,7 +503,7 @@ async function undo() {
 
 async function completeReview() {
   try {
-    state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({elapsed_active_seconds: elapsedSeconds})});
+    state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({elapsed_active_seconds: Math.max(elapsedSeconds, activeTimeNow())})});
     setStatus("Completed");
     render();
   } catch (error) {
@@ -607,6 +617,12 @@ setInterval(() => {
   elapsedSeconds += Math.floor((Date.now() - timerStarted) / 1000);
   timerStarted = Date.now();
 }, 1000);
+
+document.addEventListener("visibilitychange", () => {
+  activeTimeNow();
+  activeTimeVisible = document.visibilityState === "visible";
+  activeTimeLastTick = Date.now();
+});
 
 function premiumCase() {
   return manifest.cases[activeIndex];
