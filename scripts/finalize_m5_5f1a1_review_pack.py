@@ -314,7 +314,9 @@ The fresh port-8801 package preserves the prior 25-case scientific package and e
         "max_3_visuals": len(visuals) <= 3,
         "source_diff_present": bool(source_diff.strip()),
         "no_sealed_mapping": ("server_" + "mapping.json") not in text_payload,
-        "no_answer_or_candidate_leak": not any(token in text_payload for token in [forbidden_answer_token, forbidden_id_token]),
+        "no_answer_or_candidate_leak": not any(
+            token in text_payload for token in [forbidden_answer_token, forbidden_id_token]
+        ),
         "no_personal_paths": personal_path.search(text_payload) is None,
     }
     write_json(
@@ -323,7 +325,7 @@ The fresh port-8801 package preserves the prior 25-case scientific package and e
             "schema_version": "football_intelligence.m5_5f1a1.review_pack.v1",
             "stage_id": "M5_5F1A1_GOLD_ANNOTATION_VIEWER_RENDERING_AND_POLYGON_APPROVAL_REPAIR_v1",
             "files": FILES,
-        "file_count": len(actual) + 1,
+            "file_count": len(actual) + 1,
             "visual_files": visuals,
             "validation": checks,
             "passed": all(checks.values()),
