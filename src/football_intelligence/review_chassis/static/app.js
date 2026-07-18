@@ -99,7 +99,7 @@ function activeTimeNow() {
   const now = Date.now();
   if (activeTimeVisible) activeTimeAccumulated += Math.max(0, now - activeTimeLastTick) / 1000;
   activeTimeLastTick = now;
-  return Math.max(0, Math.floor(activeTimeAccumulated));
+  return Math.max(0, Math.ceil(activeTimeAccumulated));
 }
 
 function revealMap(caseData) {
@@ -938,11 +938,13 @@ function premiumApplyView() {
 
 function premiumSetLayerVisibility() {
   const predicted = $("premiumPredictedToggle").checked;
+  const alternative = $("premiumAlternativeToggle").checked;
   const labels = $("premiumLabelsToggle").checked;
   const locator = $("premiumLocatorToggle").checked && premiumView === "panorama";
   $("premiumObservedLayer").classList.toggle("isHidden", !$("premiumObservedToggle").checked);
   $("premiumAllDetectionsLayer").classList.toggle("isHidden", !$("premiumAllDetectionsToggle").checked);
   $("premiumPredictedLayer").classList.toggle("isHidden", !predicted);
+  $("premiumAlternativeLayer").classList.toggle("isHidden", !alternative);
   $("premiumLabelsLayer").classList.toggle("isHidden", !labels);
   $("premiumLocatorLayer").classList.toggle("isHidden", !locator);
 }
@@ -962,8 +964,9 @@ async function premiumLoadFrame(caseData) {
   const record = premiumRecord(caseData);
   if (!record) return;
   const assets = premiumEvidenceAssets(caseData);
-  const enabled = ["base", "observed", "all_detections", "predicted", "labels", "locator"].filter((layer) => {
+  const enabled = ["base", "observed", "all_detections", "predicted", "alternative_hypothesis", "labels", "locator"].filter((layer) => {
     if (layer === "predicted") return $("premiumPredictedToggle").checked;
+    if (layer === "alternative_hypothesis") return $("premiumAlternativeToggle").checked;
     if (layer === "all_detections") return $("premiumAllDetectionsToggle").checked;
     if (layer === "labels") return $("premiumLabelsToggle").checked;
     if (layer === "locator") return $("premiumLocatorToggle").checked && premiumView === "panorama";
@@ -984,7 +987,7 @@ async function premiumLoadFrame(caseData) {
   const width = loaded[0].image.naturalWidth;
   const height = loaded[0].image.naturalHeight;
   if (loaded.some((item) => item.image.naturalWidth !== width || item.image.naturalHeight !== height)) throw new Error("enabled evidence layers have mismatched dimensions");
-  const targets = {base: $("premiumBaseLayer"), observed: $("premiumObservedLayer"), all_detections: $("premiumAllDetectionsLayer"), predicted: $("premiumPredictedLayer"), labels: $("premiumLabelsLayer"), locator: $("premiumLocatorLayer")};
+  const targets = {base: $("premiumBaseLayer"), observed: $("premiumObservedLayer"), all_detections: $("premiumAllDetectionsLayer"), predicted: $("premiumPredictedLayer"), alternative_hypothesis: $("premiumAlternativeLayer"), labels: $("premiumLabelsLayer"), locator: $("premiumLocatorLayer")};
   loaded.forEach(({layer, item}) => { targets[layer].src = premiumAssetUrl(caseData, item.asset_id); targets[layer].dataset.frame = String(record.frame_sequence); targets[layer].dataset.timestamp = String(record.timestamp_seconds); });
   $("premiumEvidenceBlocker").classList.add("isHidden");
   $("premiumSyncStatus").textContent = "Synchronized";
@@ -1143,7 +1146,7 @@ async function premiumSaveAndNext(event) {
     premiumSetStatus("Saving", "saving");
     $("premiumSaveNext").disabled = true;
     try {
-      state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({case_id: caseData.case_id, decision: outcome, note: String(draft.note || "").trim(), structured_review: structuredReview, input_source: "save_and_next", last_viewed_case_id: caseData.case_id})});
+      state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({case_id: caseData.case_id, decision: outcome, note: String(draft.note || "").trim(), structured_review: structuredReview, input_source: "save_and_next", last_viewed_case_id: caseData.case_id, elapsed_active_seconds: activeTimeNow()})});
       localStorage.removeItem(premiumDraftKey(caseData));
       delete premiumDrafts[caseData.case_id];
       premiumSetStatus("Saved", "saved");
@@ -1171,7 +1174,7 @@ async function premiumSaveAndNext(event) {
   premiumSetStatus("Saving", "saving");
   $("premiumSaveNext").disabled = true;
   try {
-    state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({case_id: caseData.case_id, decision: canonical, note: draft.note.trim(), structured_review: structuredReview, input_source: "save_and_next", last_viewed_case_id: caseData.case_id})});
+    state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({case_id: caseData.case_id, decision: canonical, note: draft.note.trim(), structured_review: structuredReview, input_source: "save_and_next", last_viewed_case_id: caseData.case_id, elapsed_active_seconds: activeTimeNow()})});
     localStorage.removeItem(premiumDraftKey(caseData));
     delete premiumDrafts[caseData.case_id];
     premiumSetStatus("Saved", "saved");
@@ -1197,14 +1200,14 @@ function premiumBind() {
   $("premiumPrev").addEventListener("click", () => premiumGo(-1));
   $("premiumNext").addEventListener("click", () => premiumGo(1));
   $("premiumTimeline").addEventListener("input", (event) => { premiumFrames[premiumCase().case_id] = Number(event.target.value); premiumLoadFrame(premiumCase()).catch(() => {}); });
-  ["premiumObservedToggle", "premiumAllDetectionsToggle", "premiumPredictedToggle", "premiumLabelsToggle", "premiumLocatorToggle"].forEach((id) => $(id).addEventListener("change", () => { premiumSetLayerVisibility(); premiumLoadFrame(premiumCase()).catch(() => {}); }));
+  ["premiumObservedToggle", "premiumAllDetectionsToggle", "premiumPredictedToggle", "premiumLabelsToggle", "premiumLocatorToggle", "premiumAlternativeToggle"].forEach((id) => $(id).addEventListener("change", () => { premiumSetLayerVisibility(); premiumLoadFrame(premiumCase()).catch(() => {}); }));
   $("premiumReviewForm").addEventListener("change", () => { const draft = premiumGetDraft(premiumCase()); premiumApplySeedRejectionState(); premiumCollectAnswers(premiumCase()); premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
   $("premiumReviewForm").addEventListener("input", () => { const draft = premiumGetDraft(premiumCase()); draft.note = $("premiumNote").value; draft.overrideReason = $("premiumOverrideReason").value; draft.annotation = {start_frame: $("premiumAnnotationStart").value || null, end_frame: $("premiumAnnotationEnd").value || null, merge_region: $("premiumMergeRegion").value || null}; if (uiConfig?.presentation_mode === "stable_local_strand_continuity") { draft.first_failure_frame = $("premiumFirstFailureFrame")?.value || ""; draft.seed_correction = $("premiumSeedCorrection")?.value || ""; draft.seed_rejection_reason = $("premiumSeedRejectionReason")?.value || ""; } premiumSaveDraft(premiumCase()); });
   $("premiumConclusion").addEventListener("change", () => { premiumGetDraft(premiumCase()).conclusion = $("premiumConclusion").value; premiumGetDraft(premiumCase()).confirmed = false; premiumRenderSuggestion(premiumCase()); premiumSaveDraft(premiumCase()); });
   $("premiumSubtype").addEventListener("change", () => { premiumGetDraft(premiumCase()).subtype = $("premiumSubtype").value; premiumGetDraft(premiumCase()).confirmed = false; premiumSaveDraft(premiumCase()); });
   $("premiumConfirm").addEventListener("change", () => { premiumGetDraft(premiumCase()).confirmed = $("premiumConfirm").checked; premiumSaveDraft(premiumCase()); });
   $("premiumReviewForm").addEventListener("submit", premiumSaveAndNext);
-  $("premiumComplete").addEventListener("click", async () => { try { state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({})}); premiumSetStatus("Completed", "saved"); } catch (error) { $("premiumError").textContent = `Completion blocked: ${error.message}`; $("premiumError").classList.remove("isHidden"); } });
+  $("premiumComplete").addEventListener("click", async () => { try { state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({elapsed_active_seconds: activeTimeNow()})}); premiumSetStatus("Completed", "saved"); } catch (error) { $("premiumError").textContent = `Completion blocked: ${error.message}`; $("premiumError").classList.remove("isHidden"); } });
   $("premiumHelp").addEventListener("click", () => $("premiumHelpDialog").classList.remove("isHidden"));
   $("premiumHelpClose").addEventListener("click", () => $("premiumHelpDialog").classList.add("isHidden"));
   $("premiumHelpDialog").addEventListener("click", (event) => { if (event.target === $("premiumHelpDialog")) $("premiumHelpDialog").classList.add("isHidden"); });
@@ -1226,6 +1229,9 @@ async function load() {
   state = await api("/api/review/state");
   premiumMode = ["simplified_temporal", "local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig.presentation_mode);
   if (premiumMode) {
+    const alternativeEnabled = uiConfig.question_contract?.alternative_hypothesis_toggle_enabled === true;
+    $("premiumAlternativeToggleWrap").classList.toggle("isHidden", !alternativeEnabled);
+    $("premiumAlternativeToggle").checked = false;
     document.body.dataset.presentation = uiConfig.presentation_mode;
     $("legacyShell").classList.add("isHidden");
     $("premiumShell").classList.remove("isHidden");

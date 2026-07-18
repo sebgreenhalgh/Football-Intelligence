@@ -51,15 +51,22 @@ def test_machine_preflight_selects_six_unique_level2_cases() -> None:
     assert summary["zero_impossible_jumps"] is True
 
 
-def test_fresh_package_has_empty_decisions_and_thirteen_frame_cases() -> None:
+def test_completed_package_preserves_six_reviewed_decisions_and_thirteen_frame_cases() -> None:
     manifest = read_json(PACKAGE / "reviewer_manifest.json")
     decisions = read_json(PACKAGE / "decisions" / "review_decisions.json")
     assert manifest["review_id"] == "m5_5f0c_validated_level2_continuity_review_v1"
     assert len(manifest["cases"]) == 6
     assert all(case["visible_metadata"]["benchmark_level"] == 2 for case in manifest["cases"])
     assert all(len(case["visible_metadata"]["frame_records"]) == 13 for case in manifest["cases"])
-    assert decisions["decisions"] == {}
-    assert decisions["structured_reviews"] == {}
+    assert decisions["decisions"] == {
+        "m5_5f0c_level2_candidate_002": "PASS",
+        "m5_5f0c_level2_candidate_003": "B_SWITCH",
+        "m5_5f0c_level2_candidate_004": "A_SWITCH",
+        "m5_5f0c_level2_candidate_005": "A_SWITCH",
+        "m5_5f0c_level2_candidate_006": "PASS",
+        "m5_5f0c_level2_candidate_007": "PASS",
+    }
+    assert set(decisions["structured_reviews"]) == set(decisions["decisions"])
     assert "8798" in (PACKAGE / "launch_review.ps1").read_text(encoding="utf-8")
 
 

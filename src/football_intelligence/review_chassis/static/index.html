@@ -82,6 +82,7 @@
               <label class="toggleChip"><input id="premiumObservedToggle" type="checkbox" checked><span>Observed detections</span></label>
               <label class="toggleChip"><input id="premiumAllDetectionsToggle" type="checkbox"><span>All local detections</span></label>
               <label class="toggleChip"><input id="premiumPredictedToggle" type="checkbox"><span>Predicted states</span></label>
+              <label id="premiumAlternativeToggleWrap" class="toggleChip isHidden"><input id="premiumAlternativeToggle" type="checkbox"><span>Alternative path hypothesis</span></label>
               <label class="toggleChip"><input id="premiumLabelsToggle" type="checkbox"><span>Labels</span></label>
               <label class="toggleChip"><input id="premiumLocatorToggle" type="checkbox"><span>Locate encounter</span></label>
             </div>
@@ -93,6 +94,7 @@
               <img id="premiumObservedLayer" class="premiumLayer" alt="Observed detections">
               <img id="premiumAllDetectionsLayer" class="premiumLayer isHidden" alt="All local detections">
               <img id="premiumPredictedLayer" class="premiumLayer isHidden" alt="Predicted states">
+              <img id="premiumAlternativeLayer" class="premiumLayer isHidden" alt="Alternative joint hypothesis">
               <img id="premiumLabelsLayer" class="premiumLayer isHidden" alt="Detection labels">
               <img id="premiumLocatorLayer" class="premiumLayer isHidden" alt="Encounter locator">
               <div id="premiumEvidenceBlocker" class="evidenceBlocker isHidden" role="alert">Evidence unavailable for this frame.</div>
