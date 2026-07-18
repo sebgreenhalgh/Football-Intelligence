@@ -29,6 +29,13 @@ let goldPitchDragIndex = null;
 let goldDrawingStart = null;
 const goldDrafts = {};
 const goldHistory = [];
+const goldViewport = {
+  pitch: {zoom: 1, panX: 0, panY: 0},
+  frame: {zoom: 1, panX: 0, panY: 0},
+};
+let goldEvidenceGeneration = 0;
+let goldEvidenceBlocked = false;
+let goldPointerPan = null;
 
 const $ = (id) => document.getElementById(id);
 const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -56,6 +63,68 @@ function noteFor(caseId) {
 
 function evidenceUrl(caseId, relativePath) {
   return `/evidence/${encodeURIComponent(caseId)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function goldAuditAndLoadImage(caseData, asset, target) {
+  const generation = goldEvidenceGeneration;
+  if (!asset) throw new Error("The configured evidence asset is missing.");
+  const url = evidenceUrl(caseData.case_id, asset.relative_path);
+  const response = await fetch(url, {cache: "no-store"});
+  if (!response.ok) throw new Error(`Evidence request returned HTTP ${response.status}.`);
+  const contentType = response.headers.get("Content-Type") || "";
+  const contentLength = Number(response.headers.get("Content-Length") || 0);
+  const bytes = await response.arrayBuffer();
+  if (!contentType.toLowerCase().startsWith("image/")) throw new Error("Evidence route did not return an image.");
+  if (!contentLength || !bytes.byteLength) throw new Error("Evidence image is empty.");
+  const actualHash = await sha256Hex(bytes);
+  if (asset.sha256 && actualHash !== asset.sha256) throw new Error("Evidence hash does not match the manifest.");
+  const blobUrl = URL.createObjectURL(new Blob([bytes], {type: contentType}));
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = blobUrl;
+    await image.decode();
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error("Decoded evidence has zero natural dimensions.");
+    if (generation !== goldEvidenceGeneration) return null;
+    target.src = blobUrl;
+    target.dataset.naturalWidth = String(image.naturalWidth);
+    target.dataset.naturalHeight = String(image.naturalHeight);
+    target.dataset.evidenceHash = actualHash;
+    target.dataset.evidenceReady = "true";
+    target.onload = () => URL.revokeObjectURL(blobUrl);
+    return image;
+  } catch (error) {
+    URL.revokeObjectURL(blobUrl);
+    throw error;
+  }
+}
+
+function goldSetEvidenceBlocker(message = "Evidence unavailable. Annotation and completion are disabled.") {
+  goldEvidenceBlocked = true;
+  [$("goldEvidenceBlocker"), $("goldEvidenceBlockerFrame")].forEach((blocker) => {
+    if (blocker) { blocker.textContent = message; blocker.classList.remove("isHidden"); }
+  });
+  const status = $("goldEvidenceStatus");
+  if (status) status.textContent = `Evidence unavailable: ${message}`;
+  document.querySelectorAll("#goldShell button, #goldShell input, #goldShell textarea").forEach((control) => {
+    if (!control.matches("#goldComplete, #goldUndo")) control.disabled = true;
+  });
+  goldUpdateCompletionGate();
+}
+
+function goldClearEvidenceBlocker() {
+  goldEvidenceBlocked = false;
+  [$("goldEvidenceBlocker"), $("goldEvidenceBlockerFrame")].forEach((blocker) => blocker?.classList.add("isHidden"));
+  const status = $("goldEvidenceStatus");
+  if (status) status.textContent = "Evidence verified: image route, decode, dimensions and hash passed.";
+  document.querySelectorAll("#goldShell button, #goldShell input, #goldShell textarea").forEach((control) => {
+    if (!control.matches("#goldComplete")) control.disabled = false;
+  });
 }
 
 function assetSort(a, b) {
@@ -1402,28 +1471,94 @@ function goldRenderMetrics(caseData) {
   $("goldRunAccepted").textContent = `${Math.round(100 * draft.accepted_in_runs / Math.max(1, total))}%`;
   $("goldManualCount").textContent = String(draft.manual_bbox_count);
   $("goldClickCount").textContent = String(draft.clicks);
-  $("goldSaveSequence").disabled = annotated !== total;
+  $("goldSaveSequence").disabled = annotated !== total || goldEvidenceBlocked;
   $("goldFrameProgress").textContent = `${annotated} of ${total} strand-frames annotated`;
   $("goldProgressBar").style.width = `${100 * annotated / Math.max(1, total)}%`;
+  goldUpdateCompletionGate();
 }
 
-function goldLoadContextImage(target, caseData, index) {
+function goldApplyViewport(kind) {
+  const viewport = goldViewport[kind];
+  const wrap = $(kind === "pitch" ? "goldPitchCanvasWrap" : "goldCurrentCanvasWrap");
+  if (!wrap) return;
+  wrap.style.transform = `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`;
+  wrap.style.transformOrigin = "0 0";
+  wrap.dataset.zoom = String(viewport.zoom);
+}
+
+function goldFitViewport(kind) {
+  goldViewport[kind] = {zoom: 1, panX: 0, panY: 0};
+  goldApplyViewport(kind);
+}
+
+function goldZoomViewport(kind, factor, clientX = null, clientY = null) {
+  const wrap = $(kind === "pitch" ? "goldPitchCanvasWrap" : "goldCurrentCanvasWrap");
+  if (!wrap) return;
+  const viewport = goldViewport[kind];
+  const rect = wrap.getBoundingClientRect();
+  const focalX = clientX == null ? rect.width / 2 : clientX - rect.left;
+  const focalY = clientY == null ? rect.height / 2 : clientY - rect.top;
+  const oldZoom = viewport.zoom;
+  const nextZoom = Math.max(1, Math.min(5, oldZoom * factor));
+  const imageX = (focalX - viewport.panX) / oldZoom;
+  const imageY = (focalY - viewport.panY) / oldZoom;
+  viewport.zoom = nextZoom;
+  viewport.panX = focalX - imageX * nextZoom;
+  viewport.panY = focalY - imageY * nextZoom;
+  goldApplyViewport(kind);
+}
+
+function goldBindViewport(kind, wrapId) {
+  const wrap = $(wrapId);
+  if (!wrap || wrap.dataset.viewportBound === "true") return;
+  wrap.dataset.viewportBound = "true";
+  wrap.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    goldZoomViewport(kind, event.deltaY < 0 ? 1.12 : 0.89, event.clientX, event.clientY);
+  }, {passive: false});
+  wrap.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("svg circle, svg rect, button")) return;
+    goldPointerPan = {kind, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, panX: goldViewport[kind].panX, panY: goldViewport[kind].panY};
+    wrap.setPointerCapture(event.pointerId);
+  });
+  wrap.addEventListener("pointermove", (event) => {
+    if (!goldPointerPan || goldPointerPan.pointerId !== event.pointerId || goldPointerPan.kind !== kind) return;
+    goldViewport[kind].panX = goldPointerPan.panX + event.clientX - goldPointerPan.startX;
+    goldViewport[kind].panY = goldPointerPan.panY + event.clientY - goldPointerPan.startY;
+    goldApplyViewport(kind);
+  });
+  wrap.addEventListener("pointerup", () => { goldPointerPan = null; });
+  wrap.addEventListener("dblclick", (event) => goldZoomViewport(kind, 1.5, event.clientX, event.clientY));
+}
+
+async function goldLoadContextImage(target, caseData, index) {
   const record = goldRecord(caseData, index);
-  if (!record) { target.removeAttribute("src"); return; }
-  target.src = goldAsset(caseData, record.base_asset_id);
+  if (!record) { target.removeAttribute("src"); target.dataset.evidenceReady = "true"; return; }
+  const asset = caseData.evidence_assets.find((item) => item.asset_id === record.base_asset_id);
+  await goldAuditAndLoadImage(caseData, asset, target);
 }
 
-function goldRenderFrame() {
+async function goldRenderFrame() {
   const caseData = goldCase();
   if (!caseData || caseData.task_type !== "gold_strand_frame_annotation") return;
   const records = goldRecords(caseData);
   goldFrameIndex = Math.max(0, Math.min(goldFrameIndex, records.length - 1));
   const record = records[goldFrameIndex];
-  goldLoadContextImage($("goldPreviousImage"), caseData, goldFrameIndex - 1);
-  goldLoadContextImage($("goldCurrentImage"), caseData, goldFrameIndex);
-  goldLoadContextImage($("goldNextImage"), caseData, goldFrameIndex + 1);
-  $("goldCurrentImage").onload = () => goldRenderDetections(caseData, record);
-  if ($("goldCurrentImage").complete) goldRenderDetections(caseData, record);
+  $("goldCurrentCanvasWrap").style.aspectRatio = `${Number(record.crop_width)} / ${Number(record.crop_height)}`;
+  const generation = ++goldEvidenceGeneration;
+  goldClearEvidenceBlocker();
+  try {
+    await Promise.all([
+      goldLoadContextImage($("goldPreviousImage"), caseData, goldFrameIndex - 1),
+      goldLoadContextImage($("goldCurrentImage"), caseData, goldFrameIndex),
+      goldLoadContextImage($("goldNextImage"), caseData, goldFrameIndex + 1),
+    ]);
+    if (generation !== goldEvidenceGeneration) return;
+    goldRenderDetections(caseData, record);
+    goldApplyViewport("frame");
+  } catch (error) {
+    if (generation === goldEvidenceGeneration) goldSetEvidenceBlocker(error.message);
+  }
   $("goldTimeline").max = String(records.length - 1);
   $("goldTimeline").value = String(goldFrameIndex);
   $("goldFrameNumber").textContent = `Frame ${record.frame_sequence}`;
@@ -1443,10 +1578,31 @@ function goldPoint(event, svg) {
   };
 }
 
+function goldPolygonIsValid() {
+  const caseData = goldCase();
+  const metadata = caseData?.visible_metadata || {};
+  if (goldPitchVertices.length < 4) return false;
+  return goldPitchVertices.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)
+    && point.x >= 0 && point.y >= 0 && point.x <= Number(metadata.image_width) && point.y <= Number(metadata.image_height));
+}
+
+function goldUpdateCompletionGate() {
+  const pitchCase = manifest?.cases?.[0];
+  const pitchApproved = pitchCase && currentDecision(pitchCase) === "PITCH_POLYGON_APPROVED";
+  const annotationCases = (manifest?.cases || []).filter((item) => item.task_type === "gold_strand_frame_annotation");
+  const allFrames = annotationCases.every((caseData) => currentDecision(caseData) === "SEQUENCE_ANNOTATED");
+  const drafts = Object.values(goldDrafts).some((draft) => Object.keys(draft.annotations || {}).length > 0 || String(draft.note || "").trim());
+  const complete = $("goldComplete");
+  if (complete) complete.disabled = !(pitchApproved && allFrames && !goldEvidenceBlocked && !drafts && !document.querySelector(".goldInvalidBBox"));
+  const checklist = $("goldCompletionChecklist");
+  if (checklist) checklist.textContent = `Pitch ${pitchApproved ? "approved" : "pending"} | Frames ${allFrames ? "complete" : "pending"} | Evidence ${goldEvidenceBlocked ? "blocked" : "clear"} | Draft ${drafts ? "unsaved" : "clear"}`;
+}
+
 function goldRenderPitch() {
   const caseData = goldCase();
   const metadata = caseData.visible_metadata || {};
   const svg = $("goldPitchSvg");
+  $("goldPitchCanvasWrap").style.aspectRatio = `${Number(metadata.image_width)} / ${Number(metadata.image_height)}`;
   svg.replaceChildren();
   svg.setAttribute("viewBox", `0 0 ${metadata.image_width} ${metadata.image_height}`);
   const points = goldPitchVertices.map((point) => `${point.x},${point.y}`).join(" ");
@@ -1484,13 +1640,21 @@ function goldRenderPitch() {
       const updated = goldPitchVertices.map((value) => `${value.x},${value.y}`).join(" ");
       polygon.setAttribute("points", updated);
       tolerance.setAttribute("points", updated);
+      $("goldPitchValidation").textContent = goldPolygonIsValid() ? "Polygon valid in original-image pixels." : "Polygon is outside the image bounds.";
+      goldUpdateCompletionGate();
     });
     vertex.addEventListener("pointerup", () => { goldPitchDragIndex = null; });
     svg.appendChild(vertex);
   });
+  $("goldPitchValidation").textContent = goldPolygonIsValid() ? "Polygon valid in original-image pixels." : "Polygon is outside the image bounds.";
+  goldApplyViewport("pitch");
 }
 
 async function goldSavePitch(decision) {
+  if (goldEvidenceBlocked || !goldPolygonIsValid()) {
+    $("goldPitchMessage").textContent = "Approval is blocked until the evidence and polygon are valid.";
+    return;
+  }
   const caseData = goldCase();
   const structuredReview = {
     polygon_vertices: goldPitchVertices.map((point) => ({x: Number(point.x), y: Number(point.y)})),
@@ -1516,7 +1680,7 @@ async function goldSavePitch(decision) {
   }
 }
 
-function goldRenderPitchCase(caseData) {
+async function goldRenderPitchCase(caseData) {
   $("goldPitchPanel").classList.remove("isHidden");
   $("goldAnnotationPanel").classList.add("isHidden");
   $("goldAnnotationTools").classList.add("isHidden");
@@ -1530,9 +1694,16 @@ function goldRenderPitchCase(caseData) {
   goldPitchOriginalVertices = metadata.polygon_vertices.map((point) => ({...point}));
   if (!goldPitchVertices.length) goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point}));
   $("goldPitchTolerance").value = String(metadata.tolerance_pixels);
-  $("goldPitchImage").src = goldAsset(caseData, metadata.base_asset_id);
-  $("goldPitchImage").onload = goldRenderPitch;
-  goldRenderPitch();
+  const generation = ++goldEvidenceGeneration;
+  goldClearEvidenceBlocker();
+  try {
+    const asset = caseData.evidence_assets.find((item) => item.asset_id === metadata.base_asset_id);
+    await goldAuditAndLoadImage(caseData, asset, $("goldPitchImage"));
+    if (generation !== goldEvidenceGeneration) return;
+    goldRenderPitch();
+  } catch (error) {
+    if (generation === goldEvidenceGeneration) goldSetEvidenceBlocker(error.message);
+  }
 }
 
 function goldRenderAnnotationCase(caseData) {
@@ -1547,16 +1718,17 @@ function goldRenderAnnotationCase(caseData) {
   goldRenderFrame();
 }
 
-function goldRender() {
+async function goldRender() {
   const caseData = goldCase();
   if (!caseData) return;
   $("goldTitle").textContent = uiConfig.review_title || "Gold strand annotation";
-  $("goldComplete").disabled = Object.keys(state?.decisions || {}).length < manifest.cases.length;
-  if (caseData.task_type === "pitch_polygon_approval") goldRenderPitchCase(caseData);
+  goldUpdateCompletionGate();
+  if (caseData.task_type === "pitch_polygon_approval") await goldRenderPitchCase(caseData);
   else goldRenderAnnotationCase(caseData);
 }
 
 async function goldSaveSequence() {
+  if (goldEvidenceBlocked) return;
   const caseData = goldCase();
   const draft = goldDraft(caseData);
   const records = goldRecords(caseData);
@@ -1633,8 +1805,16 @@ function goldFinishManualDraw(event) {
 }
 
 function goldBind() {
+  goldBindViewport("pitch", "goldPitchCanvasWrap");
+  goldBindViewport("frame", "goldCurrentCanvasWrap");
+  document.querySelectorAll("[data-gold-zoom]").forEach((button) => button.addEventListener("click", () => {
+    const kind = button.dataset.goldZoom === "pitch" ? "pitch" : "frame";
+    const action = button.dataset.goldAction;
+    if (action === "fit" || action === "fit-polygon") goldFitViewport(kind);
+    else goldZoomViewport(kind, action === "out" ? 0.8 : 1.25);
+  }));
   $("goldUndo").addEventListener("click", goldUndo);
-  $("goldResetPolygon").addEventListener("click", () => { goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point})); goldRenderPitch(); });
+  $("goldResetPolygon").addEventListener("click", () => { goldPitchVertices = goldPitchOriginalVertices.map((point) => ({...point})); goldRenderPitch(); goldFitViewport("pitch"); });
   $("goldApprovePolygon").addEventListener("click", () => goldSavePitch("PITCH_POLYGON_APPROVED"));
   $("goldRequestRevision").addEventListener("click", () => goldSavePitch("PITCH_POLYGON_REVISION_REQUIRED"));
   $("goldStrandA").addEventListener("click", () => goldSetActiveStrand("A"));
@@ -1651,6 +1831,7 @@ function goldBind() {
   $("goldDetectionSvg").addEventListener("pointerup", goldFinishManualDraw);
   document.querySelectorAll("[data-gold-state]").forEach((button) => button.addEventListener("click", () => goldSetState(goldActiveStrand, {state: button.dataset.goldState})));
   $("goldComplete").addEventListener("click", async () => {
+    if ($("goldComplete").disabled) return;
     try {
       state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({elapsed_active_seconds: activeTimeNow()})});
       $("goldSaveState").textContent = "Completed";
@@ -1689,6 +1870,7 @@ async function load() {
     const resume = state.resume_case_id;
     activeIndex = Math.max(0, manifest.cases.findIndex((caseData) => caseData.case_id === resume));
     document.body.dataset.presentation = uiConfig.presentation_mode;
+    document.body.classList.add("goldPresentation");
     $("legacyShell").classList.add("isHidden");
     $("goldShell").classList.remove("isHidden");
     $("goldShell").setAttribute("aria-hidden", "false");

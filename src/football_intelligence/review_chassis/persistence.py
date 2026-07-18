@@ -510,6 +510,7 @@ class GenericReviewPersistence:
         if state.get("completed") is True:
             self.export_completed_review(state)
             return state
+        self._validate_completion_requirements(state)
         if self.ui_config.completion_requires_all_cases and self.counts(state)["remaining"] > 0:
             raise ValueError("completion is blocked until all required cases have decisions")
         if elapsed_active_seconds is not None:
@@ -528,6 +529,22 @@ class GenericReviewPersistence:
         response_state = self._persist(state, event)
         self.export_completed_review(self.ensure_state())
         return response_state
+
+    def _validate_completion_requirements(self, state: dict[str, Any]) -> None:
+        """Apply optional stage-specific gates without changing classic reviews."""
+        contract = self.ui_config.question_contract.get("completion_requirements")
+        if not isinstance(contract, dict):
+            return
+        required = contract.get("required_decisions", {})
+        if isinstance(required, dict):
+            decisions = state.get("decisions", {})
+            for case_id, allowed in required.items():
+                if not isinstance(allowed, list) or decisions.get(case_id) not in allowed:
+                    raise ValueError(f"completion is blocked until {case_id} has an approved decision")
+        if contract.get("evidence_blockers_must_be_clear") and state.get("evidence_blockers"):
+            raise ValueError("completion is blocked while evidence blockers remain")
+        if contract.get("unsaved_drafts_must_be_clear") and state.get("unsaved_drafts"):
+            raise ValueError("completion is blocked while unsaved drafts remain")
 
     def export_payload(self, state: dict[str, Any] | None = None) -> dict[str, Any]:
         state = canonical_decision_state(state or self.ensure_state())

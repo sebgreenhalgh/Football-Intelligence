@@ -189,6 +189,7 @@
       <div class="goldHeaderActions">
         <button id="goldUndo" type="button" title="Undo (Ctrl+Z)">&#8630;</button>
         <span id="goldSaveState" class="saveState" role="status">Draft</span>
+        <span id="goldCompletionChecklist" class="goldChecklist" role="status">Pitch pending | Frames pending | Evidence pending | Draft clear</span>
         <button id="goldComplete" type="button" disabled>Complete</button>
       </div>
     </header>
@@ -205,9 +206,18 @@
         </div>
 
         <div id="goldPitchPanel" class="goldPitchPanel">
-          <div class="goldCanvasWrap" id="goldPitchCanvasWrap">
+          <div class="goldZoomViewport" id="goldPitchViewport">
+          <div class="goldCanvasWrap goldSharedGeometry" id="goldPitchCanvasWrap">
             <img id="goldPitchImage" alt="Clean panorama for pitch boundary approval">
             <svg id="goldPitchSvg" aria-label="Editable playable-pitch polygon"></svg>
+          </div>
+          <div id="goldEvidenceBlocker" class="goldEvidenceBlocker isHidden" role="alert">Evidence unavailable. Annotation and completion are disabled.</div>
+          </div>
+          <div class="goldViewportControls" aria-label="Pitch viewport controls">
+            <button data-gold-zoom="pitch" data-gold-action="out" type="button" title="Zoom out">−</button>
+            <button data-gold-zoom="pitch" data-gold-action="in" type="button" title="Zoom in">+</button>
+            <button data-gold-zoom="pitch" data-gold-action="fit" type="button">Fit image</button>
+            <button data-gold-zoom="pitch" data-gold-action="fit-polygon" type="button">Fit polygon</button>
           </div>
           <div class="goldPitchActions">
             <label>Tolerance <input id="goldPitchTolerance" type="number" min="0" max="100" step="1"></label>
@@ -215,13 +225,14 @@
             <button id="goldRequestRevision" type="button">Needs revision</button>
             <button id="goldApprovePolygon" class="primaryCommand" type="button">Approve polygon</button>
           </div>
-          <p id="goldPitchMessage" class="goldHint">Drag a vertex to inspect a change. An edited proposal requires package regeneration before approval.</p>
+          <p id="goldPitchValidation" class="goldHint">Evidence is loading.</p>
+          <p id="goldPitchMessage" class="goldHint">Drag a vertex to inspect a change. Coordinates remain in original-image pixels.</p>
         </div>
 
         <div id="goldAnnotationPanel" class="goldAnnotationPanel isHidden">
           <div class="goldContextStrip" aria-label="Previous current and next frame context">
             <figure><figcaption>Previous</figcaption><img id="goldPreviousImage" alt="Previous frame crop"></figure>
-            <figure class="current"><figcaption>Current</figcaption><div class="goldCanvasWrap" id="goldCurrentCanvasWrap"><img id="goldCurrentImage" alt="Current frame crop"><svg id="goldDetectionSvg" aria-label="Selectable anonymous detections and strand labels"></svg></div></figure>
+            <figure class="current"><figcaption>Current</figcaption><div class="goldZoomViewport" id="goldCurrentViewport"><div class="goldCanvasWrap goldSharedGeometry" id="goldCurrentCanvasWrap"><img id="goldCurrentImage" alt="Current frame crop"><svg id="goldDetectionSvg" aria-label="Selectable anonymous detections and strand labels"></svg></div><div id="goldEvidenceBlockerFrame" class="goldEvidenceBlocker isHidden" role="alert">Evidence unavailable. Annotation and completion are disabled.</div></div></figure>
             <figure><figcaption>Next</figcaption><img id="goldNextImage" alt="Next frame crop"></figure>
           </div>
           <input id="goldTimeline" type="range" min="0" max="12" value="0" aria-label="Gold sequence frame">
@@ -231,6 +242,12 @@
             <button id="goldAcceptRun" type="button">Accept stable run <kbd>Enter</kbd></button>
             <button id="goldNextFrame" type="button" title="Next frame">&#8594;</button>
           </div>
+          <div class="goldViewportControls" aria-label="Frame viewport controls">
+            <button data-gold-zoom="frame" data-gold-action="out" type="button" title="Zoom out">−</button>
+            <button data-gold-zoom="frame" data-gold-action="in" type="button" title="Zoom in">+</button>
+            <button data-gold-zoom="frame" data-gold-action="fit" type="button">Fit frame</button>
+          </div>
+          <p id="goldEvidenceStatus" class="goldEvidenceStatus" role="status">Evidence is loading.</p>
           <div class="goldLegend"><span><i class="goldSwatch strandA"></i>Strand A</span><span><i class="goldSwatch strandB"></i>Strand B</span><span><i class="goldSwatch supply"></i>Available detection</span></div>
         </div>
       </section>

@@ -690,3 +690,115 @@ body[data-presentation="stable_local_strand_continuity"] { display: block; min-h
   .premiumMain { gap: 32px; padding-inline: 48px; }
   .premiumViewer { height: min(62vh, 900px); }
 }
+
+/* Gold annotation is a full-page chassis presentation. Scope resets here so the
+   classic body grid and generic main/aside rules cannot shrink its evidence. */
+body.goldPresentation {
+  display: block;
+  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  background: #111513;
+  color: #f4f6f5;
+}
+body.goldPresentation > #legacyShell { display: none; }
+body.goldPresentation #goldShell {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  background: #111513;
+}
+body.goldPresentation #goldShell .goldMain {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  overflow: hidden;
+}
+body.goldPresentation #goldShell .goldViewerColumn {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(12px, 2vw, 24px);
+  overflow: hidden;
+}
+body.goldPresentation #goldShell .goldTools {
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px;
+}
+body.goldPresentation #goldShell .goldViewerHeader { flex: 0 0 auto; }
+body.goldPresentation #goldShell .goldPitchPanel,
+body.goldPresentation #goldShell .goldAnnotationPanel { min-height: 0; }
+body.goldPresentation #goldShell .goldPitchPanel { grid-template-rows: minmax(0, 1fr) auto auto; }
+.goldZoomViewport {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: #050706;
+  border: 1px solid #3d4b43;
+  border-radius: 8px;
+}
+.goldPitchPanel .goldZoomViewport { flex: 1 1 auto; max-height: min(68vh, 760px); }
+.goldSharedGeometry {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2730 / 720;
+  overflow: hidden;
+  background: #050706;
+  border: 0;
+  border-radius: 0;
+  transition: transform 120ms ease-out;
+}
+.goldSharedGeometry img { width: 100%; height: 100%; object-fit: fill; }
+.goldSharedGeometry svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.goldPitchPanel .goldSharedGeometry { max-height: 100%; }
+.goldAnnotationPanel { flex: 1 1 auto; grid-template-rows: minmax(0, 1fr) auto auto auto; }
+.goldAnnotationPanel .goldContextStrip { min-height: 0; grid-template-columns: minmax(90px, .2fr) minmax(0, 1fr) minmax(90px, .2fr); }
+.goldAnnotationPanel .goldContextStrip .current { min-width: 0; }
+.goldAnnotationPanel .goldContextStrip .current .goldZoomViewport { min-height: 0; height: auto; aspect-ratio: 854 / 238; }
+.goldAnnotationPanel .goldContextStrip .current .goldSharedGeometry { aspect-ratio: 332 / 240; }
+.goldAnnotationPanel .goldContextStrip > figure:not(.current) img { max-height: 120px; object-fit: contain; }
+.goldViewportControls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.goldViewportControls button { min-width: 38px; }
+.goldEvidenceBlocker {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #fff;
+  background: rgba(18, 22, 20, .96);
+  border: 2px solid #e46d66;
+  text-align: center;
+  font-weight: 750;
+}
+.goldEvidenceStatus { min-height: 1.2em; margin: 0; color: #99e4b6; font-size: .78rem; }
+.goldChecklist { max-width: 430px; color: #aeb9b3; font-size: .72rem; }
+.goldCanvasWrap[data-zoom] { will-change: transform; }
+body.goldPresentation #goldShell .goldHeader { position: relative; }
+body.goldPresentation #goldShell .goldHeaderActions { justify-content: flex-end; }
+@media (max-width: 1050px) {
+  body.goldPresentation #goldShell .goldMain { grid-template-columns: minmax(0, 1fr) 300px; }
+  body.goldPresentation #goldShell .goldContextStrip { grid-template-columns: 1fr; }
+  body.goldPresentation #goldShell .goldContextStrip figure:not(.current) { display: none; }
+}
+@media (max-width: 760px) {
+  body.goldPresentation #goldShell .goldMain { grid-template-columns: 1fr; overflow-y: auto; }
+  body.goldPresentation #goldShell .goldTools { max-height: 46vh; border-top: 1px solid #344139; border-left: 0; }
+  body.goldPresentation #goldShell .goldHeader { grid-template-columns: 1fr auto; }
+  .goldChecklist { display: none; }
+  .goldPitchPanel .goldZoomViewport { max-height: 46vh; }
+}
