@@ -649,6 +649,10 @@ body[data-presentation="stable_local_strand_continuity"] { display: block; min-h
 .goldDetection:hover { fill: rgba(255,255,255,0.1); stroke-width: 3; }
 .goldDetection.strandA { stroke: #21d4e6; stroke-width: 4; }
 .goldDetection.strandB { stroke: #f04fa8; stroke-width: 4; }
+.goldDetection.proposal { stroke-dasharray: 9 5; }
+.goldDetectionLabel { font-size: 18px; font-weight: 850; paint-order: stroke; stroke: #08100c; stroke-width: 5px; pointer-events: none; }
+.goldDetectionLabel.strandA { fill: #21d4e6; }
+.goldDetectionLabel.strandB { fill: #f04fa8; }
 .goldManualBox { fill: rgba(108,221,156,0.08); stroke: #6cdd9c; stroke-width: 3; stroke-dasharray: 8 5; vector-effect: non-scaling-stroke; }
 .goldPolygon { fill: rgba(108,221,156,0.1); stroke: #6cdd9c; stroke-width: 3; vector-effect: non-scaling-stroke; }
 .goldTolerance { fill: none; stroke: #f4c85f; stroke-width: 12; stroke-opacity: 0.35; vector-effect: non-scaling-stroke; }
@@ -658,6 +662,28 @@ body[data-presentation="stable_local_strand_continuity"] { display: block; min-h
 .goldPitchSample.boundary_official_zone { fill: #f0c85a; }
 .goldPitchSample.off_pitch_staff_or_spectator { fill: #ea665f; }
 .goldError { color: #ff9b93; }
+.goldSeedPanel { display: grid; gap: 14px; min-height: 0; }
+.goldSeedIntro { display: flex; justify-content: space-between; gap: 18px; align-items: end; }
+.goldSeedIntro h3 { margin: 4px 0; font-size: 1.05rem; }
+.goldSeedIntro p { max-width: 720px; margin: 0; color: #aeb9b3; font-size: .82rem; line-height: 1.45; }
+.goldSeedStatus { color: #f4c85f; font-size: .8rem; font-weight: 750; }
+.goldSeedEvidence { display: grid; grid-template-columns: minmax(100px, .22fr) minmax(420px, 1fr) minmax(100px, .22fr); gap: 10px; align-items: center; min-height: 0; }
+.goldSeedEvidence figure { min-width: 0; margin: 0; opacity: .62; }
+.goldSeedEvidence figure.current { opacity: 1; }
+.goldSeedEvidence figcaption, .goldSeedCards span { color: #aeb9b3; font-size: .72rem; text-transform: uppercase; }
+.goldSeedEvidence img { display: block; width: 100%; border: 1px solid #344139; border-radius: 5px; }
+.goldSeedEvidence figure.current .goldZoomViewport { aspect-ratio: 854 / 238; }
+.goldSeedEvidence figure.current .goldSharedGeometry { aspect-ratio: 854 / 238; }
+.goldSeedCards { display: grid; grid-template-columns: repeat(2, minmax(150px, 220px)); gap: 12px; }
+.goldSeedCards article { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; padding: 8px; background: #181e1b; border: 1px solid #344139; border-radius: 6px; }
+.goldSeedCards canvas { grid-column: 1 / -1; width: 100%; height: auto; min-height: 90px; object-fit: contain; background: #050706; border: 1px solid #3d4b43; }
+.seedCardLabel { display: inline-grid; place-items: center; width: 28px; height: 28px; color: #08100c; border-radius: 5px; font-weight: 900; }
+.seedCardLabel.seedA { background: #21d4e6; }
+.seedCardLabel.seedB { background: #f04fa8; }
+.goldSeedActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.goldSeedRejectRow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: #aeb9b3; font-size: .78rem; }
+.goldSeedRejectRow select, .goldSeedRejectRow input { min-height: 36px; padding: 7px; color: #f4f6f5; background: #0d120f; border: 1px solid #46564d; border-radius: 5px; }
+.goldSeedRejectRow input { min-width: 220px; }
 
 @media (max-width: 1050px) {
   .goldHeader { grid-template-columns: 1fr auto; }
@@ -794,6 +820,8 @@ body.goldPresentation #goldShell .goldHeaderActions { justify-content: flex-end;
   body.goldPresentation #goldShell .goldMain { grid-template-columns: minmax(0, 1fr) 300px; }
   body.goldPresentation #goldShell .goldContextStrip { grid-template-columns: 1fr; }
   body.goldPresentation #goldShell .goldContextStrip figure:not(.current) { display: none; }
+  .goldSeedEvidence { grid-template-columns: 1fr; }
+  .goldSeedEvidence figure:not(.current) { display: none; }
 }
 @media (max-width: 760px) {
   body.goldPresentation #goldShell .goldMain { grid-template-columns: 1fr; overflow-y: auto; }
@@ -801,4 +829,6 @@ body.goldPresentation #goldShell .goldHeaderActions { justify-content: flex-end;
   body.goldPresentation #goldShell .goldHeader { grid-template-columns: 1fr auto; }
   .goldChecklist { display: none; }
   .goldPitchPanel .goldZoomViewport { max-height: 46vh; }
+  .goldSeedIntro { align-items: flex-start; flex-direction: column; }
+  .goldSeedCards { grid-template-columns: 1fr 1fr; }
 }

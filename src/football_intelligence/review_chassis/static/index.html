@@ -255,6 +255,42 @@
           <p id="goldEvidenceStatus" class="goldEvidenceStatus" role="status">Evidence is loading.</p>
           <div class="goldLegend"><span><i class="goldSwatch strandA"></i>Strand A</span><span><i class="goldSwatch strandB"></i>Strand B</span><span><i class="goldSwatch supply"></i>Available detection</span></div>
         </div>
+
+        <div id="goldSeedPanel" class="goldSeedPanel isHidden" aria-live="polite">
+          <div class="goldSeedIntro">
+            <div>
+              <span class="eyebrow">SEQUENCE SEED CONFIRMATION</span>
+              <h3>Confirm the two temporary strands before annotating frames</h3>
+              <p>Solid cyan A and solid magenta B mark the proposed people. Other available detections remain white. This is a short, match-local visual label only.</p>
+            </div>
+            <span id="goldSeedStatus" class="goldSeedStatus">Seed confirmation pending</span>
+          </div>
+          <div class="goldSeedEvidence">
+            <figure><figcaption>Previous</figcaption><img id="goldSeedPreviousImage" alt="Previous seed context frame"></figure>
+            <figure class="current"><figcaption>Current seed frame</figcaption><div class="goldZoomViewport"><div id="goldSeedCurrentCanvasWrap" class="goldSharedGeometry"><img id="goldSeedCurrentImage" alt="Current seed frame with A and B proposals"><svg id="goldSeedSvg" aria-label="Proposed temporary Strand A and Strand B"></svg></div></div></figure>
+            <figure><figcaption>Next</figcaption><img id="goldSeedNextImage" alt="Next seed context frame"></figure>
+          </div>
+          <div class="goldSeedCards">
+            <article><strong class="seedCardLabel seedA">A</strong><canvas id="goldSeedCropA" width="220" height="150" aria-label="Strand A proposal crop"></canvas><span>Proposed Strand A</span></article>
+            <article><strong class="seedCardLabel seedB">B</strong><canvas id="goldSeedCropB" width="220" height="150" aria-label="Strand B proposal crop"></canvas><span>Proposed Strand B</span></article>
+          </div>
+          <div class="goldSeedActions" role="group" aria-label="Seed confirmation actions">
+            <button id="goldSeedConfirm" class="primaryCommand" type="button">Confirm proposed A/B <kbd>Space</kbd></button>
+            <button id="goldSeedSwap" type="button">Swap A and B <kbd>S</kbd></button>
+            <button id="goldSeedCorrectA" type="button">Correct A <kbd>A</kbd></button>
+            <button id="goldSeedCorrectB" type="button">Correct B <kbd>B</kbd></button>
+            <button id="goldSeedCorrectBoth" type="button">Correct both</button>
+            <button id="goldSeedDrawManual" type="button">Draw missing seed bbox</button>
+            <button id="goldSeedReject" type="button">Reject sequence <kbd>X</kbd></button>
+            <button id="goldSeedSaveRejected" class="primaryCommand" type="button" disabled>Save rejected sequence</button>
+          </div>
+          <div class="goldSeedRejectRow">
+            <label for="goldSeedRejectionReason">Rejection reason</label>
+            <select id="goldSeedRejectionReason"><option value="">Select only when rejecting</option><option value="WRONG_PAIR">Wrong pair</option><option value="OFF_PITCH_PERSON">Off-pitch person</option><option value="SPECTATOR_OR_STAFF">Spectator or staff</option><option value="AMBIGUOUS_START">Ambiguous start</option><option value="INSUFFICIENT_DETECTION_SUPPLY">Insufficient detection supply</option><option value="BAD_ROI">Bad review region</option><option value="PAIR_NOT_VISIBLE">Pair not visible</option><option value="OTHER">Other</option></select>
+            <input id="goldSeedRejectionNote" type="text" maxlength="240" placeholder="Required only for Other" aria-label="Other rejection note">
+          </div>
+          <p id="goldSeedMessage" class="goldHint">Choose Confirm, Swap, Correct, or Reject. Do not infer A or B from white boxes.</p>
+        </div>
       </section>
 
       <aside id="goldAnnotationTools" class="goldTools isHidden">

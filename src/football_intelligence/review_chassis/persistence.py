@@ -244,7 +244,14 @@ class GenericReviewPersistence:
         cases = self.case_map()
         if case_id not in cases:
             raise ValueError(f"unknown review case: {case_id}")
-        if decision not in cases[case_id].allowed_decisions:
+        allowed_decisions = set(cases[case_id].allowed_decisions)
+        question_contract = self.ui_config.question_contract
+        if (
+            question_contract.get("seed_confirmation_required") is True
+            and cases[case_id].task_type == "gold_strand_frame_annotation"
+        ):
+            allowed_decisions.add("SEQUENCE_REJECTED")
+        if decision not in allowed_decisions:
             raise ValueError(f"decision {decision!r} is not allowed for {case_id}")
         self._validate_structured_review(case=cases[case_id], decision=decision, structured_review=structured_review)
         state = self.ensure_state()
@@ -373,10 +380,18 @@ class GenericReviewPersistence:
         decision: str,
         structured_review: dict[str, Any] | None,
     ) -> None:
-        if decision != "SEQUENCE_ANNOTATED":
+        contract = self.ui_config.question_contract
+        seed_required = contract.get("seed_confirmation_required") is True
+        if seed_required and decision not in {"SEQUENCE_ANNOTATED", "SEQUENCE_REJECTED"}:
+            raise ValueError("gold seed sequences must save as SEQUENCE_ANNOTATED or SEQUENCE_REJECTED")
+        if not seed_required and decision != "SEQUENCE_ANNOTATED":
             raise ValueError("gold strand sequences must save as SEQUENCE_ANNOTATED")
         if not isinstance(structured_review, dict):
-            raise ValueError("gold strand review requires frame_annotations")
+            raise ValueError("gold strand review requires structured_review")
+        if seed_required:
+            self._validate_seed_confirmation(case=case, decision=decision, structured_review=structured_review)
+            if decision == "SEQUENCE_REJECTED":
+                return
         if self.polygon_store is not None:
             polygon = self.polygon_store.ensure()
             if not polygon.get("is_approved"):
@@ -427,6 +442,67 @@ class GenericReviewPersistence:
                         raise ValueError("manual observation bbox is invalid")
                     if not str(value.get("manual_correction_reason") or "").strip():
                         raise ValueError("manual observations require a structured correction reason")
+
+    def _validate_seed_confirmation(
+        self,
+        *,
+        case: Any,
+        decision: str,
+        structured_review: dict[str, Any],
+    ) -> None:
+        seed = structured_review.get("seed_confirmation")
+        if not isinstance(seed, dict):
+            raise ValueError("seed confirmation is required before frame annotation")
+        action = str(seed.get("seed_action") or "")
+        allowed_actions = {
+            "CONFIRM",
+            "SWAP_A_B",
+            "CORRECT_A",
+            "CORRECT_B",
+            "CORRECT_BOTH",
+            "REJECT_SEQUENCE",
+        }
+        if action not in allowed_actions:
+            raise ValueError("seed confirmation action is invalid")
+        if action == "REJECT_SEQUENCE":
+            if decision != "SEQUENCE_REJECTED":
+                raise ValueError("rejected seeds must save as SEQUENCE_REJECTED")
+            reason = seed.get("seed_rejection_reason")
+            reasons = self.ui_config.question_contract.get("seed_rejection_reasons", [])
+            if reason not in reasons:
+                raise ValueError("rejected seeds require a structured rejection reason")
+            if reason == "OTHER" and not str(seed.get("note") or "").strip():
+                raise ValueError("Other seed rejection requires a note")
+            if seed.get("A") is not None or seed.get("B") is not None:
+                raise ValueError("rejected seeds cannot contain confirmed A/B values")
+            return
+        if decision != "SEQUENCE_ANNOTATED":
+            raise ValueError("accepted seeds must save as SEQUENCE_ANNOTATED")
+        record = case.visible_metadata.get("frame_records", [])[0]
+        if int(seed.get("source_frame_sequence", -1)) != int(record.get("frame_sequence")):
+            raise ValueError("seed confirmation must bind to the first sequence frame")
+        values = {strand: seed.get(strand) for strand in ("A", "B")}
+        if any(not isinstance(value, dict) for value in values.values()):
+            raise ValueError("seed confirmation requires both A and B")
+        allowed_states = {"OBSERVED_EXISTING_DETECTION", "OBSERVED_MANUAL_BBOX"}
+        if any(value.get("state") not in allowed_states for value in values.values()):
+            raise ValueError("seed confirmation requires observed A/B values")
+        if all(value.get("state") == "OBSERVED_EXISTING_DETECTION" for value in values.values()):
+            identifiers = {str(value.get("anonymous_detection_id")) for value in values.values()}
+            available = {str(item.get("anonymous_detection_id")) for item in record.get("anonymous_detections", [])}
+            if len(identifiers) != 2 or not identifiers.issubset(available):
+                raise ValueError("seed A/B must be distinct detections available on the seed frame")
+        for value in values.values():
+            if value.get("state") == "OBSERVED_MANUAL_BBOX":
+                bbox = value.get("bbox_original_pixels")
+                if not isinstance(bbox, dict) or not all(
+                    isinstance(bbox.get(key), (int, float)) for key in ("x1", "y1", "x2", "y2")
+                ):
+                    raise ValueError("manual seed observations require an original-image bbox")
+                if float(bbox["x2"]) <= float(bbox["x1"]) or float(bbox["y2"]) <= float(bbox["y1"]):
+                    raise ValueError("manual seed bbox is invalid")
+                if not str(value.get("manual_correction_reason") or "").strip():
+                    raise ValueError("manual seed observations require a structured correction reason")
 
     @synchronized
     def save_note(self, *, case_id: str, note: str, elapsed_active_seconds: int | None = None) -> dict[str, Any]:

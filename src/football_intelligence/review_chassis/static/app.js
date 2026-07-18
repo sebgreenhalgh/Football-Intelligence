@@ -41,6 +41,8 @@ let goldPolygonSaveTimer = null;
 let goldPolygonHistory = [];
 let goldPolygonRedo = [];
 let goldPolygonGateBlocked = false;
+let goldSeedMode = null;
+let goldSeedDrawingStart = null;
 
 const $ = (id) => document.getElementById(id);
 const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -502,6 +504,9 @@ function applySpatialAnnotation() {
 function renderDecisions(caseData) {
   const current = decisions()[caseData.case_id];
   const allowed = new Set(caseData.allowed_decisions || []);
+  if (uiConfig.question_contract?.seed_confirmation_required === true && caseData.task_type === "gold_strand_frame_annotation") {
+    allowed.add("SEQUENCE_REJECTED");
+  }
   $("decisionButtons").innerHTML = uiConfig.decisions.filter((option) => allowed.has(option.value)).map((option) => {
     const selected = current === option.value ? " selected" : "";
     return `<button type="button" class="decision ${option.style}${selected}" data-decision="${option.value}">
@@ -1442,7 +1447,7 @@ function goldSchedulePolygonDraftSave() {
 }
 
 function goldDefaultDraft() {
-  return {annotations: {}, note: "", clicks: 0, accepted_in_runs: 0, manual_bbox_count: 0};
+  return {annotations: {}, note: "", clicks: 0, accepted_in_runs: 0, manual_bbox_count: 0, seed_confirmation: null};
 }
 
 function goldDraft(caseData) {
@@ -1485,6 +1490,66 @@ function goldAnnotation(caseData, frameSequence) {
   return draft.annotations[key];
 }
 
+function goldSeedContractEnabled() {
+  return uiConfig?.question_contract?.seed_confirmation_required === true;
+}
+
+function goldSeedConfirmed(caseData = goldCase()) {
+  const seed = goldDraft(caseData).seed_confirmation;
+  return !goldSeedContractEnabled() || Boolean(seed && seed.status === "CONFIRMED" && seed.A && seed.B);
+}
+
+function goldSeedRejected(caseData = goldCase()) {
+  return Boolean(goldDraft(caseData).seed_confirmation?.status === "REJECTED");
+}
+
+function goldProposalUsable(record) {
+  const proposal = record?.proposed_annotations || {};
+  return Boolean(
+    proposal.A?.state === "OBSERVED_EXISTING_DETECTION"
+      && proposal.B?.state === "OBSERVED_EXISTING_DETECTION"
+      && proposal.A.anonymous_detection_id
+      && proposal.B.anonymous_detection_id
+      && proposal.A.anonymous_detection_id !== proposal.B.anonymous_detection_id
+  );
+}
+
+function goldSeedRecord(caseData = goldCase()) {
+  return goldRecords(caseData)[0];
+}
+
+function goldSeedValues(caseData = goldCase()) {
+  const record = goldSeedRecord(caseData);
+  const draftSeed = goldDraft(caseData).seed_confirmation;
+  const proposal = record?.proposed_annotations || {};
+  return {
+    A: draftSeed?.A || proposal.A || null,
+    B: draftSeed?.B || proposal.B || null,
+    source_frame_sequence: Number(record?.frame_sequence),
+  };
+}
+
+function goldSeedValueForDetection(detection) {
+  return detection ? {
+    state: "OBSERVED_EXISTING_DETECTION",
+    anonymous_detection_id: detection.anonymous_detection_id,
+    observation_quality: detection.observation_quality || "UNRESOLVED_MACHINE_OBSERVATION",
+  } : null;
+}
+
+function goldSeedUsable(caseData = goldCase()) {
+  const values = goldSeedValues(caseData);
+  const a = values.A;
+  const b = values.B;
+  if (!a || !b) return false;
+  if (a.state !== "OBSERVED_EXISTING_DETECTION" && a.state !== "OBSERVED_MANUAL_BBOX") return false;
+  if (b.state !== "OBSERVED_EXISTING_DETECTION" && b.state !== "OBSERVED_MANUAL_BBOX") return false;
+  if (a.state === "OBSERVED_EXISTING_DETECTION" && b.state === "OBSERVED_EXISTING_DETECTION") {
+    return a.anonymous_detection_id !== b.anonymous_detection_id;
+  }
+  return true;
+}
+
 function goldPushHistory(caseData) {
   goldHistory.push({case_id: caseData.case_id, draft: JSON.parse(JSON.stringify(goldDraft(caseData)))});
   if (goldHistory.length > 100) goldHistory.shift();
@@ -1509,6 +1574,17 @@ function goldSetActiveStrand(strand) {
 
 function goldSetState(strand, value, caseData = goldCase(), record = goldRecord(caseData)) {
   if (!record) return;
+  if (!goldSeedConfirmed(caseData)) return;
+  if (value?.state === "OBSERVED_EXISTING_DETECTION") {
+    const other = strand === "A" ? "B" : "A";
+    const existing = goldAnnotation(caseData, record.frame_sequence)[other];
+    if (existing?.state === "OBSERVED_EXISTING_DETECTION"
+      && existing.anonymous_detection_id === value.anonymous_detection_id) {
+      $("goldError").textContent = "A and B must use distinct observations on this frame.";
+      $("goldError").classList.remove("isHidden");
+      return;
+    }
+  }
   goldPushHistory(caseData);
   goldAnnotation(caseData, record.frame_sequence)[strand] = value;
   goldDraft(caseData).clicks += 1;
@@ -1518,7 +1594,7 @@ function goldSetState(strand, value, caseData = goldCase(), record = goldRecord(
 
 function goldAcceptProposal(run = false) {
   const caseData = goldCase();
-  if (caseData.task_type !== "gold_strand_frame_annotation") return;
+  if (caseData.task_type !== "gold_strand_frame_annotation" || !goldSeedConfirmed(caseData)) return;
   goldPushHistory(caseData);
   const records = goldRecords(caseData);
   const indices = run ? records.map((_, index) => index).filter((index) => index >= goldFrameIndex) : [goldFrameIndex];
@@ -1526,7 +1602,7 @@ function goldAcceptProposal(run = false) {
   for (const index of indices) {
     const record = records[index];
     const proposal = record.proposed_annotations || {};
-    if (!proposal.A || !proposal.B) continue;
+    if (!goldProposalUsable(record)) continue;
     goldAnnotation(caseData, record.frame_sequence).A = {...proposal.A};
     goldAnnotation(caseData, record.frame_sequence).B = {...proposal.B};
     accepted += 2;
@@ -1541,7 +1617,7 @@ function goldAcceptProposal(run = false) {
 
 function goldStateLabel(value) {
   if (!value) return "Not annotated";
-  if (value.state === "OBSERVED_EXISTING_DETECTION") return `Existing detection ${value.anonymous_detection_id}`;
+  if (value.state === "OBSERVED_EXISTING_DETECTION") return "Accepted existing detection";
   if (value.state === "OBSERVED_MANUAL_BBOX") return "Manual observed bbox";
   return String(value.state).replaceAll("_", " ").toLowerCase();
 }
@@ -1567,18 +1643,54 @@ function goldSvgRect(svg, box, className, data = {}) {
   return element;
 }
 
+function goldSvgLabel(svg, box, label, className) {
+  const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  text.setAttribute("x", Math.max(2, box.x1));
+  text.setAttribute("y", Math.max(20, box.y1 - 5));
+  text.setAttribute("class", `goldDetectionLabel ${className}`);
+  text.textContent = label;
+  svg.appendChild(text);
+}
+
+function goldDetectionBox(record, detection) {
+  return goldCropBox(record, detection.bbox_original_pixels);
+}
+
+function goldRenderDetectionPair(svg, record, values, accepted = false, prefix = "") {
+  for (const strand of ["A", "B"]) {
+    const value = values[strand];
+    if (!value || value.state !== "OBSERVED_EXISTING_DETECTION") continue;
+    const detection = (record.anonymous_detections || []).find(
+      (item) => item.anonymous_detection_id === value.anonymous_detection_id
+    );
+    if (!detection) continue;
+    const style = `goldDetection ${accepted ? "" : "proposal "}${strand === "A" ? "strandA" : "strandB"}`;
+    const box = goldDetectionBox(record, detection);
+    goldSvgRect(svg, box, style, {detectionId: detection.anonymous_detection_id, strand, proposal: String(!accepted)});
+    goldSvgLabel(svg, box, strand, strand === "A" ? "strandA" : "strandB");
+  }
+}
+
 function goldRenderDetections(caseData, record) {
   const svg = $("goldDetectionSvg");
   svg.replaceChildren();
   svg.setAttribute("viewBox", `0 0 ${record.crop_width} ${record.crop_height}`);
   const annotation = goldAnnotation(caseData, record.frame_sequence);
+  const proposal = record.proposed_annotations || {};
   for (const detection of record.anonymous_detections || []) {
     const selectedA = annotation.A?.anonymous_detection_id === detection.anonymous_detection_id;
     const selectedB = annotation.B?.anonymous_detection_id === detection.anonymous_detection_id;
-    const className = `goldDetection${selectedA ? " strandA" : ""}${selectedB ? " strandB" : ""}`;
-    const rectangle = goldSvgRect(svg, goldCropBox(record, detection.bbox_original_pixels), className, {
+    const proposalA = !annotation.A && proposal.A?.state === "OBSERVED_EXISTING_DETECTION"
+      && proposal.A.anonymous_detection_id === detection.anonymous_detection_id;
+    const proposalB = !annotation.B && proposal.B?.state === "OBSERVED_EXISTING_DETECTION"
+      && proposal.B.anonymous_detection_id === detection.anonymous_detection_id;
+    const className = `goldDetection${selectedA ? " strandA" : ""}${selectedB ? " strandB" : ""}${proposalA ? " proposal strandA" : ""}${proposalB ? " proposal strandB" : ""}`;
+    const box = goldCropBox(record, detection.bbox_original_pixels);
+    const rectangle = goldSvgRect(svg, box, className, {
       detectionId: detection.anonymous_detection_id,
     });
+    if (selectedA || proposalA) goldSvgLabel(svg, box, "A", "strandA");
+    if (selectedB || proposalB) goldSvgLabel(svg, box, "B", "strandB");
     rectangle.addEventListener("click", (event) => {
       event.stopPropagation();
       goldSetState(goldActiveStrand, {
@@ -1596,6 +1708,201 @@ function goldRenderDetections(caseData, record) {
   }
 }
 
+function goldDrawSeedCrop(canvas, image, record, value) {
+  if (!canvas || !image || !value?.anonymous_detection_id || !image.naturalWidth) return;
+  const detection = (record.anonymous_detections || []).find(
+    (item) => item.anonymous_detection_id === value.anonymous_detection_id
+  );
+  if (!detection) return;
+  const box = goldCropBox(record, detection.bbox_original_pixels);
+  const pad = 18;
+  const x = Math.max(0, Math.floor(box.x1 - pad));
+  const y = Math.max(0, Math.floor(box.y1 - pad));
+  const right = Math.min(image.naturalWidth, Math.ceil(box.x2 + pad));
+  const bottom = Math.min(image.naturalHeight, Math.ceil(box.y2 + pad));
+  const width = Math.max(1, right - x);
+  const height = Math.max(1, bottom - y);
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, width, height);
+  context.drawImage(image, x, y, width, height, 0, 0, width, height);
+}
+
+function goldRenderSeedDetections(caseData, record) {
+  const svg = $("goldSeedSvg");
+  if (!svg || !record) return;
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", `0 0 ${record.crop_width} ${record.crop_height}`);
+  const values = goldSeedValues(caseData);
+  for (const detection of record.anonymous_detections || []) {
+    const isA = values.A?.anonymous_detection_id === detection.anonymous_detection_id;
+    const isB = values.B?.anonymous_detection_id === detection.anonymous_detection_id;
+    const box = goldDetectionBox(record, detection);
+    const className = `goldDetection${isA ? " strandA" : ""}${isB ? " strandB" : ""}`;
+    const rectangle = goldSvgRect(svg, box, className, {detectionId: detection.anonymous_detection_id});
+    if (isA) goldSvgLabel(svg, box, "A", "strandA");
+    if (isB) goldSvgLabel(svg, box, "B", "strandB");
+    rectangle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (!goldSeedMode) return;
+      const target = goldSeedMode === "BOTH" ? (goldDraft(caseData).seed_confirmation?.A ? "B" : "A") : goldSeedMode;
+      const next = goldDraft(caseData).seed_confirmation || {status: "EDITING", A: null, B: null};
+      const other = target === "A" ? "B" : "A";
+      if (next[other]?.anonymous_detection_id === detection.anonymous_detection_id) {
+        $("goldSeedMessage").textContent = "A and B must use distinct available detections.";
+        return;
+      }
+      next[target] = goldSeedValueForDetection(detection);
+      next.status = "EDITING";
+      goldDraft(caseData).seed_confirmation = next;
+      if (goldSeedMode === "BOTH" && target === "A") goldSeedMode = "BOTH";
+      else goldSeedMode = null;
+      goldPersistDraft(caseData);
+      goldRenderSeed(caseData);
+    });
+  }
+  for (const strand of ["A", "B"]) {
+    const value = values[strand];
+    if (value?.state !== "OBSERVED_MANUAL_BBOX") continue;
+    const box = goldCropBox(record, value.bbox_original_pixels);
+    goldSvgRect(svg, box, `goldManualBox ${strand === "A" ? "strandA" : "strandB"}`);
+    goldSvgLabel(svg, box, strand, strand === "A" ? "strandA" : "strandB");
+  }
+  const message = $("goldSeedMessage");
+  if (message) message.textContent = goldSeedMode ? `Select the replacement for Strand ${goldSeedMode === "BOTH" ? "A" : goldSeedMode}.` : "Choose Confirm, Swap, Correct, or Reject. Do not infer A or B from white detections.";
+}
+
+async function goldRenderSeed(caseData = goldCase()) {
+  const record = goldSeedRecord(caseData);
+  if (!record) return;
+  const records = goldRecords(caseData);
+  const generation = ++goldEvidenceGeneration;
+  goldClearEvidenceBlocker();
+  try {
+    const images = await Promise.all([
+      goldLoadContextImage($("goldSeedPreviousImage"), caseData, 0),
+      goldLoadContextImage($("goldSeedCurrentImage"), caseData, 0),
+      goldLoadContextImage($("goldSeedNextImage"), caseData, Math.min(records.length - 1, 1)),
+    ]);
+    if (generation !== goldEvidenceGeneration) return;
+    $("goldSeedCurrentCanvasWrap").style.aspectRatio = `${Number(record.crop_width)} / ${Number(record.crop_height)}`;
+    goldRenderSeedDetections(caseData, record);
+    goldDrawSeedCrop($("goldSeedCropA"), images[1], record, goldSeedValues(caseData).A);
+    goldDrawSeedCrop($("goldSeedCropB"), images[1], record, goldSeedValues(caseData).B);
+    goldApplyViewport("frame");
+  } catch (error) {
+    if (generation === goldEvidenceGeneration) goldSetEvidenceBlocker(error.message);
+  }
+  const seed = goldDraft(caseData).seed_confirmation;
+  $("goldSeedStatus").textContent = seed?.status === "EDITING" ? "Corrected pair pending confirmation" : "Seed confirmation pending";
+  $("goldSeedConfirm").disabled = seed?.status === "REJECTED" || !goldSeedUsable(caseData);
+  $("goldSeedSaveRejected").disabled = seed?.status !== "REJECTED";
+}
+
+function goldStartSeedCorrection(strand) {
+  goldSeedMode = strand;
+  const caseData = goldCase();
+  const seed = goldDraft(caseData).seed_confirmation || {status: "EDITING", A: null, B: null};
+  seed.seed_action = strand === "BOTH" ? "CORRECT_BOTH" : (strand === "A" ? "CORRECT_A" : (strand === "B" ? "CORRECT_B" : seed.seed_action || "CONFIRM"));
+  seed.status = "EDITING";
+  goldDraft(caseData).seed_confirmation = seed;
+  goldPersistDraft(caseData);
+  $("goldSeedMessage").textContent = `Select the replacement for Strand ${strand === "BOTH" ? "A" : strand}.`;
+  goldRenderSeed(caseData);
+}
+
+function goldConfirmSeed() {
+  const caseData = goldCase();
+  if (!goldSeedUsable(caseData)) return;
+  const values = goldSeedValues(caseData);
+  goldPushHistory(caseData);
+  goldDraft(caseData).seed_confirmation = {
+    status: "CONFIRMED",
+    seed_action: goldDraft(caseData).seed_confirmation?.seed_action || "CONFIRM",
+    source_frame_sequence: values.source_frame_sequence,
+    A: {...values.A},
+    B: {...values.B},
+  };
+  goldPersistDraft(caseData);
+  goldSeedMode = null;
+  goldRenderAnnotationCase(caseData);
+}
+
+function goldSwapSeed() {
+  const caseData = goldCase();
+  const values = goldSeedValues(caseData);
+  if (!values.A || !values.B) return;
+  goldPushHistory(caseData);
+  goldDraft(caseData).seed_confirmation = {
+    status: "EDITING",
+    seed_action: "SWAP_A_B",
+    source_frame_sequence: values.source_frame_sequence,
+    A: {...values.B},
+    B: {...values.A},
+  };
+  goldPersistDraft(caseData);
+  goldRenderSeed(caseData);
+}
+
+function goldRejectSeed() {
+  const caseData = goldCase();
+  const reason = $("goldSeedRejectionReason").value;
+  const note = String($("goldSeedRejectionNote").value || "").trim();
+  if (!reason || (reason === "OTHER" && !note)) {
+    $("goldSeedMessage").textContent = "Choose a structured rejection reason; Other requires a short note.";
+    return;
+  }
+  goldPushHistory(caseData);
+  goldDraft(caseData).seed_confirmation = {
+    status: "REJECTED",
+    seed_action: "REJECT_SEQUENCE",
+    seed_rejection_reason: reason,
+    note: note || null,
+    source_frame_sequence: Number(goldSeedRecord(caseData)?.frame_sequence),
+    A: null,
+    B: null,
+  };
+  goldPersistDraft(caseData);
+  $("goldSeedStatus").textContent = "Sequence rejected; no frame labels will be collected.";
+  $("goldSeedMessage").textContent = "Save this sequence to record the structured rejection.";
+  $("goldSeedConfirm").disabled = true;
+  $("goldSeedSaveRejected").disabled = false;
+}
+
+function goldSeedBeginManualDraw(event) {
+  if (!goldSeedMode?.startsWith("MANUAL_")) return;
+  goldSeedDrawingStart = goldPoint(event, $("goldSeedSvg"));
+}
+
+function goldSeedFinishManualDraw(event) {
+  if (!goldSeedDrawingStart) return;
+  const caseData = goldCase();
+  const record = goldSeedRecord(caseData);
+  const end = goldPoint(event, $("goldSeedSvg"));
+  const crop = {
+    x1: Math.min(goldSeedDrawingStart.x, end.x), y1: Math.min(goldSeedDrawingStart.y, end.y),
+    x2: Math.max(goldSeedDrawingStart.x, end.x), y2: Math.max(goldSeedDrawingStart.y, end.y),
+  };
+  goldSeedDrawingStart = null;
+  if (crop.x2 - crop.x1 < 3 || crop.y2 - crop.y1 < 3) return;
+  const target = goldSeedMode === "MANUAL_B" ? "B" : "A";
+  const next = goldDraft(caseData).seed_confirmation || {status: "EDITING", A: null, B: null};
+  next[target] = {
+    state: "OBSERVED_MANUAL_BBOX",
+    bbox_original_pixels: {
+      x1: crop.x1 + Number(record.roi.x1), y1: crop.y1 + Number(record.roi.y1),
+      x2: crop.x2 + Number(record.roi.x1), y2: crop.y2 + Number(record.roi.y1),
+    },
+    manual_correction_reason: "VISIBLE_PERSON_WITHOUT_USABLE_OBSERVATION_BANK_ROW",
+  };
+  next.status = "EDITING";
+  goldDraft(caseData).seed_confirmation = next;
+  goldSeedMode = null;
+  goldPersistDraft(caseData);
+  goldRenderSeed(caseData);
+}
+
 function goldRenderMetrics(caseData) {
   const draft = goldDraft(caseData);
   const total = goldRecords(caseData).length * 2;
@@ -1603,7 +1910,7 @@ function goldRenderMetrics(caseData) {
   $("goldRunAccepted").textContent = `${Math.round(100 * draft.accepted_in_runs / Math.max(1, total))}%`;
   $("goldManualCount").textContent = String(draft.manual_bbox_count);
   $("goldClickCount").textContent = String(draft.clicks);
-  $("goldSaveSequence").disabled = annotated !== total || goldEvidenceBlocked || goldPolygonGateBlocked || !goldPolygonApproved();
+  $("goldSaveSequence").disabled = annotated !== total || goldEvidenceBlocked || goldPolygonGateBlocked || !goldPolygonApproved() || !goldSeedConfirmed(caseData);
   $("goldFrameProgress").textContent = `${annotated} of ${total} strand-frames annotated`;
   $("goldProgressBar").style.width = `${100 * annotated / Math.max(1, total)}%`;
   goldUpdateCompletionGate();
@@ -1665,9 +1972,10 @@ function goldBindViewport(kind, wrapId) {
 
 async function goldLoadContextImage(target, caseData, index) {
   const record = goldRecord(caseData, index);
-  if (!record) { target.removeAttribute("src"); target.dataset.evidenceReady = "true"; return; }
+  if (!record) { target.removeAttribute("src"); target.dataset.evidenceReady = "true"; return target; }
   const asset = caseData.evidence_assets.find((item) => item.asset_id === record.base_asset_id);
   await goldAuditAndLoadImage(caseData, asset, target);
+  return target;
 }
 
 async function goldRenderFrame() {
@@ -1731,8 +2039,8 @@ function goldPolygonIsValid() {
 function goldUpdateCompletionGate() {
   const pitchApproved = goldPolygonApproved();
   const annotationCases = (manifest?.cases || []).filter((item) => item.task_type === "gold_strand_frame_annotation");
-  const allFrames = annotationCases.every((caseData) => currentDecision(caseData) === "SEQUENCE_ANNOTATED");
-  const frameDrafts = Object.values(goldDrafts).some((draft) => Object.keys(draft.annotations || {}).length > 0 || String(draft.note || "").trim());
+  const allFrames = annotationCases.every((caseData) => ["SEQUENCE_ANNOTATED", "SEQUENCE_REJECTED"].includes(currentDecision(caseData)));
+  const frameDrafts = Object.values(goldDrafts).some((draft) => Object.keys(draft.annotations || {}).length > 0 || draft.seed_confirmation || String(draft.note || "").trim());
   const polygonDraft = Boolean(goldPolygonSidecar?.draft?.status === "DRAFT" && !pitchApproved);
   const complete = $("goldComplete");
   if (complete) complete.disabled = !(pitchApproved && allFrames && !goldEvidenceBlocked && !frameDrafts && !polygonDraft && !document.querySelector(".goldInvalidBBox"));
@@ -1872,6 +2180,7 @@ function goldRedoPolygon() {
 async function goldRenderPitchCase(caseData) {
   $("goldPitchPanel").classList.remove("isHidden");
   $("goldAnnotationPanel").classList.add("isHidden");
+  $("goldSeedPanel").classList.add("isHidden");
   $("goldAnnotationTools").classList.add("isHidden");
   $("goldTaskEyebrow").textContent = "PITCH GATE";
   $("goldCaseTitle").textContent = "Approve the playable-pitch boundary";
@@ -1905,16 +2214,22 @@ async function goldRenderPitchCase(caseData) {
 
 function goldRenderAnnotationCase(caseData) {
   $("goldPitchPanel").classList.add("isHidden");
-  $("goldAnnotationPanel").classList.remove("isHidden");
-  $("goldAnnotationTools").classList.remove("isHidden");
-  $("goldTaskEyebrow").textContent = "FRAME-LEVEL A/B GOLD";
+  const rejected = goldSeedRejected(caseData);
+  const confirmed = goldSeedConfirmed(caseData);
+  $("goldSeedPanel").classList.toggle("isHidden", confirmed);
+  $("goldAnnotationPanel").classList.toggle("isHidden", !confirmed || rejected);
+  $("goldAnnotationTools").classList.toggle("isHidden", !confirmed || rejected);
+  $("goldTaskEyebrow").textContent = rejected ? "SEQUENCE REJECTED" : (confirmed ? "FRAME-LEVEL A/B GOLD" : "SEED CONFIRMATION REQUIRED");
   $("goldCaseTitle").textContent = `Sequence ${activeIndex} of ${manifest.cases.length - 1}`;
-  $("goldQuestion").textContent = "Confirm each temporary A/B strand frame state. Prefer an existing detection; draw only when supply is missing.";
+  $("goldQuestion").textContent = confirmed
+    ? "Confirm each temporary A/B strand frame state. Cyan A and magenta B remain visible through the sequence."
+    : "Confirm the visibly labelled cyan A and magenta B pair before frame annotation begins.";
   $("goldSequenceProgress").textContent = `Sequence ${activeIndex} of ${manifest.cases.length - 1}`;
   $("goldNote").value = goldDraft(caseData).note || "";
-  goldRenderFrame();
+  if (confirmed) goldRenderFrame();
+  else goldRenderSeed(caseData);
   if (!goldPolygonApproved()) goldSetPolygonGate("Approve the revised pitch polygon before annotating frames.");
-  else goldClearPolygonGate();
+  else if (confirmed) goldClearPolygonGate();
 }
 
 async function goldRender() {
@@ -1930,13 +2245,20 @@ async function goldSaveSequence() {
   if (goldEvidenceBlocked || goldPolygonGateBlocked || !goldPolygonApproved()) return;
   const caseData = goldCase();
   const draft = goldDraft(caseData);
+  if (!goldSeedConfirmed(caseData) && !goldSeedRejected(caseData)) {
+    $("goldError").textContent = "Confirm or reject the visible A/B seed pair before saving this sequence.";
+    $("goldError").classList.remove("isHidden");
+    return;
+  }
+  const seedConfirmation = draft.seed_confirmation;
+  const isRejected = goldSeedRejected(caseData);
   const records = goldRecords(caseData);
   const frameAnnotations = records.map((record) => ({
     frame_sequence: Number(record.frame_sequence),
     A: draft.annotations[String(record.frame_sequence)]?.A,
     B: draft.annotations[String(record.frame_sequence)]?.B,
   }));
-  if (frameAnnotations.some((item) => !item.A || !item.B)) {
+  if (!isRejected && frameAnnotations.some((item) => !item.A || !item.B)) {
     $("goldError").textContent = "Annotate both strands on every frame before saving.";
     $("goldError").classList.remove("isHidden");
     return;
@@ -1944,10 +2266,12 @@ async function goldSaveSequence() {
   try {
     state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({
       case_id: caseData.case_id,
-      decision: "SEQUENCE_ANNOTATED",
+      decision: isRejected ? "SEQUENCE_REJECTED" : "SEQUENCE_ANNOTATED",
       note: String($("goldNote").value || "").trim(),
       structured_review: {
-        frame_annotations: frameAnnotations,
+        frame_annotations: isRejected ? [] : frameAnnotations,
+        seed_confirmation: seedConfirmation,
+        seed_state_hash: JSON.stringify(seedConfirmation),
         approved_polygon_hash: goldPolygonSidecar?.approved_polygon_hash,
         approved_polygon_manifest_hash: goldPolygonSidecar?.approved_polygon_manifest_hash,
         note: String($("goldNote").value || "").trim() || null,
@@ -2039,6 +2363,16 @@ function goldBind() {
   $("goldAcceptFrame").addEventListener("click", () => goldAcceptProposal(false));
   $("goldAcceptRun").addEventListener("click", () => goldAcceptProposal(true));
   $("goldSaveSequence").addEventListener("click", goldSaveSequence);
+  $("goldSeedConfirm").addEventListener("click", goldConfirmSeed);
+  $("goldSeedSwap").addEventListener("click", goldSwapSeed);
+  $("goldSeedCorrectA").addEventListener("click", () => goldStartSeedCorrection("A"));
+  $("goldSeedCorrectB").addEventListener("click", () => goldStartSeedCorrection("B"));
+  $("goldSeedCorrectBoth").addEventListener("click", () => goldStartSeedCorrection("BOTH"));
+  $("goldSeedDrawManual").addEventListener("click", () => goldStartSeedCorrection(`MANUAL_${goldSeedMode === "B" ? "B" : "A"}`));
+  $("goldSeedReject").addEventListener("click", goldRejectSeed);
+  $("goldSeedSaveRejected").addEventListener("click", goldSaveSequence);
+  $("goldSeedSvg").addEventListener("pointerdown", goldSeedBeginManualDraw);
+  $("goldSeedSvg").addEventListener("pointerup", goldSeedFinishManualDraw);
   $("goldNote").addEventListener("input", () => { goldDraft(goldCase()).note = $("goldNote").value; goldPersistDraft(goldCase()); });
   $("goldDrawManual").addEventListener("click", () => $("goldDrawManual").classList.toggle("drawing"));
   $("goldDetectionSvg").addEventListener("pointerdown", goldBeginManualDraw);
@@ -2059,6 +2393,14 @@ function goldBind() {
     if (!goldMode || isTyping()) return;
     if (event.ctrlKey && event.key.toLowerCase() === "z") { event.preventDefault(); goldUndo(); return; }
     if (goldCase()?.task_type !== "gold_strand_frame_annotation") return;
+    if (!goldSeedConfirmed(goldCase())) {
+      if (event.key === " ") { event.preventDefault(); goldConfirmSeed(); }
+      else if (event.key.toLowerCase() === "s") { event.preventDefault(); goldSwapSeed(); }
+      else if (event.key.toLowerCase() === "a") { event.preventDefault(); goldStartSeedCorrection("A"); }
+      else if (event.key.toLowerCase() === "b") { event.preventDefault(); goldStartSeedCorrection("B"); }
+      else if (event.key.toLowerCase() === "x") { event.preventDefault(); goldRejectSeed(); }
+      return;
+    }
     if (event.key === " ") { event.preventDefault(); goldAcceptProposal(false); }
     else if (event.key === "Enter") { event.preventDefault(); goldAcceptProposal(true); }
     else if (event.key.toLowerCase() === "a") goldSetActiveStrand("A");
