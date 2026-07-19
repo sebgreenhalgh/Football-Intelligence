@@ -428,7 +428,8 @@ textarea {
 .premiumShell:not(.isHidden) { display: block; }
 body[data-presentation="simplified_temporal"],
 body[data-presentation="local_encounter_strands"],
-body[data-presentation="stable_local_strand_continuity"] { display: block; min-height: 100vh; }
+body[data-presentation="stable_local_strand_continuity"],
+body[data-presentation="development_error_atlas"] { display: block; min-height: 100vh; }
 .premiumShell {
   --premium-bg: #0b1220;
   --premium-surface: #131d2d;

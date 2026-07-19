@@ -20,6 +20,7 @@ let premiumPlayTimer = null;
 let premiumRenderToken = 0;
 let localPremiumConfigured = false;
 let stablePremiumConfigured = false;
+let errorAtlasConfigured = false;
 let goldMode = false;
 let goldFrameIndex = 0;
 let goldActiveStrand = "A";
@@ -865,7 +866,7 @@ function premiumCase() {
 }
 
 function premiumDraftKey(caseData) {
-  const prefix = uiConfig?.presentation_mode === "stable_local_strand_continuity" ? "m5_5f0_draft" : "m5_5e2_draft";
+  const prefix = ({stable_local_strand_continuity: "m5_5f0_draft", development_error_atlas: "m5_5f1c_atlas_draft"})[uiConfig?.presentation_mode] || "m5_5e2_draft";
   return `${prefix}_${manifest.review_id}_${caseData.case_id}`;
 }
 
@@ -943,6 +944,7 @@ function premiumCollectAnswers(caseData) {
 }
 
 function premiumSuggestion(answers) {
+  if (uiConfig?.presentation_mode === "development_error_atlas") return null;
   if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
     return answers.continuity_outcome ? {code: answers.continuity_outcome, reason: "The selected structured continuity outcome is ready to save."} : null;
   }
@@ -1069,6 +1071,37 @@ function premiumConfigureStableContract() {
   $("premiumConfirm").closest("label")?.classList.add("isHidden");
 }
 
+function premiumConfigureErrorAtlasContract() {
+  if (errorAtlasConfigured || uiConfig?.presentation_mode !== "development_error_atlas") return;
+  errorAtlasConfigured = true;
+  $("premiumReviewTitle").textContent = uiConfig.review_title || "Development error atlas";
+  const task = document.querySelector(".taskCard p");
+  if (task) task.textContent = "Audit the synchronized full-panorama failure evidence. Gold is read-only. Compare the legacy path, repaired path, candidates, motion region, tracklets and top-K alternative.";
+  const configuredQuestions = uiConfig.question_contract?.evidence_questions || [];
+  const form = $("premiumReviewForm");
+  let fields = [...form.querySelectorAll(".evidenceQuestion")];
+  while (fields.length < configuredQuestions.length) {
+    const field = document.createElement("fieldset");
+    field.className = "evidenceQuestion";
+    fields[fields.length - 1].insertAdjacentElement("afterend", field);
+    fields = [...form.querySelectorAll(".evidenceQuestion")];
+  }
+  const options = uiConfig.question_contract?.answer_values || ["YES", "NO", "UNRESOLVED"];
+  configuredQuestions.forEach((question, index) => {
+    const field = fields[index];
+    field.dataset.question = question.key;
+    field.innerHTML = `<legend><span class="questionNumber">${index + 1}</span> ${question.label}</legend><div class="radioStack">${options.map((value) => `<label><input type="radio" name="${question.key}" value="${value}">${value.replaceAll("_", " ")}</label>`).join("")}</div>`;
+  });
+  fields.slice(configuredQuestions.length).forEach((field) => field.classList.add("isHidden"));
+  $("premiumConclusion").innerHTML = `<option value="">Choose an audit outcome</option>${uiConfig.decisions.map((option) => `<option value="${option.value}">${option.label}</option>`).join("")}`;
+  $("premiumSubtypeWrap").classList.add("isHidden");
+  $("premiumOverrideWrap").classList.add("isHidden");
+  $("premiumConfirm").closest("label")?.classList.add("isHidden");
+  const noteLabel = document.querySelector('label[for="premiumNote"]');
+  if (noteLabel) noteLabel.textContent = "Optional note";
+  $("premiumNote").placeholder = "Optional";
+}
+
 function premiumApplySeedRejectionState() {
   if (uiConfig?.presentation_mode !== "stable_local_strand_continuity") return;
   const contract = uiConfig.question_contract?.seed_rejection_contract;
@@ -1112,6 +1145,14 @@ function premiumRenderQuestions(caseData) {
 
 function premiumRenderSuggestion(caseData) {
   const draft = premiumGetDraft(caseData);
+  if (uiConfig?.presentation_mode === "development_error_atlas") {
+    const option = uiConfig.decisions.find((item) => item.value === draft.conclusion);
+    $("premiumSuggestionTitle").textContent = option?.label || "Choose an audit outcome";
+    $("premiumSuggestionReason").textContent = "The five evidence answers and one structured outcome will be persisted together. Notes are optional.";
+    $("premiumSuggestionState").textContent = draft.conclusion ? "Structured outcome" : "Awaiting outcome";
+    $("premiumSuggestionState").className = `suggestionState ${draft.conclusion ? "confirmed" : ""}`;
+    return;
+  }
   if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
     const outcome = draft.answers?.continuity_outcome;
     $("premiumSuggestionTitle").textContent = outcome ? stableOutcomeLabel(outcome) : "Choose a continuity outcome";
@@ -1146,7 +1187,7 @@ function premiumApplyView() {
   const stage = $("premiumStage");
   stage.dataset.view = premiumView;
   const caseData = premiumCase();
-  if (["local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig?.presentation_mode)) {
+  if (["local_encounter_strands", "stable_local_strand_continuity", "development_error_atlas"].includes(uiConfig?.presentation_mode)) {
     stage.style.setProperty("--focal-scale", "1");
     stage.style.setProperty("--focal-shift-x", "0%");
     stage.style.setProperty("--focal-shift-y", "0%");
@@ -1262,9 +1303,10 @@ function premiumRender() {
   const caseData = premiumCase();
   premiumConfigureLocalContract();
   premiumConfigureStableContract();
+  premiumConfigureErrorAtlasContract();
   premiumFrameIndex(caseData);
   const reviewed = Object.keys(state?.decisions || {}).length;
-  $("premiumReviewTitle").textContent = uiConfig.review_title || (["local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig.presentation_mode) ? "Local strand continuity review" : "Simplified temporal review");
+  $("premiumReviewTitle").textContent = uiConfig.review_title || (["local_encounter_strands", "stable_local_strand_continuity", "development_error_atlas"].includes(uiConfig.presentation_mode) ? "Visual continuity audit" : "Simplified temporal review");
   $("premiumCaseProgress").textContent = `Case ${activeIndex + 1} of ${manifest.cases.length}`;
   $("premiumProgressBar").style.width = `${100 * reviewed / Math.max(1, manifest.cases.length)}%`;
   $("premiumCaseTitle").textContent = `Case ${activeIndex + 1}`;
@@ -1334,6 +1376,13 @@ function premiumTogglePlay() {
 
 function premiumValidateDraft(caseData) {
   const draft = premiumGetDraft(caseData);
+  if (uiConfig?.presentation_mode === "development_error_atlas") {
+    const questions = uiConfig.question_contract?.evidence_questions || [];
+    const errors = [];
+    if (!questions.every((question) => draft.answers?.[question.key])) errors.push("Answer all five evidence questions.");
+    if (!draft.conclusion || !uiConfig.decisions.some((option) => option.value === draft.conclusion)) errors.push("Choose one structured audit outcome.");
+    return errors;
+  }
   if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
     const seed = draft.answers?.seed_action;
     const outcome = draft.answers?.continuity_outcome;
@@ -1367,6 +1416,29 @@ async function premiumSaveAndNext(event) {
   const caseData = premiumCase();
   const draft = premiumGetDraft(caseData);
   premiumCollectAnswers(caseData);
+  if (uiConfig?.presentation_mode === "development_error_atlas") {
+    draft.note = $("premiumNote").value;
+    draft.conclusion = $("premiumConclusion").value;
+    const errors = premiumValidateDraft(caseData);
+    if (errors.length) { $("premiumError").textContent = errors.join(" "); $("premiumError").classList.remove("isHidden"); return; }
+    $("premiumError").classList.add("isHidden");
+    const structuredReview = {evidence_answers: draft.answers, audit_outcome: draft.conclusion, note: String(draft.note || "").trim() || null, gold_labels_mutated: false};
+    premiumSetStatus("Saving", "saving");
+    $("premiumSaveNext").disabled = true;
+    try {
+      state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({case_id: caseData.case_id, decision: draft.conclusion, note: String(draft.note || "").trim(), structured_review: structuredReview, input_source: "save_and_next", last_viewed_case_id: caseData.case_id, elapsed_active_seconds: activeTimeNow()})});
+      localStorage.removeItem(premiumDraftKey(caseData));
+      delete premiumDrafts[caseData.case_id];
+      premiumSetStatus("Saved", "saved");
+      if (activeIndex < manifest.cases.length - 1) activeIndex += 1;
+      premiumRender();
+    } catch (error) {
+      premiumSetStatus("Error", "error");
+      $("premiumError").textContent = `Save failed: ${error.message}`;
+      $("premiumError").classList.remove("isHidden");
+    } finally { $("premiumSaveNext").disabled = false; }
+    return;
+  }
   if (uiConfig?.presentation_mode === "stable_local_strand_continuity") {
     draft.note = $("premiumNote").value;
     draft.first_failure_frame = $("premiumFirstFailureFrame")?.value || "";
@@ -2625,7 +2697,7 @@ async function load() {
     goldRender();
     return;
   }
-  premiumMode = ["simplified_temporal", "local_encounter_strands", "stable_local_strand_continuity"].includes(uiConfig.presentation_mode);
+  premiumMode = ["simplified_temporal", "local_encounter_strands", "stable_local_strand_continuity", "development_error_atlas"].includes(uiConfig.presentation_mode);
   if (premiumMode) {
     const alternativeEnabled = uiConfig.question_contract?.alternative_hypothesis_toggle_enabled === true;
     $("premiumAlternativeToggleWrap").classList.toggle("isHidden", !alternativeEnabled);
