@@ -189,6 +189,12 @@
       <div class="goldHeaderActions">
         <button id="goldUndo" type="button" title="Undo (Ctrl+Z)">&#8630;</button>
         <span id="goldSaveState" class="saveState" role="status">Draft</span>
+        <span id="goldPersistenceInspector" class="goldPersistenceInspector" role="status" aria-label="Server persistence status">
+          <span id="goldPersistenceStatus">Unsaved</span>
+          <span>server <strong id="goldServerSequence">0</strong></span>
+          <span>hash <strong id="goldServerHash">-</strong></span>
+          <span>pending <strong id="goldPendingCount">0</strong></span>
+        </span>
         <span id="goldCompletionChecklist" class="goldChecklist" role="status">Pitch pending | Frames pending | Evidence pending | Draft clear</span>
         <button id="goldComplete" type="button" disabled>Complete</button>
       </div>

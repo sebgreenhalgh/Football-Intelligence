@@ -14,6 +14,7 @@ from football_intelligence.review_chassis.config import load_ui_config
 from football_intelligence.review_chassis.manifest import load_manifest, manifest_hash
 from football_intelligence.review_chassis.polygon_sidecar import PolygonSidecarStore
 from football_intelligence.review_chassis.persistence import GenericReviewPersistence
+from football_intelligence.review_chassis.gold_persistence import CrashSafeGoldPersistence
 from football_intelligence.review_chassis.spatial_annotations import FORBIDDEN_BROWSER_KEYS
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
@@ -75,7 +76,12 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
         self.sealed_mapping = self._load_sealed_mapping(config.sealed_mapping_path)
         reviewer = config.reviewer_session_id or f"local-{secrets.token_hex(4)}"
         self.polygon_store = self._build_polygon_store(config, reviewer)
-        self.persistence = GenericReviewPersistence(
+        persistence_class = (
+            CrashSafeGoldPersistence
+            if self.ui_config.question_contract.get("durable_server_persistence") is True
+            else GenericReviewPersistence
+        )
+        self.persistence = persistence_class(
             manifest=self.manifest,
             ui_config=self.ui_config,
             decisions_root=config.decisions_root.resolve(),
@@ -195,6 +201,10 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                         elapsed_active_seconds=body.get("elapsed_active_seconds"),
                     ),
                 )
+            elif path == "/api/review/gold-event":
+                if not isinstance(persistence, CrashSafeGoldPersistence):
+                    raise ValueError("durable gold persistence is not enabled")
+                _json_response(self, persistence.save_gold_event(body))
             elif path == "/api/review/polygon/draft":
                 if self.server.polygon_store is None:
                     raise ValueError("polygon sidecar is not configured")
@@ -253,6 +263,10 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                     self,
                     persistence.complete(elapsed_active_seconds=body.get("elapsed_active_seconds")),
                 )
+            elif path == "/api/review/gold-complete":
+                if not isinstance(persistence, CrashSafeGoldPersistence):
+                    raise ValueError("durable gold persistence is not enabled")
+                _json_response(self, persistence.complete_gold(body))
             else:
                 _text_response(self, "not found", status=404)
         except Exception as exc:

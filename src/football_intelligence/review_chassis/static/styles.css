@@ -813,6 +813,9 @@ body.goldPresentation #goldShell .goldPitchPanel { grid-template-rows: minmax(0,
 }
 .goldEvidenceStatus { min-height: 1.2em; margin: 0; color: #99e4b6; font-size: .78rem; }
 .goldChecklist { max-width: 430px; color: #aeb9b3; font-size: .72rem; }
+.goldPersistenceInspector { display: inline-flex; gap: 7px; align-items: center; flex-wrap: wrap; color: #b9c8c0; font-size: .68rem; }
+.goldPersistenceInspector > span:first-child { color: #8ce0b0; font-weight: 700; }
+.goldPersistenceInspector strong { color: #f3f7f4; font-weight: 700; }
 .goldCanvasWrap[data-zoom] { will-change: transform; }
 body.goldPresentation #goldShell .goldHeader { position: relative; }
 body.goldPresentation #goldShell .goldHeaderActions { justify-content: flex-end; }

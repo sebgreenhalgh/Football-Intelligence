@@ -43,6 +43,10 @@ let goldPolygonRedo = [];
 let goldPolygonGateBlocked = false;
 let goldSeedMode = null;
 let goldSeedDrawingStart = null;
+const goldPersistence = {
+  db: null, ready: false, flushing: false, pending: [], serverSequence: 0,
+  serverStateHash: "", clientSequence: 0, lastAck: null, blocked: false,
+};
 
 const $ = (id) => document.getElementById(id);
 const isTyping = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -54,6 +58,125 @@ async function api(path, options = {}) {
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
+}
+
+function goldPersistenceStatus(label) {
+  const state = $("goldSaveState");
+  if (state) { state.textContent = label; state.className = `saveState ${label.includes("Saved") ? "saved" : label.includes("Error") ? "error" : "unsaved"}`; }
+  const status = $("goldPersistenceStatus");
+  if (status) status.textContent = label;
+  const pending = $("goldPendingCount");
+  if (pending) pending.textContent = String(goldPersistence.pending.length);
+  const sequence = $("goldServerSequence");
+  if (sequence) sequence.textContent = String(goldPersistence.serverSequence);
+  const hash = $("goldServerHash");
+  if (hash) hash.textContent = goldPersistence.serverStateHash ? goldPersistence.serverStateHash.slice(0, 12) : "-";
+}
+
+function goldPersistenceKey() { return `gold_durable_outbox_${manifest?.review_id || "review"}`; }
+
+function goldIdbRequest(request) {
+  return new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+}
+
+async function goldOpenOutbox() {
+  if (!window.indexedDB) return null;
+  const request = indexedDB.open("m5_5f1a4_gold_outbox", 1);
+  request.onupgradeneeded = () => request.result.createObjectStore("events", {keyPath: "client_event_id"});
+  try { return await goldIdbRequest(request); } catch { return null; }
+}
+
+async function goldOutboxRead() {
+  if (goldPersistence.db) return await goldIdbRequest(goldPersistence.db.transaction("events", "readonly").objectStore("events").getAll());
+  try { return JSON.parse(localStorage.getItem(goldPersistenceKey()) || "[]"); } catch { return []; }
+}
+
+async function goldOutboxPut(event) {
+  if (goldPersistence.db) { await goldIdbRequest(goldPersistence.db.transaction("events", "readwrite").objectStore("events").put(event)); return; }
+  localStorage.setItem(goldPersistenceKey(), JSON.stringify(goldPersistence.pending));
+}
+
+async function goldOutboxDelete(id) {
+  if (goldPersistence.db) { await goldIdbRequest(goldPersistence.db.transaction("events", "readwrite").objectStore("events").delete(id)); return; }
+  localStorage.setItem(goldPersistenceKey(), JSON.stringify(goldPersistence.pending));
+}
+
+async function goldInitPersistence() {
+  if (goldPersistence.ready) return;
+  goldPersistence.db = await goldOpenOutbox();
+  goldPersistence.pending = await goldOutboxRead();
+  goldPersistence.ready = true;
+  goldPersistenceStatus(goldPersistence.pending.length ? "Pending locally" : "Saved to server");
+  window.__goldPersistenceDiagnostics = goldPersistence;
+  window.addEventListener("online", () => void goldFlushOutbox());
+  void goldFlushOutbox();
+}
+
+function goldEventBase(caseData, eventType, payload, frame = null, strand = null) {
+  goldPersistence.clientSequence += 1;
+  const id = crypto.randomUUID();
+  return {
+    review_id: manifest.review_id, reviewer_session_id: uiConfig.question_contract?.reviewer_session_id || "m5_5f1a4_crash_safe_gold_annotation_reviewer",
+    client_event_id: id, idempotency_key: id, client_event_sequence: goldPersistence.clientSequence,
+    event_type: eventType, sequence_id: caseData?.case_id || null, frame: frame == null ? null : Number(frame), strand,
+    payload, approved_polygon_hash: goldPolygonSidecar?.approved_polygon_hash || null,
+    client_timestamp: new Date().toISOString(), prior_server_state_hash: goldPersistence.serverStateHash || null,
+  };
+}
+
+async function goldFlushOutbox() {
+  if (!goldPersistence.ready || goldPersistence.flushing || goldPersistence.blocked) return;
+  goldPersistence.flushing = true;
+  try {
+    while (goldPersistence.pending.length) {
+      const event = goldPersistence.pending[0];
+      goldPersistenceStatus("Uploading");
+      let ack;
+      event.prior_server_state_hash = goldPersistence.serverStateHash || null;
+      try { ack = await api("/api/review/gold-event", {method: "POST", body: JSON.stringify(event)}); }
+      catch (error) { goldPersistenceStatus(navigator.onLine ? "Retrying" : "Offline — queued locally"); break; }
+      if (ack?.state) state = ack.state;
+      goldPersistence.serverSequence = Number(ack.server_event_sequence || goldPersistence.serverSequence);
+      goldPersistence.serverStateHash = ack.server_state_hash || goldPersistence.serverStateHash;
+      goldPersistence.lastAck = ack;
+      goldPersistence.pending.shift();
+      await goldOutboxDelete(event.client_event_id);
+      goldPersistenceStatus("Saved to server");
+    }
+    if (!goldPersistence.pending.length) goldPersistenceStatus("Saved to server");
+  } finally { goldPersistence.flushing = false; }
+  goldRenderMetrics(goldCase());
+}
+
+function goldQueueEvent(eventType, caseData, payload, frame = null, strand = null) {
+  if (!goldPersistence.ready || !caseData) return;
+  const event = goldEventBase(caseData, eventType, payload, frame, strand);
+  goldPersistence.pending.push(event);
+  goldPersistenceStatus("Pending locally");
+  void goldOutboxPut(event).then(goldFlushOutbox);
+}
+
+async function goldQueueEventAndFlush(eventType, caseData, payload, frame = null, strand = null) {
+  const event = goldEventBase(caseData, eventType, payload, frame, strand);
+  goldPersistence.pending.push(event);
+  goldPersistenceStatus("Pending locally");
+  await goldOutboxPut(event);
+  await goldFlushOutbox();
+  if (goldPersistence.pending.length) throw new Error("server acknowledgement is pending");
+}
+
+function goldHydrateFromServer() {
+  const materialized = state?.gold_materialized?.sequences || {};
+  for (const [caseId, sequence] of Object.entries(materialized)) {
+    const draft = goldDrafts[caseId] || goldDefaultDraft();
+    if (sequence.seed_confirmation) draft.seed_confirmation = sequence.seed_confirmation;
+    for (const [frame, values] of Object.entries(sequence.frames || {})) draft.annotations[frame] = values;
+    if (sequence.note != null) draft.note = sequence.note;
+    goldDrafts[caseId] = draft;
+  }
+  goldPersistence.serverSequence = Number(state?.server_sequence || state?.event_sequence || 0);
+  goldPersistence.serverStateHash = state?.server_state_hash || "";
+  goldPersistenceStatus(goldPersistence.pending.length ? "Pending locally" : "Saved to server");
 }
 
 function activeCase() {
@@ -1465,8 +1588,7 @@ function goldDraft(caseData) {
 
 function goldPersistDraft(caseData) {
   localStorage.setItem(goldDraftKey(caseData), JSON.stringify(goldDraft(caseData)));
-  $("goldSaveState").textContent = "Draft saved";
-  $("goldSaveState").className = "saveState unsaved";
+  if (goldPersistence.ready) goldPersistenceStatus("Pending locally");
 }
 
 function goldRecords(caseData = goldCase()) {
@@ -1589,6 +1711,7 @@ function goldSetState(strand, value, caseData = goldCase(), record = goldRecord(
   goldAnnotation(caseData, record.frame_sequence)[strand] = value;
   goldDraft(caseData).clicks += 1;
   goldPersistDraft(caseData);
+  goldQueueEvent(value?.state === "OBSERVED_MANUAL_BBOX" ? "MANUAL_BBOX_SET" : "FRAME_STATE_SET", caseData, {value}, record.frame_sequence, strand);
   goldRenderFrame();
 }
 
@@ -1605,12 +1728,21 @@ function goldAcceptProposal(run = false) {
     if (!goldProposalUsable(record)) continue;
     goldAnnotation(caseData, record.frame_sequence).A = {...proposal.A};
     goldAnnotation(caseData, record.frame_sequence).B = {...proposal.B};
+    goldQueueEvent("FRAME_STATE_SET", caseData, {value: {...proposal.A}}, record.frame_sequence, "A");
+    goldQueueEvent("FRAME_STATE_SET", caseData, {value: {...proposal.B}}, record.frame_sequence, "B");
     accepted += 2;
   }
   const draft = goldDraft(caseData);
   draft.clicks += 1;
   if (run) draft.accepted_in_runs += accepted;
   goldPersistDraft(caseData);
+  if (!run) {
+    const record = records[goldFrameIndex];
+    const values = goldAnnotation(caseData, record.frame_sequence);
+    goldQueueEvent("PAIR_ACCEPTED", caseData, {values}, record.frame_sequence, null);
+  } else {
+    goldQueueEvent("STABLE_RUN_ACCEPTED", caseData, {start_frame: records[goldFrameIndex]?.frame_sequence, frame_count: indices.length, frames: indices.map((index) => records[index].frame_sequence)}, null, null);
+  }
   if (!run && goldFrameIndex < records.length - 1) goldFrameIndex += 1;
   goldRenderFrame();
 }
@@ -1825,6 +1957,7 @@ function goldConfirmSeed() {
     B: {...values.B},
   };
   goldPersistDraft(caseData);
+  goldQueueEvent("SEED_CONFIRMED", caseData, {seed_confirmation: goldDraft(caseData).seed_confirmation}, null, null);
   goldSeedMode = null;
   goldRenderAnnotationCase(caseData);
 }
@@ -1842,6 +1975,7 @@ function goldSwapSeed() {
     B: {...values.A},
   };
   goldPersistDraft(caseData);
+  goldQueueEvent("SEED_SWAPPED", caseData, {seed_confirmation: goldDraft(caseData).seed_confirmation}, null, null);
   goldRenderSeed(caseData);
 }
 
@@ -1864,6 +1998,7 @@ function goldRejectSeed() {
     B: null,
   };
   goldPersistDraft(caseData);
+  goldQueueEvent("SEED_REJECTED", caseData, {seed_confirmation: goldDraft(caseData).seed_confirmation}, null, null);
   $("goldSeedStatus").textContent = "Sequence rejected; no frame labels will be collected.";
   $("goldSeedMessage").textContent = "Save this sequence to record the structured rejection.";
   $("goldSeedConfirm").disabled = true;
@@ -2264,35 +2399,27 @@ async function goldSaveSequence() {
     return;
   }
   try {
-    state = await api("/api/review/decision", {method: "POST", body: JSON.stringify({
-      case_id: caseData.case_id,
+    await goldFlushOutbox();
+    if (goldPersistence.pending.length) throw new Error("save is blocked until pending events are acknowledged");
+    await goldQueueEventAndFlush("SEQUENCE_SAVED", caseData, {
       decision: isRejected ? "SEQUENCE_REJECTED" : "SEQUENCE_ANNOTATED",
-      note: String($("goldNote").value || "").trim(),
-      structured_review: {
-        frame_annotations: isRejected ? [] : frameAnnotations,
-        seed_confirmation: seedConfirmation,
-        seed_state_hash: JSON.stringify(seedConfirmation),
-        approved_polygon_hash: goldPolygonSidecar?.approved_polygon_hash,
-        approved_polygon_manifest_hash: goldPolygonSidecar?.approved_polygon_manifest_hash,
-        note: String($("goldNote").value || "").trim() || null,
-        interaction_metrics: {
-          clicks: draft.clicks,
-          accepted_in_runs: draft.accepted_in_runs,
-          manual_bbox_count: draft.manual_bbox_count,
-          active_seconds: activeTimeNow(),
-        },
-      },
-      input_source: "gold_keyboard_first_annotation",
-      elapsed_active_seconds: activeTimeNow(),
-    })});
+      frame_annotations: isRejected ? [] : frameAnnotations,
+      seed_confirmation: seedConfirmation,
+      seed_state_hash: JSON.stringify(seedConfirmation),
+      approved_polygon_hash: goldPolygonSidecar?.approved_polygon_hash,
+      approved_polygon_manifest_hash: goldPolygonSidecar?.approved_polygon_manifest_hash,
+      note: String($("goldNote").value || "").trim() || null,
+      interaction_metrics: {clicks: draft.clicks, accepted_in_runs: draft.accepted_in_runs, manual_bbox_count: draft.manual_bbox_count, active_seconds: activeTimeNow()},
+    });
+    state = await api("/api/review/state");
+    goldHydrateFromServer();
     localStorage.removeItem(goldDraftKey(caseData));
     delete goldDrafts[caseData.case_id];
     if (activeIndex < manifest.cases.length - 1) {
       activeIndex += 1;
       goldFrameIndex = 0;
     }
-    $("goldSaveState").textContent = "Saved";
-    $("goldSaveState").className = "saveState saved";
+    goldPersistenceStatus("Saved to server");
     goldRender();
   } catch (error) {
     $("goldError").textContent = `Save failed: ${error.message}`;
@@ -2373,7 +2500,12 @@ function goldBind() {
   $("goldSeedSaveRejected").addEventListener("click", goldSaveSequence);
   $("goldSeedSvg").addEventListener("pointerdown", goldSeedBeginManualDraw);
   $("goldSeedSvg").addEventListener("pointerup", goldSeedFinishManualDraw);
-  $("goldNote").addEventListener("input", () => { goldDraft(goldCase()).note = $("goldNote").value; goldPersistDraft(goldCase()); });
+  $("goldNote").addEventListener("input", () => {
+    const caseData = goldCase();
+    goldDraft(caseData).note = $("goldNote").value;
+    goldPersistDraft(caseData);
+    goldQueueEvent("NOTE_UPDATED", caseData, {note: goldDraft(caseData).note});
+  });
   $("goldDrawManual").addEventListener("click", () => $("goldDrawManual").classList.toggle("drawing"));
   $("goldDetectionSvg").addEventListener("pointerdown", goldBeginManualDraw);
   $("goldDetectionSvg").addEventListener("pointerup", goldFinishManualDraw);
@@ -2381,9 +2513,13 @@ function goldBind() {
   $("goldComplete").addEventListener("click", async () => {
     if ($("goldComplete").disabled) return;
     try {
-      state = await api("/api/review/complete", {method: "POST", body: JSON.stringify({elapsed_active_seconds: activeTimeNow()})});
-      $("goldSaveState").textContent = "Completed";
-      $("goldSaveState").className = "saveState saved";
+      await goldFlushOutbox();
+      if (goldPersistence.pending.length) throw new Error("completion is blocked while events are pending");
+      state = await api("/api/review/gold-complete", {method: "POST", body: JSON.stringify(goldEventBase(null, "REVIEW_COMPLETED", {elapsed_active_seconds: activeTimeNow()}))});
+      goldPersistence.serverSequence = Number(state.server_event_sequence || state.state?.server_sequence || goldPersistence.serverSequence);
+      goldPersistence.serverStateHash = state.server_state_hash || state.state?.server_state_hash || goldPersistence.serverStateHash;
+      goldPersistenceStatus("Saved to server");
+      goldUpdateCompletionGate();
     } catch (error) {
       $("goldError").textContent = `Completion blocked: ${error.message}`;
       $("goldError").classList.remove("isHidden");
@@ -2411,7 +2547,11 @@ function goldBind() {
       goldPushHistory(goldCase());
       const annotation = goldAnnotation(goldCase(), goldRecord().frame_sequence);
       annotation.A = {state: "AMBIGUOUS"}; annotation.B = {state: "AMBIGUOUS"};
-      goldPersistDraft(goldCase()); goldRenderFrame();
+      goldPersistDraft(goldCase());
+      const current = goldRecord(goldCase());
+      goldQueueEvent("FRAME_STATE_SET", goldCase(), {value: {state: "AMBIGUOUS"}}, current?.frame_sequence, "A");
+      goldQueueEvent("FRAME_STATE_SET", goldCase(), {value: {state: "AMBIGUOUS"}}, current?.frame_sequence, "B");
+      goldRenderFrame();
     } else if (event.key === "ArrowLeft") { event.preventDefault(); goldFrameIndex = Math.max(0, goldFrameIndex - 1); goldRenderFrame(); }
     else if (event.key === "ArrowRight") { event.preventDefault(); goldFrameIndex = Math.min(goldRecords().length - 1, goldFrameIndex + 1); goldRenderFrame(); }
   });
@@ -2423,6 +2563,8 @@ async function load() {
   state = await api("/api/review/state");
   goldMode = uiConfig.presentation_mode === "gold_strand_annotation";
   if (goldMode) {
+    await goldInitPersistence();
+    goldHydrateFromServer();
     await goldLoadPolygonSidecar();
     let resume = state.resume_case_id;
     const pitchIndex = manifest.cases.findIndex((caseData) => caseData.task_type === "pitch_polygon_approval");

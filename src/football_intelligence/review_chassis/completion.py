@@ -81,7 +81,7 @@ def validate_completion_bundle(decisions_root: Path) -> dict[str, Any]:
     event_sequences = [int(event.get("event_sequence", -1)) for event in events]
     if event_sequences != sorted(event_sequences) or len(event_sequences) != len(set(event_sequences)):
         errors.append("completion events are not strictly ordered and unique")
-    if not events or events[-1].get("event_type") != "complete":
+    if not events or events[-1].get("event_type") not in {"complete", "REVIEW_COMPLETED"}:
         errors.append("completion event is missing from the event ledger")
     artifact_hashes = manifest.get("artifact_hashes", {})
     for name in ("completed_review.json", "completed_review_events.jsonl", "completed_review_summary.json"):
