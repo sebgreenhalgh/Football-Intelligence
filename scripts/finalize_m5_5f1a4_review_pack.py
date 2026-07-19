@@ -28,7 +28,7 @@ PACKAGE = STAGE / "07_CRASH_SAFE_GOLD_ANNOTATION_PACKAGE"
 PACK = STAGE / "12_REVIEW_PACK_FOR_CHATGPT"
 BROWSER = STAGE / "09_BROWSER_CRASH_RESTART_AND_OFFLINE_TESTS" / "browser_evidence"
 BASELINE = "eb250e8d2c5ed226abac86544f5d9d3d27ea0e96"
-HEAD = "90f7678"
+HEAD = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
 
 FILES = [
     "REVIEW_PACK_MANIFEST.json",
