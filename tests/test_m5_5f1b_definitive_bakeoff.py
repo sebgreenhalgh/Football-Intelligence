@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -287,6 +288,7 @@ def test_real_cuda_probe_has_no_cpu_fallback() -> None:
     assert result["fp16_executed"] is True
     assert result["silent_cpu_fallback"] is False
     assert result["peak_allocated_vram_bytes"] > 0
+    assert math.isfinite(result["result_checksum"])
 
 
 def test_generated_stage_outputs_are_complete_safe_and_bounded() -> None:

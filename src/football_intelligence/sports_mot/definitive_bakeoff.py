@@ -879,11 +879,15 @@ def run_cuda_probe() -> dict[str, Any]:
     baseline_peak_allocated = int(torch.cuda.max_memory_allocated())
     baseline_peak_reserved = int(torch.cuda.max_memory_reserved())
     started = time.perf_counter()
-    left = torch.linspace(0.0, 1.0, 1024 * 512, device=device, dtype=torch.float16).reshape(1024, 512)
-    right = torch.linspace(1.0, 0.0, 512 * 256, device=device, dtype=torch.float16).reshape(512, 256)
+    left = torch.linspace(0.0, 1.0, 1024 * 512, device=device, dtype=torch.float32).to(torch.float16)
+    right = torch.linspace(1.0, 0.0, 512 * 256, device=device, dtype=torch.float32).to(torch.float16)
+    left = left.reshape(1024, 512)
+    right = right.reshape(512, 256)
     result = left @ right
     checksum = float(result.float().mean().item())
     torch.cuda.synchronize()
+    if not math.isfinite(checksum):
+        raise RuntimeError("CUDA FP16 probe produced a non-finite checksum")
     return {
         "device": "cuda:0",
         "device_name": torch.cuda.get_device_name(0),
