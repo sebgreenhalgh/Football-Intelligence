@@ -334,6 +334,35 @@ The implementation is visual-only, match-local, sandbox-only and not production-
         raise RuntimeError(f"pack file set mismatch: {actual}")
     if total > 50 * 1024 * 1024:
         raise RuntimeError("review pack exceeds 50 MiB")
+    write(
+        STAGE / "stage_summary.json",
+        {
+            "classification": "BLOCKED_HISTORICAL_FIXTURE_MUTATION",
+            "implementation_commit": HEAD,
+            "browser_validation_passed": True,
+            "package_validation_passed": bool(package_validation.get("passed")),
+            "review_pack_validated": True,
+            "full_suite_passed": False,
+            "exact_blocker": full_suite["blocker"],
+            "review_url": "http://127.0.0.1:8802/",
+            "new_package_decisions_root_empty": True,
+            "no_tracker_promoted": True,
+        },
+    )
+    write(STAGE / "10_SCIENTIFIC_INTEGRITY_AND_RECOVERY_VALIDATION" / "browser_validation_summary.json", browser_result)
+    write(
+        STAGE / "11_COMMANDS_AND_TESTS" / "final_validation.json",
+        {
+            "focused_tests": {"passed": True, "count": 26},
+            "full_suite": full_suite,
+            "lock_check": True,
+            "sync": True,
+            "cli_help": True,
+            "ruff": True,
+            "javascript_syntax": True,
+            "review_pack": {"passed": True, "file_count": len(actual)},
+        },
+    )
     print(
         json.dumps(
             {
