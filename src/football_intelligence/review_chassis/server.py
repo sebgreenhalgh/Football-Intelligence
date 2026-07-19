@@ -205,6 +205,18 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 if not isinstance(persistence, CrashSafeGoldPersistence):
                     raise ValueError("durable gold persistence is not enabled")
                 _json_response(self, persistence.save_gold_event(body))
+            elif path == "/api/review/gold-recover":
+                if not isinstance(persistence, CrashSafeGoldPersistence):
+                    raise ValueError("durable gold persistence is not enabled")
+                _json_response(
+                    self,
+                    persistence.recover_authoritative_state(
+                        write_sidecar=True,
+                        pending_outbox_events=int(body.get("pending_outbox_events", 0)),
+                        evidence_blocker_count=int(body.get("evidence_blocker_count", 0)),
+                        unresolved_divergence=bool(body.get("unresolved_divergence", False)),
+                    ),
+                )
             elif path == "/api/review/polygon/draft":
                 if self.server.polygon_store is None:
                     raise ValueError("polygon sidecar is not configured")

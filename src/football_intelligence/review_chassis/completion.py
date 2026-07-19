@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.review.schemas import safety_payload, utc_now
-from football_intelligence.review_chassis.hashing import sha256_file
+from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
 
 
 COMPLETION_FILENAMES = (
@@ -79,8 +79,25 @@ def validate_completion_bundle(decisions_root: Path) -> dict[str, Any]:
     if state.get("completed") is not True or export.get("summary", {}).get("completed") is not True:
         errors.append("completed state is false")
     event_sequences = [int(event.get("event_sequence", -1)) for event in events]
-    if event_sequences != sorted(event_sequences) or len(event_sequences) != len(set(event_sequences)):
-        errors.append("completion events are not strictly ordered and unique")
+    duplicate_event_sequences = sorted(
+        sequence for sequence in set(event_sequences) if event_sequences.count(sequence) > 1
+    )
+    if event_sequences != sorted(event_sequences):
+        errors.append("completion events are not append-order monotonic")
+    if duplicate_event_sequences:
+        gold_hashes_valid = all(
+            event.get("gold_event") is True
+            and event.get("event_hash")
+            == stable_hash({key: value for key, value in event.items() if key not in {"event_hash", "ack"}})
+            for event in events
+        )
+        idempotency_keys = [str(event.get("idempotency_key")) for event in events]
+        client_event_ids = [str(event.get("client_event_id")) for event in events]
+        identities_unique = len(idempotency_keys) == len(set(idempotency_keys)) and len(client_event_ids) == len(
+            set(client_event_ids)
+        )
+        if not gold_hashes_valid or not identities_unique:
+            errors.append("duplicate gold event sequence is not provenance-safe")
     if not events or events[-1].get("event_type") not in {"complete", "REVIEW_COMPLETED"}:
         errors.append("completion event is missing from the event ledger")
     artifact_hashes = manifest.get("artifact_hashes", {})
@@ -95,6 +112,7 @@ def validate_completion_bundle(decisions_root: Path) -> dict[str, Any]:
         "completion_transaction_id": manifest.get("completion_transaction_id"),
         "artifact_hashes": {name: sha256_file(path) for name, path in paths.items()},
         "event_count": len(events),
+        "duplicate_event_sequences": duplicate_event_sequences,
     }
 
 

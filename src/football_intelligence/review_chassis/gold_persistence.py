@@ -7,7 +7,7 @@ import json
 import uuid
 from typing import Any
 
-from football_intelligence.review_chassis.hashing import stable_hash
+from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
 from football_intelligence.review_chassis.persistence import (
     GenericReviewPersistence,
     append_jsonl,
@@ -15,6 +15,9 @@ from football_intelligence.review_chassis.persistence import (
     synchronized,
     utc_now,
 )
+
+
+RECOVERY_SIDECAR_FILENAME = "gold_recovery_materialization.json"
 
 
 GOLD_EVENT_TYPES = {
@@ -70,7 +73,9 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
 
     def _materialize_events(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         materialized = self._empty_materialized()
-        for event in sorted(events, key=lambda item: int(item.get("event_sequence", 0))):
+        # Append order is authoritative and preserves a known legacy duplicate
+        # event-sequence value without rewriting the historical ledger.
+        for event in events:
             self._apply_gold_event(materialized, event)
         return materialized
 
@@ -81,42 +86,74 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             {"seed_confirmation": None, "frames": {}, "stable_runs": [], "finalized": False, "decision": None},
         )
 
-    def _apply_gold_event(self, materialized: dict[str, Any], event: dict[str, Any]) -> None:
+    @staticmethod
+    def _invalidate_finalization(sequence: dict[str, Any]) -> None:
+        sequence["finalized"] = False
+        sequence["decision"] = None
+
+    def _apply_gold_event(self, materialized: dict[str, Any], event: dict[str, Any]) -> bool:
+        before_hash = stable_hash(materialized)
         event_type = str(event.get("event_type"))
         sequence_id = event.get("sequence_id")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         if event_type == "REVIEW_COMPLETED":
             materialized["review_completed"] = True
             materialized["completed_at"] = event.get("persisted_at") or event.get("server_timestamp")
-            return
+            return stable_hash(materialized) != before_hash
         if not sequence_id:
-            return
+            return False
         sequence = self._sequence(materialized, str(sequence_id))
         if event_type in {"SEED_CONFIRMED", "SEED_SWAPPED", "SEED_CORRECTED", "SEED_REJECTED"}:
-            sequence["seed_confirmation"] = copy.deepcopy(payload.get("seed_confirmation"))
+            value = copy.deepcopy(payload.get("seed_confirmation"))
+            if sequence.get("seed_confirmation") != value:
+                sequence["seed_confirmation"] = value
+                self._invalidate_finalization(sequence)
         elif event_type in {"FRAME_STATE_SET", "MANUAL_BBOX_SET"}:
             frame = str(int(event["frame"]))
             strand = str(event["strand"])
-            sequence.setdefault("frames", {}).setdefault(frame, {})[strand] = copy.deepcopy(payload.get("value"))
+            value = copy.deepcopy(payload.get("value"))
+            target = sequence.setdefault("frames", {}).setdefault(frame, {})
+            if target.get(strand) != value:
+                target[strand] = value
+                self._invalidate_finalization(sequence)
         elif event_type == "PAIR_ACCEPTED":
             frame = str(int(event["frame"]))
             values = payload.get("values", {})
             if isinstance(values, dict):
-                sequence.setdefault("frames", {}).setdefault(frame, {}).update(copy.deepcopy(values))
+                target = sequence.setdefault("frames", {}).setdefault(frame, {})
+                if any(target.get(strand) != values.get(strand) for strand in ("A", "B")):
+                    target.update(copy.deepcopy(values))
+                    self._invalidate_finalization(sequence)
         elif event_type == "STABLE_RUN_ACCEPTED":
-            sequence.setdefault("stable_runs", []).append(copy.deepcopy(payload))
+            if not sequence.setdefault("stable_runs", []) or sequence["stable_runs"][-1] != payload:
+                sequence["stable_runs"].append(copy.deepcopy(payload))
         elif event_type == "NOTE_UPDATED":
-            sequence["note"] = str(payload.get("note", ""))
+            note = str(payload.get("note", ""))
+            if sequence.get("note") != note:
+                sequence["note"] = note
         elif event_type == "UNDO":
             frame = event.get("frame")
             strand = event.get("strand")
             if frame is not None and strand in {"A", "B"}:
-                sequence.setdefault("frames", {}).setdefault(str(int(frame)), {})[str(strand)] = copy.deepcopy(
-                    payload.get("restored_value")
-                )
+                value = copy.deepcopy(payload.get("restored_value"))
+                target = sequence.setdefault("frames", {}).setdefault(str(int(frame)), {})
+                if target.get(str(strand)) != value:
+                    target[str(strand)] = value
+                    self._invalidate_finalization(sequence)
         elif event_type == "SEQUENCE_SAVED":
+            seed = copy.deepcopy(payload.get("seed_confirmation"))
+            if seed is not None:
+                sequence["seed_confirmation"] = seed
+            for frame_row in payload.get("frame_annotations", []):
+                if not isinstance(frame_row, dict) or frame_row.get("frame_sequence") is None:
+                    continue
+                sequence.setdefault("frames", {})[str(int(frame_row["frame_sequence"]))] = {
+                    "A": copy.deepcopy(frame_row.get("A")),
+                    "B": copy.deepcopy(frame_row.get("B")),
+                }
             sequence["finalized"] = True
             sequence["decision"] = str(payload.get("decision"))
+        return stable_hash(materialized) != before_hash
 
     def _materialized_counts(self, materialized: dict[str, Any]) -> dict[str, int]:
         sequences = materialized.get("sequences", {})
@@ -132,18 +169,166 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             "seed_confirmations": sum(sequence.get("seed_confirmation") is not None for sequence in sequences.values()),
         }
 
+    def _expected_sequence_cases(self) -> list[Any]:
+        return [case for case in self.manifest.cases if case.task_type == "gold_strand_frame_annotation"]
+
+    def completion_eligibility(
+        self,
+        materialized: dict[str, Any],
+        *,
+        pending_outbox_events: int = 0,
+        evidence_blocker_count: int = 0,
+        unresolved_divergence: bool = False,
+    ) -> dict[str, Any]:
+        expected_cases = self._expected_sequence_cases()
+        expected_ids = [case.case_id for case in expected_cases]
+        expected_frame_states = sum(len(_sequence_records(case)) * 2 for case in expected_cases)
+        sequences = materialized.get("sequences", {})
+        counts = self._materialized_counts(materialized)
+        polygon = self.polygon_store.ensure() if self.polygon_store is not None else None
+        checks = {
+            "approved_polygon_valid": polygon is None or bool(polygon.get("is_approved")),
+            "exact_sequence_set": set(sequences) == set(expected_ids),
+            "seed_confirmations_complete": counts["seed_confirmations"] == len(expected_ids)
+            and all(sequences.get(case_id, {}).get("seed_confirmation") is not None for case_id in expected_ids),
+            "sequences_finalized_complete": counts["sequences_finalized"] == len(expected_ids)
+            and all(bool(sequences.get(case_id, {}).get("finalized")) for case_id in expected_ids),
+            "strand_frame_states_complete": counts["strand_frame_states"] == expected_frame_states
+            and all(
+                all(
+                    sequences.get(case.case_id, {}).get("frames", {}).get(str(frame), {}).get(strand) is not None
+                    for frame in _sequence_records(case)
+                    for strand in ("A", "B")
+                )
+                for case in expected_cases
+            ),
+            "pending_outbox_empty": int(pending_outbox_events) == 0,
+            "evidence_blockers_clear": int(evidence_blocker_count) == 0,
+            "divergence_clear": not unresolved_divergence,
+        }
+        return {
+            "eligible": all(checks.values()) and materialized.get("review_completed") is not True,
+            "already_completed": materialized.get("review_completed") is True,
+            "checks": checks,
+            "expected_sequence_count": len(expected_ids),
+            "expected_strand_frame_states": expected_frame_states,
+            "pending_outbox_events": int(pending_outbox_events),
+            "evidence_blocker_count": int(evidence_blocker_count),
+            "unresolved_divergence": bool(unresolved_divergence),
+            **counts,
+            "approved_polygon_hash": polygon.get("approved_polygon_hash") if polygon else None,
+        }
+
+    def _ledger_audit(self, events: list[dict[str, Any]]) -> dict[str, Any]:
+        sequences = [int(event.get("event_sequence", -1)) for event in events]
+        event_hash_mismatches = []
+        for append_index, event in enumerate(events, start=1):
+            payload = {key: value for key, value in event.items() if key not in {"event_hash", "ack"}}
+            if event.get("event_hash") != stable_hash(payload):
+                event_hash_mismatches.append(append_index)
+        sequence_counts = {value: sequences.count(value) for value in set(sequences)}
+        duplicate_sequences = sorted(value for value, count in sequence_counts.items() if count > 1)
+        idempotency_keys = [str(event.get("idempotency_key")) for event in events]
+        client_event_ids = [str(event.get("client_event_id")) for event in events]
+        return {
+            "passed": bool(events)
+            and not event_hash_mismatches
+            and all(value > 0 for value in sequences)
+            and sequences == sorted(sequences)
+            and len(idempotency_keys) == len(set(idempotency_keys))
+            and len(client_event_ids) == len(set(client_event_ids)),
+            "event_count": len(events),
+            "highest_event_sequence": max(sequences, default=0),
+            "append_order_nondecreasing": sequences == sorted(sequences),
+            "duplicate_event_sequences": duplicate_sequences,
+            "duplicate_event_sequence_count": len(duplicate_sequences),
+            "event_hash_mismatch_append_indices": event_hash_mismatches,
+            "duplicate_idempotency_key_count": len(idempotency_keys) - len(set(idempotency_keys)),
+            "duplicate_client_event_id_count": len(client_event_ids) - len(set(client_event_ids)),
+        }
+
+    def recover_authoritative_state(
+        self,
+        *,
+        write_sidecar: bool = True,
+        pending_outbox_events: int = 0,
+        evidence_blocker_count: int = 0,
+        unresolved_divergence: bool = False,
+    ) -> dict[str, Any]:
+        events = self._gold_events()
+        ledger_audit = self._ledger_audit(events)
+        if not ledger_audit["passed"]:
+            raise ValueError("gold ledger validation failed")
+        materialized = self._materialize_events(events)
+        eligibility = self.completion_eligibility(
+            materialized,
+            pending_outbox_events=pending_outbox_events,
+            evidence_blocker_count=evidence_blocker_count,
+            unresolved_divergence=unresolved_divergence,
+        )
+        sequence_rows = []
+        for case in self._expected_sequence_cases():
+            sequence = materialized.get("sequences", {}).get(case.case_id, {})
+            frames = sequence.get("frames", {})
+            sequence_rows.append(
+                {
+                    "sequence_id": case.case_id,
+                    "expected_frame_count": len(_sequence_records(case)),
+                    "persisted_frame_count": sum(
+                        all(frames.get(str(frame), {}).get(strand) is not None for strand in ("A", "B"))
+                        for frame in _sequence_records(case)
+                    ),
+                    "strand_frame_states": sum(
+                        frames.get(str(frame), {}).get(strand) is not None
+                        for frame in _sequence_records(case)
+                        for strand in ("A", "B")
+                    ),
+                    "seed_confirmed": sequence.get("seed_confirmation") is not None,
+                    "finalized": bool(sequence.get("finalized")),
+                    "decision": sequence.get("decision"),
+                }
+            )
+        report = {
+            "schema_version": "football_intelligence.m5_5f1a4b.recovery.v1",
+            "created_at": utc_now(),
+            "review_id": self.manifest.review_id,
+            "source_event_ledger_path": str(self.events_path),
+            "source_event_ledger_sha256": sha256_file(self.events_path),
+            "source_event_ledger_size": self.events_path.stat().st_size,
+            "source_materialized_state_path": str(self.state_path),
+            "source_materialized_state_sha256": sha256_file(self.state_path) if self.state_path.is_file() else None,
+            "source_materialized_state_size": self.state_path.stat().st_size if self.state_path.is_file() else 0,
+            "ledger_audit": ledger_audit,
+            "materialized_state_hash": stable_hash(materialized),
+            "sequence_ids": [row["sequence_id"] for row in sequence_rows],
+            "per_sequence": sequence_rows,
+            "completion_eligibility": eligibility,
+            "scientific_annotation_events_written": 0,
+        }
+        if write_sidecar:
+            atomic_write_json(self.decisions_root / RECOVERY_SIDECAR_FILENAME, report)
+        return report
+
     @synchronized
     def ensure_state(self) -> dict[str, Any]:
         state = super().ensure_state()
         events = self._gold_events()
         materialized = self._materialize_events(events)
         state_hash = stable_hash(materialized)
-        if state.get("gold_materialized") != materialized or state.get("server_state_hash") != state_hash:
+        highest_sequence = max((int(event.get("event_sequence", 0)) for event in events), default=0)
+        completed = materialized.get("review_completed") is True
+        if (
+            state.get("gold_materialized") != materialized
+            or state.get("server_state_hash") != state_hash
+            or int(state.get("event_sequence", 0)) != highest_sequence
+            or int(state.get("gold_event_count", 0)) != len(events)
+            or bool(state.get("completed")) != completed
+        ):
             state["gold_materialized"] = materialized
             state["server_state_hash"] = state_hash
             state["gold_event_count"] = len(events)
-            if materialized.get("review_completed"):
-                state["completed"] = True
+            state["event_sequence"] = highest_sequence
+            state["completed"] = completed
             atomic_write_json(self.state_path, state)
         return state
 
@@ -153,6 +338,7 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
         state["server_sequence"] = int(state.get("event_sequence", 0))
         state["server_state_hash"] = state.get("server_state_hash") or stable_hash(materialized)
         state["materialized_counts"] = self._materialized_counts(materialized)
+        state["completion_eligibility"] = self.completion_eligibility(materialized)
         state["persistence_status"] = "SYNCED"
         return state
 
@@ -232,6 +418,8 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             raise ValueError("client_event_sequence must be positive")
         if event.get("event_type") not in GOLD_EVENT_TYPES:
             raise ValueError("unsupported gold event type")
+        if state.get("completed") is True and event.get("event_type") != "REVIEW_COMPLETED":
+            raise ValueError("review is completed; annotation mutations are closed")
         if self.polygon_store is not None:
             polygon = self.polygon_store.ensure()
             if not polygon.get("is_approved"):
@@ -281,16 +469,36 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
         duplicate = self._find_duplicate(client_event_id, idempotency_key)
         if duplicate is not None:
             return {**duplicate, "duplicate": True, "state": self.state()}
-        current_hash = state.get("server_state_hash") or stable_hash(
-            state.get("gold_materialized", self._empty_materialized())
-        )
-        prior_hash = event.get("prior_server_state_hash")
-        if prior_hash not in (None, "", current_hash):
-            raise ValueError("DIVERGED_BLOCKED: prior server state hash does not match")
         self._validate_gold_event(event, state)
+        materialized = copy.deepcopy(state.get("gold_materialized", self._empty_materialized()))
+        candidate = copy.deepcopy(materialized)
+        self._apply_gold_event(candidate, event)
+        current_hash = state.get("server_state_hash") or stable_hash(materialized)
+        preview_state_hash = stable_hash(candidate)
+        if preview_state_hash == current_hash:
+            return {
+                "accepted": True,
+                "duplicate": True,
+                "no_op": True,
+                "server_event_sequence": int(state.get("event_sequence", 0)),
+                "event_hash": None,
+                "server_state_hash": current_hash,
+                "materialized_counts": self._materialized_counts(materialized),
+                "persisted_at": state.get("updated_at"),
+                "state": self.state(),
+            }
+        prior_hash = event.get("prior_server_state_hash")
+        if prior_hash != current_hash:
+            raise ValueError("DIVERGED_BLOCKED: prior server state hash does not match")
         event = copy.deepcopy(event)
         event["gold_event"] = True
-        event["event_sequence"] = int(state.get("event_sequence", 0)) + 1
+        event["event_sequence"] = (
+            max(
+                int(state.get("event_sequence", 0)),
+                max((int(item.get("event_sequence", 0)) for item in self._gold_events()), default=0),
+            )
+            + 1
+        )
         event["server_timestamp"] = utc_now()
         event["persisted_at"] = event["server_timestamp"]
         materialized = copy.deepcopy(state.get("gold_materialized", self._empty_materialized()))
@@ -315,11 +523,16 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
         state["updated_at"] = event["persisted_at"]
         state["gold_materialized"] = materialized
         state["server_state_hash"] = new_state_hash
-        state["gold_event_count"] = len(self._gold_events()) + 1
+        state["gold_event_count"] = len(self._gold_events())
         if event["event_type"] == "SEQUENCE_SAVED":
             sequence_id = str(event["sequence_id"])
             state.setdefault("decisions", {})[sequence_id] = event["payload"]["decision"]
             state.setdefault("structured_reviews", {})[sequence_id] = event["payload"]
+        elif event.get("sequence_id") and not materialized.get("sequences", {}).get(str(event["sequence_id"]), {}).get(
+            "finalized"
+        ):
+            state.setdefault("decisions", {}).pop(str(event["sequence_id"]), None)
+            state.setdefault("structured_reviews", {}).pop(str(event["sequence_id"]), None)
         atomic_write_json(self.state_path, state)
         self._write_snapshot(state)
         return {**ack, "state": self.state()}
@@ -327,14 +540,24 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
     @synchronized
     def complete_gold(self, event: dict[str, Any]) -> dict[str, Any]:
         state = self.ensure_state()
-        if state.get("completed") is True:
+        prior_completion = next(
+            (item for item in self._gold_events() if item.get("event_type") == "REVIEW_COMPLETED"), None
+        )
+        if prior_completion is not None:
             self.export_completed_review(state)
-            return {"accepted": True, "duplicate": True, "state": self.state()}
+            ack = prior_completion.get("ack") if isinstance(prior_completion.get("ack"), dict) else {}
+            return {**ack, "accepted": True, "duplicate": True, "no_op": True, "state": self.state()}
         materialized = state.get("gold_materialized", self._empty_materialized())
-        expected = [case.case_id for case in self.manifest.cases if case.task_type == "gold_strand_frame_annotation"]
-        sequences = materialized.get("sequences", {})
-        if not all(sequences.get(case_id, {}).get("finalized") for case_id in expected):
-            raise ValueError("completion is blocked until all sequences are server-finalized")
+        context = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        eligibility = self.completion_eligibility(
+            materialized,
+            pending_outbox_events=int(context.get("pending_outbox_events", 0)),
+            evidence_blocker_count=int(context.get("evidence_blocker_count", 0)),
+            unresolved_divergence=bool(context.get("unresolved_divergence", False)),
+        )
+        if not eligibility["eligible"]:
+            failed = [name for name, passed in eligibility["checks"].items() if not passed]
+            raise ValueError(f"completion is blocked: {', '.join(failed)}")
         event = copy.deepcopy(event)
         event["event_type"] = "REVIEW_COMPLETED"
         ack = self.save_gold_event(event)
@@ -344,3 +567,23 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
         atomic_write_json(self.state_path, state)
         self.export_completed_review(state)
         return {**ack, "state": self.state()}
+
+    def export_payload(self, state: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = super().export_payload(state)
+        materialized = payload["state"].get("gold_materialized", self._empty_materialized())
+        counts = self._materialized_counts(materialized)
+        polygon = self.polygon_store.ensure() if self.polygon_store is not None else None
+        payload["summary"].update(
+            {
+                "reviewed_sequences": counts["sequence_count"],
+                "finalized_sequences": counts["sequences_finalized"],
+                "strand_frame_states": counts["strand_frame_states"],
+                "seed_confirmations": counts["seed_confirmations"],
+                "approved_polygon_hash": polygon.get("approved_polygon_hash") if polygon else None,
+                "final_server_event_sequence": int(payload["state"].get("event_sequence", 0)),
+                "final_materialized_state_hash": stable_hash(materialized),
+                "pending_outbox_events": 0,
+                "completed": bool(payload["state"].get("completed")),
+            }
+        )
+        return payload

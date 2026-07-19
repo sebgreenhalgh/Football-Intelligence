@@ -71,6 +71,7 @@ function goldPersistenceStatus(label) {
   if (sequence) sequence.textContent = String(goldPersistence.serverSequence);
   const hash = $("goldServerHash");
   if (hash) hash.textContent = goldPersistence.serverStateHash ? goldPersistence.serverStateHash.slice(0, 12) : "-";
+  if (manifest && state) goldUpdateCompletionGate();
 }
 
 function goldPersistenceKey() { return `gold_durable_outbox_${manifest?.review_id || "review"}`; }
@@ -168,11 +169,17 @@ async function goldQueueEventAndFlush(eventType, caseData, payload, frame = null
 function goldHydrateFromServer() {
   const materialized = state?.gold_materialized?.sequences || {};
   for (const [caseId, sequence] of Object.entries(materialized)) {
-    const draft = goldDrafts[caseId] || goldDefaultDraft();
-    if (sequence.seed_confirmation) draft.seed_confirmation = sequence.seed_confirmation;
-    for (const [frame, values] of Object.entries(sequence.frames || {})) draft.annotations[frame] = values;
-    if (sequence.note != null) draft.note = sequence.note;
+    const pendingForCase = goldPersistence.pending.some((event) => event.sequence_id === caseId);
+    if (pendingForCase && goldDrafts[caseId]?.dirty) continue;
+    const draft = goldDefaultDraft();
+    draft.seed_confirmation = sequence.seed_confirmation ? JSON.parse(JSON.stringify(sequence.seed_confirmation)) : null;
+    draft.annotations = JSON.parse(JSON.stringify(sequence.frames || {}));
+    draft.note = sequence.note == null ? "" : String(sequence.note);
+    draft.hydrated = true;
+    draft.dirty = false;
+    draft.server_finalized = Boolean(sequence.finalized);
     goldDrafts[caseId] = draft;
+    if (sequence.finalized) localStorage.removeItem(goldDraftKey({case_id: caseId}));
   }
   goldPersistence.serverSequence = Number(state?.server_sequence || state?.event_sequence || 0);
   goldPersistence.serverStateHash = state?.server_state_hash || "";
@@ -1570,15 +1577,21 @@ function goldSchedulePolygonDraftSave() {
 }
 
 function goldDefaultDraft() {
-  return {annotations: {}, note: "", clicks: 0, accepted_in_runs: 0, manual_bbox_count: 0, seed_confirmation: null};
+  return {
+    annotations: {}, note: "", clicks: 0, accepted_in_runs: 0, manual_bbox_count: 0,
+    seed_confirmation: null, dirty: false, hydrated: false, server_finalized: false,
+  };
 }
 
 function goldDraft(caseData) {
   if (goldDrafts[caseData.case_id]) return goldDrafts[caseData.case_id];
   try {
+    const stored = JSON.parse(localStorage.getItem(goldDraftKey(caseData)) || "{}");
     goldDrafts[caseData.case_id] = {
       ...goldDefaultDraft(),
-      ...JSON.parse(localStorage.getItem(goldDraftKey(caseData)) || "{}"),
+      ...stored,
+      dirty: Object.keys(stored).length > 0,
+      hydrated: false,
     };
   } catch {
     goldDrafts[caseData.case_id] = goldDefaultDraft();
@@ -1587,7 +1600,10 @@ function goldDraft(caseData) {
 }
 
 function goldPersistDraft(caseData) {
-  localStorage.setItem(goldDraftKey(caseData), JSON.stringify(goldDraft(caseData)));
+  const draft = goldDraft(caseData);
+  draft.dirty = true;
+  draft.server_finalized = false;
+  localStorage.setItem(goldDraftKey(caseData), JSON.stringify(draft));
   if (goldPersistence.ready) goldPersistenceStatus("Pending locally");
 }
 
@@ -1948,14 +1964,28 @@ function goldConfirmSeed() {
   const caseData = goldCase();
   if (!goldSeedUsable(caseData)) return;
   const values = goldSeedValues(caseData);
-  goldPushHistory(caseData);
-  goldDraft(caseData).seed_confirmation = {
+  const confirmed = {
     status: "CONFIRMED",
     seed_action: goldDraft(caseData).seed_confirmation?.seed_action || "CONFIRM",
     source_frame_sequence: values.source_frame_sequence,
     A: {...values.A},
     B: {...values.B},
   };
+  const authoritative = state?.gold_materialized?.sequences?.[caseData.case_id];
+  if (authoritative?.seed_confirmation
+    && JSON.stringify(authoritative.seed_confirmation) === JSON.stringify(confirmed)) {
+    const draft = goldDraft(caseData);
+    draft.seed_confirmation = JSON.parse(JSON.stringify(authoritative.seed_confirmation));
+    draft.dirty = false;
+    draft.hydrated = true;
+    draft.server_finalized = Boolean(authoritative.finalized);
+    localStorage.removeItem(goldDraftKey(caseData));
+    goldSeedMode = null;
+    goldRenderAnnotationCase(caseData);
+    return;
+  }
+  goldPushHistory(caseData);
+  goldDraft(caseData).seed_confirmation = confirmed;
   goldPersistDraft(caseData);
   goldQueueEvent("SEED_CONFIRMED", caseData, {seed_confirmation: goldDraft(caseData).seed_confirmation}, null, null);
   goldSeedMode = null;
@@ -2173,14 +2203,23 @@ function goldPolygonIsValid() {
 
 function goldUpdateCompletionGate() {
   const pitchApproved = goldPolygonApproved();
-  const annotationCases = (manifest?.cases || []).filter((item) => item.task_type === "gold_strand_frame_annotation");
-  const allFrames = annotationCases.every((caseData) => ["SEQUENCE_ANNOTATED", "SEQUENCE_REJECTED"].includes(currentDecision(caseData)));
-  const frameDrafts = Object.values(goldDrafts).some((draft) => Object.keys(draft.annotations || {}).length > 0 || draft.seed_confirmation || String(draft.note || "").trim());
+  const eligibility = state?.completion_eligibility || {};
+  const serverEligible = eligibility.eligible === true;
+  const finalized = Number(eligibility.sequences_finalized || 0);
+  const expected = Number(eligibility.expected_sequence_count || 0);
+  const frameStates = Number(eligibility.strand_frame_states || 0);
+  const expectedFrameStates = Number(eligibility.expected_strand_frame_states || 0);
+  const frameDrafts = Object.values(goldDrafts).some((draft) => draft.dirty === true);
   const polygonDraft = Boolean(goldPolygonSidecar?.draft?.status === "DRAFT" && !pitchApproved);
   const complete = $("goldComplete");
-  if (complete) complete.disabled = !(pitchApproved && allFrames && !goldEvidenceBlocked && !frameDrafts && !polygonDraft && !document.querySelector(".goldInvalidBBox"));
+  const clientReady = goldPersistence.pending.length === 0 && !goldPersistence.blocked
+    && !goldEvidenceBlocked && !frameDrafts && !polygonDraft && !document.querySelector(".goldInvalidBBox");
+  if (complete) {
+    complete.textContent = state?.completed === true ? "Review finalized" : "Finalize review";
+    complete.disabled = state?.completed === true || !(serverEligible && clientReady);
+  }
   const checklist = $("goldCompletionChecklist");
-  if (checklist) checklist.textContent = `Pitch ${pitchApproved ? "approved" : "pending"} | Frames ${allFrames ? "complete" : "pending"} | Evidence ${goldEvidenceBlocked ? "blocked" : "clear"} | Draft ${frameDrafts || polygonDraft ? "unsaved" : "clear"}`;
+  if (checklist) checklist.textContent = `Pitch ${pitchApproved ? "approved" : "pending"} | Server ${finalized}/${expected} finalized, ${frameStates}/${expectedFrameStates} states | Pending ${goldPersistence.pending.length} | Evidence ${goldEvidenceBlocked ? "blocked" : "clear"} | Draft ${frameDrafts || polygonDraft ? "unsaved" : "clear"}`;
 }
 
 function goldRenderPitch() {
@@ -2414,7 +2453,6 @@ async function goldSaveSequence() {
     state = await api("/api/review/state");
     goldHydrateFromServer();
     localStorage.removeItem(goldDraftKey(caseData));
-    delete goldDrafts[caseData.case_id];
     if (activeIndex < manifest.cases.length - 1) {
       activeIndex += 1;
       goldFrameIndex = 0;
@@ -2515,9 +2553,15 @@ function goldBind() {
     try {
       await goldFlushOutbox();
       if (goldPersistence.pending.length) throw new Error("completion is blocked while events are pending");
-      state = await api("/api/review/gold-complete", {method: "POST", body: JSON.stringify(goldEventBase(null, "REVIEW_COMPLETED", {elapsed_active_seconds: activeTimeNow()}))});
-      goldPersistence.serverSequence = Number(state.server_event_sequence || state.state?.server_sequence || goldPersistence.serverSequence);
-      goldPersistence.serverStateHash = state.server_state_hash || state.state?.server_state_hash || goldPersistence.serverStateHash;
+      const completionAck = await api("/api/review/gold-complete", {method: "POST", body: JSON.stringify(goldEventBase(null, "REVIEW_COMPLETED", {
+        elapsed_active_seconds: activeTimeNow(),
+        pending_outbox_events: goldPersistence.pending.length,
+        evidence_blocker_count: goldEvidenceBlocked ? 1 : 0,
+        unresolved_divergence: goldPersistence.blocked,
+      }))});
+      state = completionAck.state || state;
+      goldPersistence.serverSequence = Number(completionAck.server_event_sequence || state?.server_sequence || goldPersistence.serverSequence);
+      goldPersistence.serverStateHash = completionAck.server_state_hash || state?.server_state_hash || goldPersistence.serverStateHash;
       goldPersistenceStatus("Saved to server");
       goldUpdateCompletionGate();
     } catch (error) {

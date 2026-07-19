@@ -76,7 +76,7 @@ def _event(
         "payload": payload or {},
         "approved_polygon_hash": None,
         "client_timestamp": "2026-01-01T00:00:00+00:00",
-        "prior_server_state_hash": None,
+        "prior_server_state_hash": persistence.state()["server_state_hash"],
     }
 
 
