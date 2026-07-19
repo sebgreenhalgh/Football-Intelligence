@@ -73,11 +73,12 @@ def main() -> None:
     browser_result = read_json(STAGE / "09_BROWSER_CRASH_RESTART_AND_OFFLINE_TESTS" / "crash_restart_results.json")
     package_validation = read_json(PACKAGE / "review_package_validation.json")
     full_suite = {
-        "passed": False,
-        "passed_tests": 818,
-        "failed_tests": 1,
+        "passed": True,
+        "passed_tests": 819,
+        "failed_tests": 0,
         "command": "uv run pytest -q",
-        "blocker": "historical M5.5F.1A.2 package is not fresh: its committed test requires an empty decisions map but the pre-existing package contains 24 decisions; prior artifact and test were left untouched",
+        "duration_seconds": 108.31,
+        "warning_count": 1,
     }
     changed = subprocess.run(
         ["git", "diff", "--name-status", f"{BASELINE}..HEAD"], cwd=REPO, capture_output=True, text=True, check=True
@@ -93,7 +94,9 @@ This stage repairs the gold annotation persistence boundary. Seed, frame, pair, 
 
 The browser smoke on `http://127.0.0.1:8802/` passed for seed persistence, frame persistence, reload hydration, offline queueing, server restart and queue flush. The new package remains fresh with an empty decisions root; smoke writes used an isolated temporary root.
 
-The implementation is visual-only, match-local, sandbox-only and not production-ready. Full-suite validation has one unrelated historical-fixture failure documented in `07_FAILURE_AND_RECOVERABILITY.json`.
+The historical M5.5F.1A.2 regression now uses a pytest-owned empty decisions root while retaining the real immutable manifest, UI and evidence bindings. The populated 24-decision historical package is fingerprinted before and after the test and remains unchanged. Full-suite validation is green.
+
+The implementation is visual-only, match-local, sandbox-only and not production-ready. No tracker is promoted.
 """,
     )
     write(
@@ -126,7 +129,9 @@ The implementation is visual-only, match-local, sandbox-only and not production-
 - JavaScript syntax check: passed
 - `git diff --check`: passed
 - focused persistence/review tests: 26 passed
-- full suite: 818 passed, 1 failed; historical fixture blocker documented below
+- repaired historical M5.5F.1A.2 module: 5 passed
+- M5.5F.1A.4 persistence module: 3 passed
+- full suite: 819 passed, 0 failed, 1 dependency deprecation warning
 - real Edge/CDP 8802 persistence exercise: passed
 """,
     )
@@ -169,7 +174,19 @@ The implementation is visual-only, match-local, sandbox-only and not production-
                 "no durable outbox",
                 "no server materialized gold state",
             ],
-            "historical_fixture_blocker": full_suite["blocker"],
+            "historical_fixture_repair": {
+                "status": "passed",
+                "strategy": "pytest temporary decisions root",
+                "historical_decision_count": 24,
+                "historical_event_sequence": 26,
+                "historical_state_sha256": "79890414cf59b7bbd4b2c42ed8490469edcb0a18a5cbc97a995861b1401f4b5c",
+                "historical_ledger_sha256": "41ebeb1fe0aafc67ec28284fa169535ab3711e503eedbcf7c89f91a457f6450c",
+                "temporary_decisions_empty": True,
+                "temporary_event_sequence": 0,
+                "temporary_event_ledger_empty": True,
+                "temporary_completion_artifacts_absent": True,
+                "historical_tree_hashes_unchanged": True,
+            },
             "new_stage_decisions_root_empty": True,
         },
     )
@@ -278,6 +295,11 @@ The implementation is visual-only, match-local, sandbox-only and not production-
             "learned_continuity_rows_updated": 0,
             "detector_rerun": False,
             "historical_artifacts_mutated": False,
+            "historical_a2_decisions_preserved": True,
+            "historical_a2_decision_count": 24,
+            "historical_a2_event_sequence": 26,
+            "historical_a2_state_sha256": "79890414cf59b7bbd4b2c42ed8490469edcb0a18a5cbc97a995861b1401f4b5c",
+            "historical_a2_ledger_sha256": "41ebeb1fe0aafc67ec28284fa169535ab3711e503eedbcf7c89f91a457f6450c",
             "prior_stage_mutated": False,
             "raw_video_included_in_pack": False,
             "weights_included_in_pack": False,
@@ -287,11 +309,11 @@ The implementation is visual-only, match-local, sandbox-only and not production-
     write(
         PACK / "16_ACCEPTANCE_AND_NEXT_STAGE.json",
         {
-            "classification": "BLOCKED_HISTORICAL_FIXTURE_MUTATION",
+            "classification": "PASS_CRASH_SAFE_GOLD_ANNOTATION_READY",
             "implementation_ready": True,
             "new_package_browser_ready": True,
-            "exact_blocker": full_suite["blocker"],
-            "next_stage": "Use an immutable empty-decision fixture or temporary decisions root in the historical M5.5F.1A.2 regression test, without changing its scientific assertions; then rerun the full suite.",
+            "exact_blocker": None,
+            "next_stage": "Proceed with the crash-safe gold annotation review on port 8802; preserve server acknowledgments and do not promote a tracker.",
             "no_tracker_promoted": True,
         },
     )
@@ -325,7 +347,7 @@ The implementation is visual-only, match-local, sandbox-only and not production-
         "model_weights_excluded": True,
         "answer_keys_excluded": True,
         "personal_data_excluded": True,
-        "classification": "BLOCKED_HISTORICAL_FIXTURE_MUTATION",
+        "classification": "PASS_CRASH_SAFE_GOLD_ANNOTATION_READY",
     }
     write(PACK / "REVIEW_PACK_MANIFEST.json", manifest)
     actual = sorted(path.name for path in PACK.iterdir() if path.is_file())
@@ -337,13 +359,13 @@ The implementation is visual-only, match-local, sandbox-only and not production-
     write(
         STAGE / "stage_summary.json",
         {
-            "classification": "BLOCKED_HISTORICAL_FIXTURE_MUTATION",
+            "classification": "PASS_CRASH_SAFE_GOLD_ANNOTATION_READY",
             "implementation_commit": HEAD,
             "browser_validation_passed": True,
             "package_validation_passed": bool(package_validation.get("passed")),
             "review_pack_validated": True,
-            "full_suite_passed": False,
-            "exact_blocker": full_suite["blocker"],
+            "full_suite_passed": True,
+            "exact_blocker": None,
             "review_url": "http://127.0.0.1:8802/",
             "new_package_decisions_root_empty": True,
             "no_tracker_promoted": True,
@@ -354,6 +376,8 @@ The implementation is visual-only, match-local, sandbox-only and not production-
         STAGE / "11_COMMANDS_AND_TESTS" / "final_validation.json",
         {
             "focused_tests": {"passed": True, "count": 26},
+            "historical_repair_module": {"passed": True, "count": 5},
+            "persistence_module": {"passed": True, "count": 3},
             "full_suite": full_suite,
             "lock_check": True,
             "sync": True,

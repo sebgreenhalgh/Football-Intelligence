@@ -87,8 +87,15 @@ def test_event_append_materialize_idempotency_and_restart(tmp_path: Path) -> Non
     first = persistence.save_gold_event(event)
     duplicate = persistence.save_gold_event(event)
     assert first["accepted"] is True
+    assert first["server_event_sequence"] == 1
     assert duplicate["duplicate"] is True
-    assert len(persistence.events_path.read_text(encoding="utf-8").splitlines()) == 1
+    event_lines = persistence.events_path.read_text(encoding="utf-8").splitlines()
+    assert persistence.events_path.stat().st_size > 0
+    assert len(event_lines) == 1
+    persisted_event = json.loads(event_lines[0])
+    assert persisted_event["gold_event"] is True
+    assert persisted_event["event_sequence"] == 1
+    assert persisted_event["client_event_id"] == event["client_event_id"]
     restarted = _fixture(tmp_path)
     assert restarted.state()["materialized_counts"]["strand_frame_states"] == 1
     assert restarted.state()["gold_materialized"]["sequences"]["sequence_001"]["frames"]["10"]["A"] == value

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -26,6 +27,12 @@ STAGE = (
     / "M5_5F1A2_EDITED_PITCH_POLYGON_DRAFT_SAVE_APPROVAL_AND_MANIFEST_BINDING_REPAIR_v1"
 )
 PACKAGE = STAGE / "06_POLYGON_APPROVAL_REPAIRED_GOLD_ANNOTATION_PACKAGE"
+COMPLETION_ARTIFACTS = (
+    "completed_review.json",
+    "completed_review_events.jsonl",
+    "completed_review_manifest.json",
+    "completed_review_summary.json",
+)
 
 
 def sidecar(tmp_path: Path) -> PolygonSidecarStore:
@@ -61,6 +68,32 @@ def payload(store: PolygonSidecarStore, x_offset: float = 0.0) -> dict[str, obje
         "image_width": store.image_width,
         "image_height": store.image_height,
     }
+
+
+def decisions_tree_hashes(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def fresh_decisions_fixture(tmp_path: Path) -> tuple[Path, GenericReviewPersistence]:
+    manifest = load_manifest(PACKAGE / "reviewer_manifest.json")
+    ui_config = load_ui_config(PACKAGE / "ui_config.json")
+    decisions_root = tmp_path / "fresh_decisions"
+    polygon_store = sidecar(decisions_root)
+    polygon_store.ensure()
+    polygon_store.approve(payload(polygon_store))
+    persistence = GenericReviewPersistence(
+        manifest=manifest,
+        ui_config=ui_config,
+        decisions_root=decisions_root,
+        reviewer_session_id="test-fresh-polygon-reviewer",
+        polygon_store=polygon_store,
+    )
+    persistence.ensure_state()
+    return decisions_root, persistence
 
 
 def test_sidecar_atomic_draft_approval_revoke_and_reapproval(tmp_path: Path) -> None:
@@ -103,18 +136,32 @@ def test_sidecar_rejects_source_hash_and_invalid_geometry(tmp_path: Path) -> Non
         store.save_draft(self_intersecting)
 
 
-def test_repaired_package_is_fresh_and_preserved() -> None:
+def test_repaired_package_is_fresh_and_preserved(tmp_path: Path) -> None:
+    historical_root = PACKAGE / "decisions"
+    historical_before = decisions_tree_hashes(historical_root)
+    historical_state = json.loads((historical_root / "review_decisions.json").read_text(encoding="utf-8"))
+    assert len(historical_state["decisions"]) == 24
+
+    decisions_root, persistence = fresh_decisions_fixture(tmp_path)
     result = validate_review_chassis_package(
         manifest_path=PACKAGE / "reviewer_manifest.json",
         ui_config_path=PACKAGE / "ui_config.json",
         evidence_root=PACKAGE / "evidence",
-        decisions_root=PACKAGE / "decisions",
+        decisions_root=decisions_root,
     )
     assert result["passed"] is True
-    state = json.loads((PACKAGE / "decisions" / "review_decisions.json").read_text(encoding="utf-8"))
+    state = json.loads((decisions_root / "review_decisions.json").read_text(encoding="utf-8"))
     assert state["decisions"] == {}
-    assert (PACKAGE / "decisions" / "polygon" / "polygon_draft.json").is_file()
-    assert (PACKAGE / "decisions" / "polygon" / "approved_polygon.json").is_file()
+    assert state["event_sequence"] == 0
+    assert (decisions_root / "review_decision_events.jsonl").read_text(encoding="utf-8") == ""
+    assert not any((decisions_root / name).exists() for name in COMPLETION_ARTIFACTS)
+    assert state["review_id"] == persistence.manifest.review_id
+    assert state["stage_id"] == persistence.manifest.stage_id
+    assert state["manifest_hash"] == persistence.manifest_hash_value
+    assert state["ui_config_hash"] == persistence.ui_config_hash_value
+    assert state["evidence_manifest_hash"] == persistence.manifest.evidence_manifest_hash
+    assert (decisions_root / "polygon" / "polygon_draft.json").is_file()
+    assert (decisions_root / "polygon" / "approved_polygon.json").is_file()
     assert json.loads((PACKAGE / "ui_config.json").read_text(encoding="utf-8"))["completion_requires_all_cases"] is True
     audit = json.loads(
         (STAGE / "01_AUTHORIZATION_AND_PRIOR_PACKAGE_AUDIT" / "prior_stage_mutation_audit.json").read_text(
@@ -124,6 +171,7 @@ def test_repaired_package_is_fresh_and_preserved() -> None:
     assert audit["prior_workspace_unchanged"] is True
     assert audit["prior_package_unchanged"] is True
     assert audit["prior_review_pack_unchanged"] is True
+    assert decisions_tree_hashes(historical_root) == historical_before
 
 
 def test_frame_annotation_requires_approved_sidecar_hash(tmp_path: Path) -> None:
