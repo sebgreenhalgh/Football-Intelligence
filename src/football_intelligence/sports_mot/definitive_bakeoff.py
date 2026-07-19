@@ -874,14 +874,16 @@ def run_cuda_probe() -> dict[str, Any]:
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA unavailable; silent CPU fallback is prohibited")
-    device = torch.device("cuda:0")
-    torch.cuda.reset_peak_memory_stats(device)
+    device_index = 0
+    device = torch.device(f"cuda:{device_index}")
+    baseline_peak_allocated = int(torch.cuda.max_memory_allocated())
+    baseline_peak_reserved = int(torch.cuda.max_memory_reserved())
     started = time.perf_counter()
     left = torch.linspace(0.0, 1.0, 1024 * 512, device=device, dtype=torch.float16).reshape(1024, 512)
     right = torch.linspace(1.0, 0.0, 512 * 256, device=device, dtype=torch.float16).reshape(512, 256)
     result = left @ right
     checksum = float(result.float().mean().item())
-    torch.cuda.synchronize(device)
+    torch.cuda.synchronize()
     return {
         "device": "cuda:0",
         "device_name": torch.cuda.get_device_name(0),
@@ -890,8 +892,10 @@ def run_cuda_probe() -> dict[str, Any]:
         "compute_capability": list(torch.cuda.get_device_capability(0)),
         "fp16_executed": True,
         "runtime_seconds": round(time.perf_counter() - started, 6),
-        "peak_allocated_vram_bytes": int(torch.cuda.max_memory_allocated(device)),
-        "peak_reserved_vram_bytes": int(torch.cuda.max_memory_reserved(device)),
+        "baseline_peak_allocated_vram_bytes": baseline_peak_allocated,
+        "baseline_peak_reserved_vram_bytes": baseline_peak_reserved,
+        "peak_allocated_vram_bytes": int(torch.cuda.max_memory_allocated()),
+        "peak_reserved_vram_bytes": int(torch.cuda.max_memory_reserved()),
         "result_checksum": round(checksum, 8),
         "silent_cpu_fallback": False,
     }

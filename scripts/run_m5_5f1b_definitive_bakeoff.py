@@ -428,7 +428,20 @@ def main() -> None:
         action="store_true",
         help="Run diagnostic/development evaluation without writes or holdout access",
     )
+    parser.add_argument(
+        "--preserve-incomplete",
+        action="store_true",
+        help="Move an incomplete prior target into the regenerated stage's _tmp directory",
+    )
     args = parser.parse_args()
+    preserved_incomplete: Path | None = None
+    if STAGE.exists() and not args.preflight:
+        if not args.preserve_incomplete or (STAGE / "stage_summary.json").exists():
+            raise RuntimeError(f"refusing to overwrite existing stage: {STAGE}")
+        preserved_incomplete = PART2 / f"{STAGE_ID}__INCOMPLETE_ATTEMPT"
+        if preserved_incomplete.exists():
+            raise RuntimeError(f"incomplete-attempt preservation path already exists: {preserved_incomplete}")
+        STAGE.rename(preserved_incomplete)
 
     gold_validation = validate_completed_gold(GOLD_PACKAGE)
     dataset = ingest_gold_dataset(GOLD_PACKAGE)
@@ -479,6 +492,8 @@ def main() -> None:
         return
 
     prepare_stage()
+    if preserved_incomplete is not None:
+        shutil.move(str(preserved_incomplete), STAGE / "_tmp" / "incomplete_cuda_telemetry_attempt")
     protected_before = snapshot_tree(GOLD_PACKAGE)
     auth = authorization_record()
     write_json(STAGE / "01_AUTHORIZATION_AND_GOLD_COMPLETION_VALIDATION" / "authorization.json", auth)

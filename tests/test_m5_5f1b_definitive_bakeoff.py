@@ -18,6 +18,7 @@ from football_intelligence.sports_mot.definitive_bakeoff import (
     evaluate_sequence,
     grouped_leave_one_sequence_out,
     holdout_acceptance,
+    run_cuda_probe,
     run_shared_graph_adapter,
     select_development_winner,
 )
@@ -275,6 +276,17 @@ def test_holdout_is_inaccessible_before_freeze_and_unseals_once(tmp_path: Path) 
             frozen_manifest_hash=stable_hash(frozen),
             unseal_event_path=event_path,
         )
+
+
+def test_real_cuda_probe_has_no_cpu_fallback() -> None:
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required on the production benchmark host")
+    result = run_cuda_probe()
+    assert result["device"] == "cuda:0"
+    assert result["fp16_executed"] is True
+    assert result["silent_cpu_fallback"] is False
+    assert result["peak_allocated_vram_bytes"] > 0
 
 
 def test_generated_stage_outputs_are_complete_safe_and_bounded() -> None:
