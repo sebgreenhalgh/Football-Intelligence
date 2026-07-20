@@ -115,6 +115,14 @@ def seed(case: GenericReviewCase, *, b_state: str = "NOT_VISIBLE") -> dict[str, 
 
 
 def finalize_sequence(persistence: CrashSafeGoldPersistence, case: GenericReviewCase) -> dict[str, Any]:
+    persistence.save_gold_event(
+        event(
+            persistence,
+            "SEED_CONFIRMED",
+            sequence_id=case.case_id,
+            payload={"seed_confirmation": seed(case)},
+        )
+    )
     frame_annotations = [
         {
             "frame_sequence": int(record["frame_sequence"]),

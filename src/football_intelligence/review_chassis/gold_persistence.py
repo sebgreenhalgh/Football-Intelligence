@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any
 
 from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
@@ -173,6 +173,134 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             "seed_confirmations": sum(sequence.get("seed_confirmation") is not None for sequence in sequences.values()),
         }
 
+    def _completion_seed_event_is_valid(self, case: Any, event: dict[str, Any], *, rejected: bool) -> bool:
+        expected_type = "SEED_REJECTED" if rejected else "SEED_CONFIRMED"
+        if event.get("event_type") != expected_type:
+            return False
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        seed = payload.get("seed_confirmation")
+        if not isinstance(seed, dict):
+            return False
+        try:
+            self._validate_seed(case, seed)
+        except (KeyError, TypeError, ValueError):
+            return False
+        if rejected:
+            reason = str(seed.get("seed_rejection_reason") or "")
+            allowed_reasons = set(self.ui_config.question_contract.get("seed_rejection_reasons", []))
+            return (
+                seed.get("status") == "REJECTED"
+                and seed.get("seed_action") == "REJECT_SEQUENCE"
+                and bool(reason)
+                and (not allowed_reasons or reason in allowed_reasons)
+                and (reason != "OTHER" or bool(str(seed.get("note") or "").strip()))
+            )
+        return seed.get("status") == "CONFIRMED" and seed.get("seed_action") in {
+            "CONFIRM",
+            "SWAP_A_B",
+            "CORRECT_A",
+            "CORRECT_B",
+            "CORRECT_BOTH",
+        }
+
+    def _completion_save_event_is_valid(self, case: Any, event: dict[str, Any], *, rejected: bool) -> bool:
+        if event.get("event_type") != "SEQUENCE_SAVED":
+            return False
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        expected_decision = "SEQUENCE_REJECTED" if rejected else "SEQUENCE_ANNOTATED"
+        if payload.get("decision") != expected_decision:
+            return False
+        seed = payload.get("seed_confirmation")
+        if not isinstance(seed, dict):
+            return False
+        if rejected:
+            reason = str(seed.get("seed_rejection_reason") or "")
+            allowed_reasons = set(self.ui_config.question_contract.get("seed_rejection_reasons", []))
+            return (
+                seed.get("status") == "REJECTED"
+                and seed.get("seed_action") == "REJECT_SEQUENCE"
+                and bool(reason)
+                and (not allowed_reasons or reason in allowed_reasons)
+                and (reason != "OTHER" or bool(str(seed.get("note") or "").strip()))
+            )
+        try:
+            self._validate_seed(case, seed)
+            records = _sequence_records(case)
+            frames = payload.get("frame_annotations")
+            if not isinstance(frames, list) or len(frames) != len(records):
+                return False
+            rows = {int(row["frame_sequence"]): row for row in frames if isinstance(row, dict)}
+            if set(rows) != set(records):
+                return False
+            for frame, row in rows.items():
+                self._validate_value(case, frame, row.get("A"))
+                self._validate_value(case, frame, row.get("B"))
+        except (KeyError, TypeError, ValueError):
+            return False
+        return seed.get("status") == "CONFIRMED"
+
+    def _completion_sequence_rows(
+        self, materialized: dict[str, Any], events: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        events_by_sequence: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for event in events:
+            if event.get("sequence_id") is not None:
+                events_by_sequence[str(event["sequence_id"])].append(event)
+        sequences = materialized.get("sequences", {})
+        rows: list[dict[str, Any]] = []
+        for case in self._expected_sequence_cases():
+            sequence = sequences.get(case.case_id, {})
+            seed = sequence.get("seed_confirmation") if isinstance(sequence.get("seed_confirmation"), dict) else {}
+            decision = sequence.get("decision")
+            rejected = seed.get("status") == "REJECTED" and decision == "SEQUENCE_REJECTED"
+            confirmed = seed.get("status") == "CONFIRMED" and decision == "SEQUENCE_ANNOTATED"
+            case_events = events_by_sequence.get(case.case_id, [])
+            seed_event_valid = (
+                any(self._completion_seed_event_is_valid(case, event, rejected=rejected) for event in case_events)
+                if rejected or confirmed
+                else False
+            )
+            save_event_valid = (
+                any(self._completion_save_event_is_valid(case, event, rejected=rejected) for event in case_events)
+                if rejected or confirmed
+                else False
+            )
+            records = _sequence_records(case)
+            frames = sequence.get("frames", {})
+            materialized_states = sum(
+                frames.get(str(frame), {}).get(strand) is not None for frame in records for strand in ("A", "B")
+            )
+            required_states = 0 if rejected else len(records) * 2
+            persisted_required_states = 0 if rejected else materialized_states
+            frame_states_complete = rejected or persisted_required_states == required_states
+            finalized = bool(sequence.get("finalized"))
+            requirements_complete = (
+                (confirmed or rejected)
+                and seed_event_valid
+                and save_event_valid
+                and frame_states_complete
+                and finalized
+            )
+            rows.append(
+                {
+                    "sequence_id": case.case_id,
+                    "classification": "REJECTED" if rejected else ("CONFIRMED" if confirmed else "UNRESOLVED"),
+                    "confirmed": confirmed,
+                    "rejected": rejected,
+                    "structured_rejection_reason": seed.get("seed_rejection_reason") if rejected else None,
+                    "seed_event_valid": seed_event_valid,
+                    "sequence_saved_event_valid": save_event_valid,
+                    "finalized": finalized,
+                    "manifest_frame_count": len(records),
+                    "required_strand_frame_states": required_states,
+                    "persisted_required_strand_frame_states": persisted_required_states,
+                    "materialized_strand_frame_states": materialized_states,
+                    "frame_states_complete": frame_states_complete,
+                    "completion_requirements_satisfied": requirements_complete,
+                }
+            )
+        return rows
+
     def _expected_sequence_cases(self) -> list[Any]:
         return [case for case in self.manifest.cases if case.task_type == "gold_strand_frame_annotation"]
 
@@ -182,32 +310,37 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
         *,
         pending_outbox_events: int = 0,
         evidence_blocker_count: int = 0,
+        unresolved_draft_count: int = 0,
         unresolved_divergence: bool = False,
     ) -> dict[str, Any]:
         expected_cases = self._expected_sequence_cases()
         expected_ids = [case.case_id for case in expected_cases]
-        expected_frame_states = sum(len(_sequence_records(case)) * 2 for case in expected_cases)
         sequences = materialized.get("sequences", {})
+        events = self._gold_events()
+        sequence_rows = self._completion_sequence_rows(materialized, events)
         counts = self._materialized_counts(materialized)
+        confirmed_rows = [row for row in sequence_rows if row["confirmed"]]
+        rejected_rows = [row for row in sequence_rows if row["rejected"]]
+        required_frame_states = sum(int(row["required_strand_frame_states"]) for row in sequence_rows)
+        persisted_required_states = sum(int(row["persisted_required_strand_frame_states"]) for row in sequence_rows)
+        rejection_counts = Counter(
+            str(row["structured_rejection_reason"]) for row in rejected_rows if row.get("structured_rejection_reason")
+        )
+        confirmed_complete = sum(bool(row["completion_requirements_satisfied"]) for row in confirmed_rows)
+        rejected_complete = sum(bool(row["completion_requirements_satisfied"]) for row in rejected_rows)
         polygon = self.polygon_store.ensure() if self.polygon_store is not None else None
         checks = {
             "approved_polygon_valid": polygon is None or bool(polygon.get("is_approved")),
             "exact_sequence_set": set(sequences) == set(expected_ids),
-            "seed_confirmations_complete": counts["seed_confirmations"] == len(expected_ids)
-            and all(sequences.get(case_id, {}).get("seed_confirmation") is not None for case_id in expected_ids),
+            "sequence_classification_complete": len(confirmed_rows) + len(rejected_rows) == len(expected_ids),
+            "confirmed_sequence_requirements_complete": confirmed_complete == len(confirmed_rows),
+            "rejected_sequence_requirements_complete": rejected_complete == len(rejected_rows),
             "sequences_finalized_complete": counts["sequences_finalized"] == len(expected_ids)
             and all(bool(sequences.get(case_id, {}).get("finalized")) for case_id in expected_ids),
-            "strand_frame_states_complete": counts["strand_frame_states"] == expected_frame_states
-            and all(
-                all(
-                    sequences.get(case.case_id, {}).get("frames", {}).get(str(frame), {}).get(strand) is not None
-                    for frame in _sequence_records(case)
-                    for strand in ("A", "B")
-                )
-                for case in expected_cases
-            ),
+            "strand_frame_states_complete": persisted_required_states == required_frame_states,
             "pending_outbox_empty": int(pending_outbox_events) == 0,
             "evidence_blockers_clear": int(evidence_blocker_count) == 0,
+            "unsaved_drafts_clear": int(unresolved_draft_count) == 0,
             "divergence_clear": not unresolved_divergence,
         }
         return {
@@ -215,10 +348,25 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             "already_completed": materialized.get("review_completed") is True,
             "checks": checks,
             "expected_sequence_count": len(expected_ids),
-            "expected_strand_frame_states": expected_frame_states,
+            "total_sequences": len(expected_ids),
+            "confirmed_sequences": len(confirmed_rows),
+            "confirmed_sequences_complete": confirmed_complete,
+            "rejected_sequences": len(rejected_rows),
+            "rejected_sequences_complete": rejected_complete,
+            "finalized_sequences": counts["sequences_finalized"],
+            "required_strand_frame_states": required_frame_states,
+            "persisted_strand_frame_states": persisted_required_states,
+            "rejected_sequence_frame_requirement": 0,
+            "expected_strand_frame_states": required_frame_states,
+            "frame_state_event_count": sum(event.get("event_type") == "FRAME_STATE_SET" for event in events),
+            "rejection_counts_by_structured_reason": dict(sorted(rejection_counts.items())),
             "pending_outbox_events": int(pending_outbox_events),
             "evidence_blocker_count": int(evidence_blocker_count),
+            "unresolved_draft_count": int(unresolved_draft_count),
+            "evidence_clear": int(evidence_blocker_count) == 0,
+            "draft_clear": int(unresolved_draft_count) == 0,
             "unresolved_divergence": bool(unresolved_divergence),
+            "per_sequence": sequence_rows,
             **counts,
             "approved_polygon_hash": polygon.get("approved_polygon_hash") if polygon else None,
         }
@@ -257,6 +405,7 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
         write_sidecar: bool = True,
         pending_outbox_events: int = 0,
         evidence_blocker_count: int = 0,
+        unresolved_draft_count: int = 0,
         unresolved_divergence: bool = False,
     ) -> dict[str, Any]:
         events = self._gold_events()
@@ -268,6 +417,7 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             materialized,
             pending_outbox_events=pending_outbox_events,
             evidence_blocker_count=evidence_blocker_count,
+            unresolved_draft_count=unresolved_draft_count,
             unresolved_divergence=unresolved_divergence,
         )
         sequence_rows = []
@@ -287,7 +437,11 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
                         for frame in _sequence_records(case)
                         for strand in ("A", "B")
                     ),
-                    "seed_confirmed": sequence.get("seed_confirmation") is not None,
+                    "seed_confirmed": (sequence.get("seed_confirmation") or {}).get("status") == "CONFIRMED",
+                    "seed_rejected": (sequence.get("seed_confirmation") or {}).get("status") == "REJECTED",
+                    "structured_rejection_reason": (sequence.get("seed_confirmation") or {}).get(
+                        "seed_rejection_reason"
+                    ),
                     "finalized": bool(sequence.get("finalized")),
                     "decision": sequence.get("decision"),
                 }
@@ -557,6 +711,7 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             materialized,
             pending_outbox_events=int(context.get("pending_outbox_events", 0)),
             evidence_blocker_count=int(context.get("evidence_blocker_count", 0)),
+            unresolved_draft_count=int(context.get("unresolved_draft_count", 0)),
             unresolved_divergence=bool(context.get("unresolved_divergence", False)),
         )
         if not eligibility["eligible"]:
@@ -602,6 +757,13 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
             or (sequence.get("seed_confirmation") or {}).get("status") == "REJECTED"
             for sequence in sequences.values()
         )
+        eligibility = self.completion_eligibility(
+            materialized,
+            pending_outbox_events=int(completion_context.get("pending_outbox_events", 0)),
+            evidence_blocker_count=int(completion_context.get("evidence_blocker_count", 0)),
+            unresolved_draft_count=int(completion_context.get("unresolved_draft_count", 0)),
+            unresolved_divergence=bool(completion_context.get("unresolved_divergence", False)),
+        )
         payload["summary"].update(
             {
                 "reviewed_sequences": counts["sequence_count"],
@@ -624,6 +786,13 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
                 "final_materialized_state_hash": stable_hash(materialized),
                 "pending_outbox_events": 0,
                 "completed": bool(payload["state"].get("completed")),
+                "total_sequences": eligibility["total_sequences"],
+                "confirmed_sequences": eligibility["confirmed_sequences"],
+                "rejected_sequences": eligibility["rejected_sequences"],
+                "required_strand_frame_states": eligibility["required_strand_frame_states"],
+                "persisted_strand_frame_states": eligibility["persisted_strand_frame_states"],
+                "rejected_sequence_frame_requirement": eligibility["rejected_sequence_frame_requirement"],
+                "rejection_counts_by_structured_reason": eligibility["rejection_counts_by_structured_reason"],
             }
         )
         return payload

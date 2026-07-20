@@ -98,8 +98,58 @@ def validate_completion_bundle(decisions_root: Path) -> dict[str, Any]:
         )
         if not gold_hashes_valid or not identities_unique:
             errors.append("duplicate gold event sequence is not provenance-safe")
+    completion_events = [event for event in events if event.get("event_type") in {"complete", "REVIEW_COMPLETED"}]
     if not events or events[-1].get("event_type") not in {"complete", "REVIEW_COMPLETED"}:
         errors.append("completion event is missing from the event ledger")
+    if len(completion_events) != 1:
+        errors.append("completion event count is not exactly one")
+    if "required_strand_frame_states" in summary:
+        required_fields = {
+            "total_sequences",
+            "confirmed_sequences",
+            "rejected_sequences",
+            "finalized_sequences",
+            "required_strand_frame_states",
+            "persisted_strand_frame_states",
+            "rejected_sequence_frame_requirement",
+            "pending_outbox_events",
+            "rejection_counts_by_structured_reason",
+            "approved_polygon_hash",
+            "final_server_event_sequence",
+            "final_materialized_state_hash",
+        }
+        missing_summary_fields = sorted(required_fields - set(summary))
+        if missing_summary_fields:
+            errors.append(f"completion summary fields missing: {', '.join(missing_summary_fields)}")
+        try:
+            if int(summary.get("confirmed_sequences", -1)) + int(summary.get("rejected_sequences", -1)) != int(
+                summary.get("total_sequences", -1)
+            ):
+                errors.append("completion summary sequence classes do not cover the review")
+            if int(summary.get("finalized_sequences", -1)) != int(summary.get("total_sequences", -1)):
+                errors.append("completion summary does not finalize every sequence")
+            if int(summary.get("persisted_strand_frame_states", -1)) != int(
+                summary.get("required_strand_frame_states", -1)
+            ):
+                errors.append("completion summary required and persisted strand states differ")
+            if int(summary.get("rejected_sequence_frame_requirement", -1)) != 0:
+                errors.append("rejected sequence frame requirement is not zero")
+            if int(summary.get("pending_outbox_events", -1)) != 0:
+                errors.append("completion summary has pending outbox events")
+            rejection_counts = summary.get("rejection_counts_by_structured_reason", {})
+            if not isinstance(rejection_counts, dict) or sum(int(value) for value in rejection_counts.values()) != int(
+                summary.get("rejected_sequences", -1)
+            ):
+                errors.append("completion summary rejection reasons do not cover rejected sequences")
+        except (TypeError, ValueError):
+            errors.append("completion summary count fields are invalid")
+        if summary.get("final_materialized_state_hash") != stable_hash(state.get("gold_materialized", {})):
+            errors.append("completion summary materialized state hash mismatch")
+        if events and int(summary.get("final_server_event_sequence", -1)) != int(events[-1].get("event_sequence", -2)):
+            errors.append("completion summary final event sequence mismatch")
+        polygon_binding = summary.get("polygon_binding", {})
+        if polygon_binding and summary.get("approved_polygon_hash") != polygon_binding.get("approved_polygon_hash"):
+            errors.append("completion summary approved polygon hash mismatch")
     artifact_hashes = manifest.get("artifact_hashes", {})
     for name in ("completed_review.json", "completed_review_events.jsonl", "completed_review_summary.json"):
         expected = artifact_hashes.get(name)

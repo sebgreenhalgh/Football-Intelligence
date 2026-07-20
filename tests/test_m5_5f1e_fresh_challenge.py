@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from football_intelligence.review_chassis.gold_persistence import OBSERVED_STATES
-from football_intelligence.review_chassis.hashing import stable_hash
+from football_intelligence.review_chassis.gold_persistence import CrashSafeGoldPersistence, OBSERVED_STATES
+from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
+from football_intelligence.review_chassis.models import GenericReviewManifest, ReviewUIConfig
 from football_intelligence.sports_mot.fresh_challenge import (
     CHALLENGE_STRATA,
     estimate_annotation_time,
@@ -235,7 +236,7 @@ def test_selected_challenges_cover_every_stratum_without_gold() -> None:
     assert telemetry["gold_labels_created"] is False
 
 
-def test_review_manifest_is_blind_and_real_root_is_empty() -> None:
+def test_review_manifest_is_blind_and_fresh_root_is_empty(tmp_path: Path) -> None:
     manifest_text = (PACKAGE / "reviewer_manifest.json").read_text(encoding="utf-8")
     for forbidden in (
         "challenge_development",
@@ -256,11 +257,26 @@ def test_review_manifest_is_blind_and_real_root_is_empty() -> None:
     assert contract["polygon_sidecar"]["enabled"] is True
     launcher = (PACKAGE / "launch_review.ps1").read_text(encoding="utf-8")
     assert "--polygon-sidecar-root (Join-Path $PackageRoot 'decisions/polygon')" in launcher
-    state = read_json(PACKAGE / "decisions" / "review_decisions.json")
+    package_validation = read_json(PACKAGE / "review_package_validation.json")
+    assert package_validation["fresh_empty_decisions"] is True
+    assert package_validation["fresh_empty_event_sequence"] is True
+
+    historical_state_path = PACKAGE / "decisions" / "review_decisions.json"
+    historical_state_hash = sha256_file(historical_state_path)
+    assert read_json(historical_state_path)["decisions"]
+    fresh_root = tmp_path / "decisions"
+    persistence = CrashSafeGoldPersistence(
+        GenericReviewManifest.model_validate(manifest),
+        ReviewUIConfig.model_validate(ui_config),
+        fresh_root,
+        contract["reviewer_session_id"],
+    )
+    state = persistence.ensure_state()
     assert state["decisions"] == {}
     assert state["event_sequence"] == 0
-    events = PACKAGE / "decisions" / "review_decision_events.jsonl"
+    events = fresh_root / "review_decision_events.jsonl"
     assert not events.exists() or events.stat().st_size == 0
+    assert sha256_file(historical_state_path) == historical_state_hash
 
 
 def test_split_seal_and_persistence_exercise_pass() -> None:

@@ -214,6 +214,7 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                         write_sidecar=True,
                         pending_outbox_events=int(body.get("pending_outbox_events", 0)),
                         evidence_blocker_count=int(body.get("evidence_blocker_count", 0)),
+                        unresolved_draft_count=int(body.get("unresolved_draft_count", 0)),
                         unresolved_divergence=bool(body.get("unresolved_divergence", False)),
                     ),
                 )

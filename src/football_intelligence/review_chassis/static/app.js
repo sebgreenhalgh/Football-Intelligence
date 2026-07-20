@@ -2351,25 +2351,33 @@ function goldPolygonIsValid() {
   return area >= Number(metadata.image_width) * Number(metadata.image_height) * 0.001;
 }
 
+function goldHasUnresolvedDrafts() {
+  const frameDrafts = Object.values(goldDrafts).some((draft) => draft.dirty === true);
+  const polygonDraft = Boolean(goldPolygonSidecar?.draft?.status === "DRAFT" && !goldPolygonApproved());
+  return frameDrafts || polygonDraft;
+}
+
 function goldUpdateCompletionGate() {
-  const pitchApproved = goldPolygonApproved();
   const eligibility = state?.completion_eligibility || {};
   const serverEligible = eligibility.eligible === true;
   const finalized = Number(eligibility.sequences_finalized || 0);
   const expected = Number(eligibility.expected_sequence_count || 0);
-  const frameStates = Number(eligibility.strand_frame_states || 0);
-  const expectedFrameStates = Number(eligibility.expected_strand_frame_states || 0);
-  const frameDrafts = Object.values(goldDrafts).some((draft) => draft.dirty === true);
-  const polygonDraft = Boolean(goldPolygonSidecar?.draft?.status === "DRAFT" && !pitchApproved);
+  const confirmed = Number(eligibility.confirmed_sequences || 0);
+  const confirmedComplete = Number(eligibility.confirmed_sequences_complete || 0);
+  const rejected = Number(eligibility.rejected_sequences || 0);
+  const rejectedComplete = Number(eligibility.rejected_sequences_complete || 0);
+  const persistedFrameStates = Number(eligibility.persisted_strand_frame_states || 0);
+  const requiredFrameStates = Number(eligibility.required_strand_frame_states || 0);
+  const unresolvedDrafts = goldHasUnresolvedDrafts();
   const complete = $("goldComplete");
   const clientReady = goldPersistence.pending.length === 0 && !goldPersistence.blocked
-    && !goldEvidenceBlocked && !frameDrafts && !polygonDraft && !document.querySelector(".goldInvalidBBox");
+    && !goldEvidenceBlocked && !unresolvedDrafts && !document.querySelector(".goldInvalidBBox");
   if (complete) {
     complete.textContent = state?.completed === true ? "Review finalized" : "Finalize review";
     complete.disabled = state?.completed === true || !(serverEligible && clientReady);
   }
   const checklist = $("goldCompletionChecklist");
-  if (checklist) checklist.textContent = `Pitch ${pitchApproved ? "approved" : "pending"} | Server ${finalized}/${expected} finalized, ${frameStates}/${expectedFrameStates} states | Pending ${goldPersistence.pending.length} | Evidence ${goldEvidenceBlocked ? "blocked" : "clear"} | Draft ${frameDrafts || polygonDraft ? "unsaved" : "clear"}`;
+  if (checklist) checklist.textContent = `Confirmed sequences: ${confirmedComplete}/${confirmed} | Rejected sequences: ${rejectedComplete}/${rejected} | Finalized sequences: ${finalized}/${expected} | Required frame states: ${requiredFrameStates} | Persisted frame states: ${persistedFrameStates} | Pending events: ${goldPersistence.pending.length} | Evidence ${goldEvidenceBlocked ? "blocked" : "clear"} | Draft ${unresolvedDrafts ? "unsaved" : "clear"}`;
 }
 
 function goldRenderPitch() {
@@ -2725,6 +2733,7 @@ function goldBind() {
         elapsed_active_seconds: activeTimeNow(),
         pending_outbox_events: goldPersistence.pending.length,
         evidence_blocker_count: goldEvidenceBlocked ? 1 : 0,
+        unresolved_draft_count: goldHasUnresolvedDrafts() ? 1 : 0,
         unresolved_divergence: goldPersistence.blocked,
       }))});
       state = completionAck.state || state;

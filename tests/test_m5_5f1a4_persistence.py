@@ -105,6 +105,7 @@ def test_sequence_save_requires_full_frames_and_completion_is_materialized(tmp_p
     persistence = _fixture(tmp_path)
     seed = {
         "status": "CONFIRMED",
+        "seed_action": "CONFIRM",
         "source_frame_sequence": 10,
         "A": {"state": "NOT_VISIBLE"},
         "B": {"state": "NOT_VISIBLE"},
@@ -112,6 +113,7 @@ def test_sequence_save_requires_full_frames_and_completion_is_materialized(tmp_p
     frames = [
         {"frame_sequence": frame, "A": {"state": "NOT_VISIBLE"}, "B": {"state": "NOT_VISIBLE"}} for frame in (10, 11)
     ]
+    persistence.save_gold_event(_event(persistence, "SEED_CONFIRMED", payload={"seed_confirmation": seed}))
     event = _event(
         persistence,
         "SEQUENCE_SAVED",
