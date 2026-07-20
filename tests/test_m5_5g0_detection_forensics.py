@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,9 @@ from football_intelligence.detection_forensics import (
 
 NAMES = {0: "person", **{index: f"class_{index}" for index in range(1, 80)}}
 NAMES[32] = "sports ball"
+RAW_SCHEMA_DOCUMENT = runpy.run_path(
+    str(Path(__file__).resolve().parents[1] / "scripts" / "finalize_m5_5g0_review_packs.py")
+)["raw_schema_document"]
 
 
 def synthetic_prediction() -> torch.Tensor:
@@ -85,6 +89,29 @@ def test_raw_tensor_schema_and_top_k_candidates_are_runtime_derived() -> None:
     assert {row["requested_class_name"] for row in rows} == {"person", "sports ball"}
     assert all(row["feature_position"] is not None for row in rows)
     assert all(row["objectness_semantics"] == "not_present_in_decoded_yolov8_tensor" for row in rows)
+
+
+def test_final_report_uses_emitted_raw_tensor_schema_fields() -> None:
+    schema = {
+        "installed_model_examples": [
+            {
+                "decoded_tensor_shape": [1, 84, 9240],
+                "candidate_count": 9240,
+                "class_count": 80,
+                "independent_objectness_channel": False,
+                "feature_map_shapes": [[1, 144, 44, 160]],
+            }
+        ],
+        "person_class_id": 0,
+        "sports_ball_class_id": 32,
+        "raw_top_k_per_class": 300,
+    }
+    document = RAW_SCHEMA_DOCUMENT(
+        schema,
+        {"view_count": 164, "all_views_exact": True, "maximum_absolute_difference": 0.0},
+    )
+    assert "Raw candidate count: `9240`" in document
+    assert "Independent objectness channel: `False`" in document
 
 
 def test_diagnostic_nms_replay_matches_ultralytics_exactly() -> None:

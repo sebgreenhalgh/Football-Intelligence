@@ -338,9 +338,9 @@ The installed Ultralytics/model pair was inspected at runtime; no tensor layout
 was assumed in advance.
 
 - Decoded tensor shape: `{example['decoded_tensor_shape']}`
-- Raw candidate count: `{example['raw_candidate_count']}`
+- Raw candidate count: `{example['candidate_count']}`
 - Class count: `{example['class_count']}`
-- Independent objectness channel: `{example['independent_objectness_present']}`
+- Independent objectness channel: `{example['independent_objectness_channel']}`
 - Feature-map shapes: `{example['feature_map_shapes']}`
 - Resolved person class: `{schema['person_class_id']}`
 - Resolved sports-ball class: `{schema['sports_ball_class_id']}`
