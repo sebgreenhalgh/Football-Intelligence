@@ -1757,7 +1757,6 @@ def build_review_package(selected: Sequence[Mapping[str, Any]], split_data: Mapp
             "approved_polygon_migrated_for_matching_camera": sidecar.ensure()["is_approved"],
         }
     )
-    write_json(PACKAGE / "review_package_validation.json", validation)
     launcher = f"""$ErrorActionPreference = 'Stop'
 $RepoRoot = '{REPO}'
 $PackageRoot = '{PACKAGE}'
@@ -1772,9 +1771,13 @@ Set-Location -LiteralPath $RepoRoot
   --evidence-root (Join-Path $PackageRoot 'evidence') `
   --decisions-root (Join-Path $PackageRoot 'decisions') `
   --sealed-mapping (Join-Path $PackageRoot 'sealed/server_mapping.json') `
+  --polygon-sidecar-root (Join-Path $PackageRoot 'decisions/polygon') `
   --host 127.0.0.1 --port $Port --reviewer-session-id {SESSION}
 """
     (PACKAGE / "launch_review.ps1").write_text(launcher, encoding="utf-8")
+    validation["launcher_polygon_sidecar_bound"] = "--polygon-sidecar-root" in launcher
+    validation["passed"] = validation["passed"] and validation["launcher_polygon_sidecar_bound"]
+    write_json(PACKAGE / "review_package_validation.json", validation)
     stage_evidence = STAGE / "07_CHALLENGE_EVIDENCE_AND_PROPOSAL_GENERATION"
     write_json(stage_evidence / "proposal_manifest.json", {"sequences": proposal_rows, "count": len(proposal_rows)})
     write_json(stage_evidence / "evidence_manifest.json", {"cases": evidence_manifest, "hash": evidence_hash})

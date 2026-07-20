@@ -254,6 +254,8 @@ def test_review_manifest_is_blind_and_real_root_is_empty() -> None:
     contract = ui_config["question_contract"]
     assert contract["reviewer_session_id"] == "m5_5f1e_fresh_challenge_gold_annotator"
     assert contract["polygon_sidecar"]["enabled"] is True
+    launcher = (PACKAGE / "launch_review.ps1").read_text(encoding="utf-8")
+    assert "--polygon-sidecar-root (Join-Path $PackageRoot 'decisions/polygon')" in launcher
     state = read_json(PACKAGE / "decisions" / "review_decisions.json")
     assert state["decisions"] == {}
     assert state["event_sequence"] == 0

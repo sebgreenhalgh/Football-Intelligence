@@ -234,6 +234,22 @@ def evidence_route_audit(manifest: dict[str, Any]) -> dict[str, Any]:
     return {"sample_count": len(rows), "rows": rows, "passed": passed}
 
 
+def launcher_contract_audit() -> dict[str, Any]:
+    launcher = (PACKAGE / "launch_review.ps1").read_text(encoding="utf-8")
+    required = (
+        "--manifest",
+        "--ui-config",
+        "--evidence-root",
+        "--decisions-root",
+        "--sealed-mapping",
+        "--polygon-sidecar-root",
+        "--reviewer-session-id m5_5f1e_fresh_challenge_gold_annotator",
+        "--port $Port",
+    )
+    missing = [value for value in required if value not in launcher]
+    return {"required_argument_count": len(required), "missing_arguments": missing, "passed": not missing}
+
+
 def main() -> None:
     if not EDGE.is_file():
         raise RuntimeError("Microsoft Edge is required for production browser validation")
@@ -257,6 +273,7 @@ def main() -> None:
             "status_code": sealed_response.status_code,
             "accessible": sealed_response.status_code == 200,
         }
+        result["tests"]["launcher_contract"] = launcher_contract_audit()
         result["tests"]["evidence_routes"] = evidence_route_audit(manifest)
         edge = subprocess.Popen(
             [
@@ -361,6 +378,7 @@ def main() -> None:
         }
         result["passed"] = (
             result["tests"]["sealed_mapping_access"]["accessible"] is False
+            and result["tests"]["launcher_contract"]["passed"] is True
             and result["tests"]["evidence_routes"]["passed"] is True
             and seeded["status"] == "Saved to server"
             and stable["pending"] == 0
