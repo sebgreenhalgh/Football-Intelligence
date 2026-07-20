@@ -351,7 +351,116 @@
     </form>
   </dialog>
 
+  <div id="detectionGoldShell" class="detectionGoldShell isHidden" aria-hidden="true">
+    <header class="dgHeader">
+      <div class="dgBrand">
+        <span class="eyebrow">FOOTBALL INTELLIGENCE</span>
+        <h1 id="dgTitle">Detection-gold pilot</h1>
+      </div>
+      <div class="dgProgress" aria-live="polite">
+        <strong id="dgCaseProgress">Case 1 of 88</strong>
+        <span id="dgModuleProgress">Player static</span>
+        <div class="progressTrack"><span id="dgProgressBar"></span></div>
+      </div>
+      <div class="dgHeaderActions">
+        <button id="dgPrevCase" class="iconButton" type="button" title="Previous case" aria-label="Previous case">&#8592;</button>
+        <button id="dgNextCase" class="iconButton" type="button" title="Next unresolved case" aria-label="Next unresolved case">&#8594;</button>
+        <span id="dgSaveState" class="saveState" role="status">Draft</span>
+        <span id="dgServerState" class="dgServerState">server 0 | pending 0</span>
+        <button id="dgComplete" type="button" disabled>Complete pilot</button>
+      </div>
+    </header>
+
+    <main class="dgMain">
+      <section class="dgEvidenceColumn">
+        <div class="dgViewerHeader">
+          <div>
+            <span id="dgModuleEyebrow" class="eyebrow">PLAYER INSTANCE</span>
+            <h2 id="dgCaseTitle">Case</h2>
+            <p id="dgQuestion" class="primaryQuestion"></p>
+          </div>
+          <div class="viewSwitch" role="group" aria-label="Evidence view">
+            <button id="dgFocalView" type="button" class="active">Focal</button>
+            <button id="dgPanoramaView" type="button">Panorama</button>
+          </div>
+        </div>
+
+        <div class="dgContextStrip" aria-label="Previous current and next context">
+          <figure><figcaption>Previous</figcaption><img id="dgPreviousImage" alt="Previous source frame"></figure>
+          <figure class="current"><figcaption>Current</figcaption><img id="dgCurrentContext" alt="Current source frame"></figure>
+          <figure><figcaption>Next</figcaption><img id="dgNextImage" alt="Next source frame"></figure>
+        </div>
+
+        <div class="dgViewerCard">
+          <div class="dgToolbar">
+            <div class="layerChips" role="group" aria-label="Proposal layers">
+              <label class="toggleChip"><input data-dg-layer="RAW" type="checkbox"><span>Raw</span></label>
+              <label class="toggleChip"><input data-dg-layer="CONFIDENCE" type="checkbox"><span>Confidence</span></label>
+              <label class="toggleChip"><input data-dg-layer="PRE_NMS" type="checkbox"><span>Pre-NMS</span></label>
+              <label class="toggleChip"><input data-dg-layer="POST_NMS" type="checkbox" checked><span>Post-NMS</span></label>
+              <label class="toggleChip"><input data-dg-layer="FUSED" type="checkbox" checked><span>Fused</span></label>
+            </div>
+            <div class="dgToolButtons" role="group" aria-label="Annotation tools">
+              <button data-dg-tool="select" type="button" class="active" title="Select proposal">Select</button>
+              <button data-dg-tool="pan" type="button" title="Pan evidence">Pan</button>
+              <button data-dg-tool="box" type="button" title="Draw visible-body box">Visible</button>
+              <button data-dg-tool="fullbox" type="button" title="Draw full-body box">Full</button>
+              <button data-dg-tool="headbox" type="button" title="Draw optional head box">Head</button>
+              <button data-dg-tool="footpoint" type="button" title="Place footpoint">Footpoint</button>
+              <button data-dg-tool="mask" type="button" title="Draw visible mask">Mask</button>
+              <button data-dg-tool="ball" type="button" title="Mark football centre">Ball</button>
+              <button data-dg-tool="ellipse" type="button" title="Draw football ellipse">Ellipse</button>
+              <button data-dg-tool="trail" type="button" title="Draw football blur trail">Trail</button>
+              <button id="dgUndo" type="button" title="Undo (Ctrl+Z)">&#8630;</button>
+              <button id="dgZoomOut" type="button" title="Zoom out">&#8722;</button>
+              <button id="dgZoomIn" type="button" title="Zoom in">&#43;</button>
+              <button id="dgFit" type="button" title="Fit evidence">Fit</button>
+            </div>
+          </div>
+          <div id="dgViewport" class="dgViewport" tabindex="0">
+            <div id="dgStage" class="dgStage">
+              <img id="dgBaseImage" alt="Exact source evidence">
+              <svg id="dgOverlay" aria-label="Proposal and annotation geometry"></svg>
+              <div id="dgEvidenceBlocker" class="evidenceBlocker isHidden" role="alert">Evidence unavailable</div>
+            </div>
+          </div>
+          <div class="dgTimelineRow">
+            <button id="dgPreviousFrame" type="button" aria-label="Previous frame">&#8592;</button>
+            <input id="dgTimeline" type="range" min="0" max="0" value="0" aria-label="Frame stepper">
+            <button id="dgNextFrame" type="button" aria-label="Next frame">&#8594;</button>
+            <button id="dgPlay" type="button">Play</button>
+            <strong id="dgFrameReadout">Frame --</strong>
+          </div>
+          <div id="dgContactStrip" class="dgContactStrip" aria-label="Complete burst contact strip"></div>
+          <p id="dgEvidenceStatus" class="dgEvidenceStatus">Verifying evidence</p>
+        </div>
+
+        <details id="dgProvenanceDrawer" class="metadataDrawer">
+          <summary>Candidate provenance</summary>
+          <div id="dgProvenance" class="dgProvenance"></div>
+        </details>
+      </section>
+
+      <aside class="dgAnnotationColumn">
+        <div class="dgModuleTabs" role="tablist" aria-label="Pilot modules">
+          <button data-dg-module="detection_gold_player_static" type="button">Players</button>
+          <button data-dg-module="detection_gold_dense_region" type="button">Dense</button>
+          <button data-dg-module="detection_gold_temporal_player" type="button">Temporal</button>
+          <button data-dg-module="detection_gold_pitch_boundary" type="button">Pitch</button>
+          <button data-dg-module="detection_gold_football_burst" type="button">Football</button>
+        </div>
+        <div id="dgAnnotationForm" class="dgAnnotationForm"></div>
+        <div id="dgFormError" class="formError isHidden" role="alert"></div>
+        <div class="dgCaseActions">
+          <button id="dgSaveCase" class="saveNext" type="button">Save case &amp; next</button>
+          <button id="dgReopenCase" type="button">Reopen saved case</button>
+        </div>
+      </aside>
+    </main>
+  </div>
+
   <script src="/annotation_canvas.js"></script>
+  <script src="/detection_gold_app.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

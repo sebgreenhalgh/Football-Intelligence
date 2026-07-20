@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from football_intelligence.detection_gold.persistence import DetectionGoldPilotPersistence
 from football_intelligence.review.server import _parse_byte_range
 from football_intelligence.review_chassis.config import load_ui_config
 from football_intelligence.review_chassis.manifest import load_manifest, manifest_hash
@@ -76,11 +77,13 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
         self.sealed_mapping = self._load_sealed_mapping(config.sealed_mapping_path)
         reviewer = config.reviewer_session_id or f"local-{secrets.token_hex(4)}"
         self.polygon_store = self._build_polygon_store(config, reviewer)
-        persistence_class = (
-            CrashSafeGoldPersistence
-            if self.ui_config.question_contract.get("durable_server_persistence") is True
-            else GenericReviewPersistence
-        )
+        persistence_mode = self.ui_config.question_contract.get("persistence_mode")
+        if persistence_mode == "detection_gold_pilot_v1":
+            persistence_class = DetectionGoldPilotPersistence
+        elif self.ui_config.question_contract.get("durable_server_persistence") is True:
+            persistence_class = CrashSafeGoldPersistence
+        else:
+            persistence_class = GenericReviewPersistence
         self.persistence = persistence_class(
             manifest=self.manifest,
             ui_config=self.ui_config,
@@ -171,7 +174,7 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 _json_response(self, self.server.persistence.export_payload())
             elif path in {"/", "/index.html"}:
                 self._serve_file(STATIC_ROOT / "index.html")
-            elif path in {"/annotation_canvas.js", "/app.js", "/styles.css"}:
+            elif path in {"/annotation_canvas.js", "/app.js", "/detection_gold_app.js", "/styles.css"}:
                 self._serve_file(STATIC_ROOT / path.lstrip("/"))
             elif path.startswith("/evidence/"):
                 self._serve_evidence(path)
@@ -208,6 +211,27 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
             elif path == "/api/review/gold-recover":
                 if not isinstance(persistence, CrashSafeGoldPersistence):
                     raise ValueError("durable gold persistence is not enabled")
+                _json_response(
+                    self,
+                    persistence.recover_authoritative_state(
+                        write_sidecar=True,
+                        pending_outbox_events=int(body.get("pending_outbox_events", 0)),
+                        evidence_blocker_count=int(body.get("evidence_blocker_count", 0)),
+                        unresolved_draft_count=int(body.get("unresolved_draft_count", 0)),
+                        unresolved_divergence=bool(body.get("unresolved_divergence", False)),
+                    ),
+                )
+            elif path == "/api/review/detection-gold-event":
+                if not isinstance(persistence, DetectionGoldPilotPersistence):
+                    raise ValueError("detection-gold persistence is not enabled")
+                _json_response(self, persistence.save_detection_event(body))
+            elif path == "/api/review/detection-gold-reopen":
+                if not isinstance(persistence, DetectionGoldPilotPersistence):
+                    raise ValueError("detection-gold persistence is not enabled")
+                _json_response(self, persistence.reopen_case(body))
+            elif path == "/api/review/detection-gold-recover":
+                if not isinstance(persistence, DetectionGoldPilotPersistence):
+                    raise ValueError("detection-gold persistence is not enabled")
                 _json_response(
                     self,
                     persistence.recover_authoritative_state(
@@ -280,6 +304,10 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 if not isinstance(persistence, CrashSafeGoldPersistence):
                     raise ValueError("durable gold persistence is not enabled")
                 _json_response(self, persistence.complete_gold(body))
+            elif path == "/api/review/detection-gold-complete":
+                if not isinstance(persistence, DetectionGoldPilotPersistence):
+                    raise ValueError("detection-gold persistence is not enabled")
+                _json_response(self, persistence.complete_detection(body))
             else:
                 _text_response(self, "not found", status=404)
         except Exception as exc:

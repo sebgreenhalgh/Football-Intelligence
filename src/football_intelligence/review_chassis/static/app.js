@@ -2778,6 +2778,17 @@ async function load() {
   manifest = await api("/api/review/manifest");
   uiConfig = await api("/api/review/ui-config");
   state = await api("/api/review/state");
+  if (uiConfig.presentation_mode === "detection_gold_pilot") {
+    document.body.dataset.presentation = uiConfig.presentation_mode;
+    document.body.classList.add("detectionGoldPresentation");
+    $("legacyShell").classList.add("isHidden");
+    $("premiumShell").classList.add("isHidden");
+    $("goldShell").classList.add("isHidden");
+    $("detectionGoldShell").classList.remove("isHidden");
+    $("detectionGoldShell").setAttribute("aria-hidden", "false");
+    await window.DetectionGoldPilot.mount({manifest, uiConfig, state, api});
+    return;
+  }
   goldMode = uiConfig.presentation_mode === "gold_strand_annotation";
   if (goldMode) {
     await goldInitPersistence();
