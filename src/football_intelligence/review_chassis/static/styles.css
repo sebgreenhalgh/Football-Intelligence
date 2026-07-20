@@ -623,6 +623,18 @@ body[data-presentation="development_error_atlas"] { display: block; min-height: 
 #goldTimeline { width: 100%; accent-color: #6cdd9c; }
 .goldFrameControls { justify-content: center; }
 .goldFrameControls kbd, .goldTools kbd { padding: 1px 4px; color: #cbd5cf; background: #101512; border: 1px solid #4c5d53; border-radius: 3px; font-size: 0.72rem; }
+.goldJumpControls { margin-top: 8px; }
+.goldJumpControls button { min-width: 0; }
+.goldRunDialog { width: min(1120px, calc(100vw - 32px)); max-height: calc(100vh - 48px); border: 1px solid #3b4a43; background: #111713; color: #f4f7f4; padding: 0; }
+.goldRunDialog::backdrop { background: rgb(0 0 0 / 78%); }
+.goldRunDialog form { padding: 20px; }
+.goldRunDialog header, .goldRunDialog footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.goldRunContactStrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; max-height: 58vh; overflow-y: auto; }
+.goldRunContactStrip figure { margin: 0; border: 1px solid #34423b; background: #090d0b; }
+.goldRunContactStrip img { display: block; width: 100%; aspect-ratio: 2730 / 720; object-fit: cover; }
+.goldRunContactStrip figcaption { padding: 5px 7px; font-size: 12px; }
+.goldRunContactStrip .uncertain { border-color: #e3b341; }
+.goldRunContactStrip .gap { border-color: #e45b68; }
 .goldLegend { display: flex; gap: 18px; color: #aeb9b3; font-size: 0.78rem; }
 .goldSwatch { display: inline-block; width: 14px; height: 10px; margin-right: 6px; border: 2px solid #9aa7a0; }
 .goldSwatch.strandA { border-color: #21d4e6; }
@@ -667,6 +679,7 @@ body[data-presentation="development_error_atlas"] { display: block; min-height: 
 .goldSeedIntro { display: flex; justify-content: space-between; gap: 18px; align-items: end; }
 .goldSeedIntro h3 { margin: 4px 0; font-size: 1.05rem; }
 .goldSeedIntro p { max-width: 720px; margin: 0; color: #aeb9b3; font-size: .82rem; line-height: 1.45; }
+.goldSeedIntro .goldChallengeCharacteristics { color: #c9d8cf; margin-top: 5px; }
 .goldSeedStatus { color: #f4c85f; font-size: .8rem; font-weight: 750; }
 .goldSeedEvidence { display: grid; grid-template-columns: minmax(100px, .22fr) minmax(420px, 1fr) minmax(100px, .22fr); gap: 10px; align-items: center; min-height: 0; }
 .goldSeedEvidence figure { min-width: 0; margin: 0; opacity: .62; }

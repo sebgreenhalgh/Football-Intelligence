@@ -1725,7 +1725,9 @@ function goldProposalUsable(record) {
 }
 
 function goldSeedRecord(caseData = goldCase()) {
-  return goldRecords(caseData)[0];
+  const records = goldRecords(caseData);
+  const requested = Number(caseData?.visible_metadata?.seed_frame_index || 0);
+  return records[Math.max(0, Math.min(records.length - 1, requested))];
 }
 
 function goldSeedValues(caseData = goldCase()) {
@@ -1803,7 +1805,7 @@ function goldSetState(strand, value, caseData = goldCase(), record = goldRecord(
   goldRenderFrame();
 }
 
-function goldAcceptProposal(run = false) {
+function goldApplyProposal(run = false) {
   const caseData = goldCase();
   if (caseData.task_type !== "gold_strand_frame_annotation" || !goldSeedConfirmed(caseData)) return;
   goldPushHistory(caseData);
@@ -1833,6 +1835,81 @@ function goldAcceptProposal(run = false) {
   }
   if (!run && goldFrameIndex < records.length - 1) goldFrameIndex += 1;
   goldRenderFrame();
+}
+
+function goldAssetUrl(caseData, record) {
+  const assetId = record.contact_strip_asset_id || record.base_asset_id;
+  const asset = caseData.evidence_assets.find((item) => item.asset_id === assetId);
+  return asset ? evidenceUrl(caseData.case_id, asset.relative_path) : "";
+}
+
+function goldPreviewStableRun() {
+  const caseData = goldCase();
+  if (!caseData || !goldSeedConfirmed(caseData)) return;
+  const records = goldRecords(caseData).slice(goldFrameIndex);
+  const strip = $("goldRunContactStrip");
+  strip.replaceChildren();
+  let gaps = 0;
+  let uncertain = 0;
+  for (const record of records) {
+    const usable = goldProposalUsable(record);
+    gaps += Number(!usable);
+    uncertain += Number(Boolean(record.machine_uncertain));
+    const figure = document.createElement("figure");
+    if (!usable) figure.classList.add("gap");
+    else if (record.machine_uncertain) figure.classList.add("uncertain");
+    const image = document.createElement("img");
+    image.src = goldAssetUrl(caseData, record);
+    image.alt = `Frame ${record.frame_sequence} with cyan A and magenta B proposal`;
+    const caption = document.createElement("figcaption");
+    caption.textContent = `Frame ${record.frame_sequence}${usable ? "" : " - proposal gap"}${record.machine_uncertain ? " - uncertain" : ""}`;
+    figure.append(image, caption);
+    strip.appendChild(figure);
+  }
+  $("goldRunSummary").textContent = `Frames ${records[0]?.frame_sequence ?? "-"} to ${records.at(-1)?.frame_sequence ?? "-"}; ${records.length * 2} strand-frame events will be persisted.`;
+  $("goldRunWarnings").textContent = gaps || uncertain
+    ? `${gaps} proposal gaps and ${uncertain} machine-uncertain frames. Only complete, visible proposals may be run-accepted.`
+    : "No proposal gaps or machine-uncertain frames are present in this run.";
+  $("goldRunConfirm").disabled = records.length === 0 || gaps > 0;
+  $("goldRunDialog").showModal();
+}
+
+function goldAcceptProposal(run = false) {
+  if (run) {
+    goldPreviewStableRun();
+    return;
+  }
+  goldApplyProposal(false);
+}
+
+function goldFindNextFrame(predicate) {
+  const records = goldRecords();
+  for (let offset = 1; offset <= records.length; offset += 1) {
+    const index = (goldFrameIndex + offset) % records.length;
+    if (predicate(records[index])) {
+      goldFrameIndex = index;
+      goldRenderFrame();
+      return;
+    }
+  }
+}
+
+function goldShiftSequence(direction) {
+  const draft = goldDraft(goldCase());
+  if (goldPersistence.pending.length || draft?.dirty) {
+    $("goldError").textContent = "Save and reconcile this sequence before changing sequences.";
+    $("goldError").classList.remove("isHidden");
+    return;
+  }
+  const indices = manifest.cases
+    .map((caseData, index) => ({caseData, index}))
+    .filter((row) => row.caseData.task_type === "gold_strand_frame_annotation")
+    .map((row) => row.index);
+  const current = indices.indexOf(activeIndex);
+  if (current < 0) return;
+  activeIndex = indices[Math.max(0, Math.min(indices.length - 1, current + direction))];
+  goldFrameIndex = 0;
+  goldRender();
 }
 
 function goldStateLabel(value) {
@@ -1997,13 +2074,14 @@ async function goldRenderSeed(caseData = goldCase()) {
   const record = goldSeedRecord(caseData);
   if (!record) return;
   const records = goldRecords(caseData);
+  const seedIndex = Math.max(0, records.indexOf(record));
   const generation = ++goldEvidenceGeneration;
   goldClearEvidenceBlocker();
   try {
     const images = await Promise.all([
-      goldLoadContextImage($("goldSeedPreviousImage"), caseData, 0),
-      goldLoadContextImage($("goldSeedCurrentImage"), caseData, 0),
-      goldLoadContextImage($("goldSeedNextImage"), caseData, Math.min(records.length - 1, 1)),
+      goldLoadContextImage($("goldSeedPreviousImage"), caseData, Math.max(0, seedIndex - 1)),
+      goldLoadContextImage($("goldSeedCurrentImage"), caseData, seedIndex),
+      goldLoadContextImage($("goldSeedNextImage"), caseData, Math.min(records.length - 1, seedIndex + 1)),
     ]);
     if (generation !== goldEvidenceGeneration) return;
     $("goldSeedCurrentCanvasWrap").style.aspectRatio = `${Number(record.crop_width)} / ${Number(record.crop_height)}`;
@@ -2471,6 +2549,14 @@ function goldRenderAnnotationCase(caseData) {
     ? "Confirm each temporary A/B strand frame state. Cyan A and magenta B remain visible through the sequence."
     : "Confirm the visibly labelled cyan A and magenta B pair before frame annotation begins.";
   $("goldSequenceProgress").textContent = `Sequence ${activeIndex} of ${manifest.cases.length - 1}`;
+  const characteristics = caseData.visible_metadata?.challenge_characteristics || [];
+  $("goldChallengeCharacteristics").textContent = characteristics.length
+    ? `Challenge characteristics: ${characteristics.map((value) => String(value).replaceAll("_", " ")).join("; ")}.`
+    : "";
+  const allowedStates = new Set(uiConfig?.question_contract?.annotation_states || []);
+  document.querySelectorAll("[data-gold-state]").forEach((button) => {
+    button.hidden = allowedStates.size > 0 && !allowedStates.has(button.dataset.goldState);
+  });
   $("goldNote").value = goldDraft(caseData).note || "";
   if (confirmed) goldRenderFrame();
   else goldRenderSeed(caseData);
@@ -2599,6 +2685,16 @@ function goldBind() {
   $("goldTimeline").addEventListener("input", (event) => { goldFrameIndex = Number(event.target.value); goldRenderFrame(); });
   $("goldAcceptFrame").addEventListener("click", () => goldAcceptProposal(false));
   $("goldAcceptRun").addEventListener("click", () => goldAcceptProposal(true));
+  $("goldRunConfirm").addEventListener("click", () => {
+    $("goldRunDialog").close();
+    goldApplyProposal(true);
+  });
+  $("goldNextUnannotated").addEventListener("click", () => goldFindNextFrame((record) => {
+    const value = goldAnnotation(goldCase(), record.frame_sequence);
+    return !value.A || !value.B;
+  }));
+  $("goldNextUncertain").addEventListener("click", () => goldFindNextFrame((record) => Boolean(record.machine_uncertain)));
+  $("goldNextDistractor").addEventListener("click", () => goldFindNextFrame((record) => Boolean(record.high_distractor)));
   $("goldSaveSequence").addEventListener("click", goldSaveSequence);
   $("goldSeedConfirm").addEventListener("click", goldConfirmSeed);
   $("goldSeedSwap").addEventListener("click", goldSwapSeed);
@@ -2657,18 +2753,14 @@ function goldBind() {
     else if (event.key === "Enter") { event.preventDefault(); goldAcceptProposal(true); }
     else if (event.key.toLowerCase() === "a") goldSetActiveStrand("A");
     else if (event.key.toLowerCase() === "b") goldSetActiveStrand("B");
-    else if (event.key === "1") goldSetState("A", {state: "MISSING_VISIBLE_NO_VALID_DETECTION"});
-    else if (event.key === "2") goldSetState("B", {state: "MISSING_VISIBLE_NO_VALID_DETECTION"});
-    else if (event.key.toLowerCase() === "u") {
-      goldPushHistory(goldCase());
-      const annotation = goldAnnotation(goldCase(), goldRecord().frame_sequence);
-      annotation.A = {state: "AMBIGUOUS"}; annotation.B = {state: "AMBIGUOUS"};
-      goldPersistDraft(goldCase());
-      const current = goldRecord(goldCase());
-      goldQueueEvent("FRAME_STATE_SET", goldCase(), {value: {state: "AMBIGUOUS"}}, current?.frame_sequence, "A");
-      goldQueueEvent("FRAME_STATE_SET", goldCase(), {value: {state: "AMBIGUOUS"}}, current?.frame_sequence, "B");
-      goldRenderFrame();
-    } else if (event.key === "ArrowLeft") { event.preventDefault(); goldFrameIndex = Math.max(0, goldFrameIndex - 1); goldRenderFrame(); }
+    else if (event.key === "1") goldSetState("A", {state: "VISIBLE_NO_VALID_DETECTION"});
+    else if (event.key === "2") goldSetState("B", {state: "VISIBLE_NO_VALID_DETECTION"});
+    else if (event.key.toLowerCase() === "u") goldSetState(goldActiveStrand, {state: "AMBIGUOUS"});
+    else if (event.key.toLowerCase() === "n") goldSetState(goldActiveStrand, {state: "NOT_VISIBLE_IN_PANORAMA"});
+    else if (event.key.toLowerCase() === "o") goldSetState(goldActiveStrand, {state: "OUTSIDE_DYNAMIC_VIEW_BUT_VISIBLE_IN_PANORAMA"});
+    else if (event.key === "ArrowLeft" && event.shiftKey) { event.preventDefault(); goldShiftSequence(-1); }
+    else if (event.key === "ArrowRight" && event.shiftKey) { event.preventDefault(); goldShiftSequence(1); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); goldFrameIndex = Math.max(0, goldFrameIndex - 1); goldRenderFrame(); }
     else if (event.key === "ArrowRight") { event.preventDefault(); goldFrameIndex = Math.min(goldRecords().length - 1, goldFrameIndex + 1); goldRenderFrame(); }
   });
 }

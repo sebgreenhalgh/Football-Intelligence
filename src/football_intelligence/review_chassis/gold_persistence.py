@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import uuid
+from collections import Counter
 from typing import Any
 
 from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
@@ -38,9 +39,12 @@ OBSERVED_STATES = {
     "OBSERVED_EXISTING_DETECTION",
     "OBSERVED_MANUAL_BBOX",
     "MISSING_VISIBLE_NO_VALID_DETECTION",
+    "VISIBLE_NO_VALID_DETECTION",
     "NOT_VISIBLE",
+    "NOT_VISIBLE_IN_PANORAMA",
     "AMBIGUOUS",
     "OUTSIDE_ROI",
+    "OUTSIDE_DYNAMIC_VIEW_BUT_VISIBLE_IN_PANORAMA",
 }
 
 
@@ -573,12 +577,48 @@ class CrashSafeGoldPersistence(GenericReviewPersistence):
         materialized = payload["state"].get("gold_materialized", self._empty_materialized())
         counts = self._materialized_counts(materialized)
         polygon = self.polygon_store.ensure() if self.polygon_store is not None else None
+        sequences = materialized.get("sequences", {})
+        frame_state_counts = Counter(
+            str(value.get("state"))
+            for sequence in sequences.values()
+            for frame in sequence.get("frames", {}).values()
+            for value in frame.values()
+            if isinstance(value, dict) and value.get("state")
+        )
+        challenge_strata = Counter(
+            str(tag)
+            for case in self._expected_sequence_cases()
+            for tag in case.visible_metadata.get("challenge_characteristics", [])
+        )
+        completion_event = next(
+            (event for event in reversed(self._gold_events()) if event.get("event_type") == "REVIEW_COMPLETED"),
+            {},
+        )
+        completion_context = (
+            completion_event.get("payload") if isinstance(completion_event.get("payload"), dict) else {}
+        )
+        rejected = sum(
+            sequence.get("decision") == "SEQUENCE_REJECTED"
+            or (sequence.get("seed_confirmation") or {}).get("status") == "REJECTED"
+            for sequence in sequences.values()
+        )
         payload["summary"].update(
             {
                 "reviewed_sequences": counts["sequence_count"],
                 "finalized_sequences": counts["sequences_finalized"],
+                "annotated_sequence_count": counts["sequences_finalized"] - rejected,
+                "rejected_sequence_count": rejected,
                 "strand_frame_states": counts["strand_frame_states"],
                 "seed_confirmations": counts["seed_confirmations"],
+                "manual_bbox_count": frame_state_counts["OBSERVED_MANUAL_BBOX"],
+                "visible_no_detection_count": frame_state_counts["VISIBLE_NO_VALID_DETECTION"]
+                + frame_state_counts["MISSING_VISIBLE_NO_VALID_DETECTION"],
+                "panorama_visible_dynamic_view_exits": frame_state_counts[
+                    "OUTSIDE_DYNAMIC_VIEW_BUT_VISIBLE_IN_PANORAMA"
+                ],
+                "ambiguous_count": frame_state_counts["AMBIGUOUS"],
+                "active_annotation_seconds": float(completion_context.get("elapsed_active_seconds", 0.0)),
+                "challenge_stratum_counts": dict(sorted(challenge_strata.items())),
                 "approved_polygon_hash": polygon.get("approved_polygon_hash") if polygon else None,
                 "final_server_event_sequence": int(payload["state"].get("event_sequence", 0)),
                 "final_materialized_state_hash": stable_hash(materialized),

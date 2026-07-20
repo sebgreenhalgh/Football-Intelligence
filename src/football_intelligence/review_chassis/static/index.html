@@ -253,6 +253,11 @@
             <button id="goldAcceptRun" type="button">Accept stable run <kbd>Enter</kbd></button>
             <button id="goldNextFrame" type="button" title="Next frame">&#8594;</button>
           </div>
+          <div class="goldFrameControls goldJumpControls" aria-label="Annotation navigation">
+            <button id="goldNextUnannotated" type="button">Next unannotated</button>
+            <button id="goldNextUncertain" type="button">Next uncertain</button>
+            <button id="goldNextDistractor" type="button">Next high-distractor</button>
+          </div>
           <div class="goldViewportControls" aria-label="Frame viewport controls">
             <button data-gold-zoom="frame" data-gold-action="out" type="button" title="Zoom out">−</button>
             <button data-gold-zoom="frame" data-gold-action="in" type="button" title="Zoom in">+</button>
@@ -268,6 +273,7 @@
               <span class="eyebrow">SEQUENCE SEED CONFIRMATION</span>
               <h3>Confirm the two temporary strands before annotating frames</h3>
               <p>Solid cyan A and solid magenta B mark the proposed people. Other available detections remain white. This is a short, match-local visual label only.</p>
+              <p id="goldChallengeCharacteristics" class="goldChallengeCharacteristics"></p>
             </div>
             <span id="goldSeedStatus" class="goldSeedStatus">Seed confirmation pending</span>
           </div>
@@ -306,10 +312,11 @@
         </section>
         <section>
           <h3>Frame state</h3>
-          <button data-gold-state="MISSING_VISIBLE_NO_VALID_DETECTION" type="button">Visible, no detection <kbd>1/2</kbd></button>
-          <button data-gold-state="NOT_VISIBLE" type="button">Not visible</button>
+          <button data-gold-state="VISIBLE_NO_VALID_DETECTION" type="button">Visible, no detection <kbd>1/2</kbd></button>
+          <button data-gold-state="NOT_VISIBLE_IN_PANORAMA" type="button">Not visible in panorama <kbd>N</kbd></button>
           <button data-gold-state="AMBIGUOUS" type="button">Ambiguous <kbd>U</kbd></button>
           <button data-gold-state="OUTSIDE_ROI" type="button">Outside ROI</button>
+          <button data-gold-state="OUTSIDE_DYNAMIC_VIEW_BUT_VISIBLE_IN_PANORAMA" type="button">Outside view, visible in panorama <kbd>O</kbd></button>
           <button id="goldDrawManual" type="button">Draw manual bbox</button>
         </section>
         <section class="goldFrameState">
@@ -327,6 +334,22 @@
       </aside>
     </main>
   </div>
+
+  <dialog id="goldRunDialog" class="goldRunDialog">
+    <form method="dialog">
+      <header>
+        <div><span class="eyebrow">STABLE RUN REVIEW</span><h2>Review every proposed frame</h2></div>
+        <button value="cancel" type="submit" title="Close">&#215;</button>
+      </header>
+      <p id="goldRunSummary"></p>
+      <div id="goldRunContactStrip" class="goldRunContactStrip" aria-label="Stable-run contact strip"></div>
+      <p id="goldRunWarnings" class="goldHint"></p>
+      <footer>
+        <button value="cancel" type="submit">Cancel</button>
+        <button id="goldRunConfirm" class="primaryCommand" value="default" type="button">Accept visible run</button>
+      </footer>
+    </form>
+  </dialog>
 
   <script src="/annotation_canvas.js"></script>
   <script src="/app.js"></script>
