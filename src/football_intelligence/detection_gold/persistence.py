@@ -121,13 +121,34 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 missing = sorted(expected - set(actual))
                 unknown = sorted(set(actual) - expected)
                 raise ValueError(f"candidate relation coverage mismatch: missing={missing}, unknown={unknown}")
+            for relation in relations:
+                coverage = relation.get("candidate_visible_mask_coverage")
+                if relation.get("relation") == "BACKGROUND" and coverage is not None:
+                    raise ValueError("BACKGROUND candidates cannot carry visible-mask coverage")
+                if coverage is not None and not relation.get("annotation_uuids"):
+                    raise ValueError("candidate visible-mask coverage requires explicit target masks")
+                if case.task_type != "detection_gold_dense_region" and coverage is not None:
+                    raise ValueError("candidate visible-mask coverage is valid only for dense-region cases")
 
         if case.task_type == "detection_gold_temporal_player":
             frame_candidates = self._frame_candidate_map(case)
+            expected_frames = [
+                (int(row["frame_sequence"]), str(row["source_frame_sha256"]))
+                for row in case.visible_metadata.get("frame_records", [])
+            ]
+            actual_frames = [
+                (int(frame["frame_sequence"]), str(frame["source_frame_sha256"]))
+                for frame in annotation.get("frames", [])
+            ]
+            if actual_frames != expected_frames:
+                raise ValueError("temporal frame sequence or source-hash binding mismatch")
             for frame in annotation.get("frames", []):
                 frame_sequence = int(frame["frame_sequence"])
                 available = frame_candidates.get(frame_sequence, {})
-                candidate_uuids = [str(value) for value in frame.get("candidate_uuids", [])]
+                raw_candidate_uuids = frame.get("candidate_uuids", [])
+                if any(not isinstance(value, str) or not value.strip() for value in raw_candidate_uuids):
+                    raise ValueError("temporal candidate UUIDs cannot contain null, undefined, or blank values")
+                candidate_uuids = [str(value) for value in raw_candidate_uuids]
                 if len(candidate_uuids) != len(set(candidate_uuids)):
                     raise ValueError("temporal candidate UUIDs must be unique per frame")
                 unknown = sorted(set(candidate_uuids) - set(available))
@@ -135,6 +156,19 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                     raise ValueError(f"temporal annotation references wrong-frame candidates: {unknown}")
                 if any(available[value].get("class_name") != "person" for value in candidate_uuids):
                     raise ValueError("temporal player observations may bind only person candidates")
+
+    @staticmethod
+    def _validate_full_strip_gates(case: Any, annotation: dict[str, Any]) -> None:
+        if case.task_type == "detection_gold_temporal_player":
+            if annotation.get("contact_strip_reviewed") is not True:
+                raise ValueError("the complete temporal contact strip must be reviewed")
+            if any(frame.get("state") == "UNRESOLVED" for frame in annotation.get("frames", [])):
+                raise ValueError("all temporal frames must be resolved before saving")
+        if case.task_type == "detection_gold_football_burst":
+            if annotation.get("full_contact_strip_reviewed") is not True:
+                raise ValueError("the complete football contact strip must be reviewed")
+            if any(frame.get("state") == "UNRESOLVED" for frame in annotation.get("frames", [])):
+                raise ValueError("all football frames must be resolved before saving")
 
     @staticmethod
     def _validate_original_pixel_geometry(annotation: dict[str, Any]) -> None:
@@ -224,6 +258,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         self._validate_source_binding(case, annotation)
         self._validate_candidate_bindings(case, annotation)
         self._validate_original_pixel_geometry(annotation)
+        self._validate_full_strip_gates(case, annotation)
         annotation_hash = stable_hash(annotation)
         prior = state.setdefault("annotations", {}).get(case_id)
         state["annotations"][case_id] = annotation

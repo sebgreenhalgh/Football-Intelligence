@@ -20,6 +20,8 @@
     view: "focal",
     tool: "select",
     selectedCandidate: null,
+    selectedObjectByCase: {},
+    redrawVisibleObjectUuid: null,
     drafts: {},
     geometryDrafts: {},
     history: [],
@@ -84,6 +86,53 @@
 
   function sourceBinding(caseData) {
     return clone(caseData.visible_metadata.source_binding);
+  }
+
+  function annotationObjects(annotation = draft()) {
+    return annotation.player_instances || annotation.visible_masks || [];
+  }
+
+  function objectKind(annotation = draft()) {
+    return annotation.player_instances ? "Person" : "Mask";
+  }
+
+  function selectedObject(annotation = draft()) {
+    const objects = annotationObjects(annotation);
+    const caseId = currentCase().case_id;
+    const selectedUuid = runtime.selectedObjectByCase[caseId];
+    const selected = objects.find((item) => item.annotation_uuid === selectedUuid);
+    if (selected) return selected;
+    if (!objects.length) {
+      delete runtime.selectedObjectByCase[caseId];
+      return null;
+    }
+    runtime.selectedObjectByCase[caseId] = objects[0].annotation_uuid;
+    return objects[0];
+  }
+
+  function selectObject(annotationUuid) {
+    const exists = annotationObjects().some((item) => item.annotation_uuid === annotationUuid);
+    if (!exists) return;
+    runtime.selectedObjectByCase[currentCase().case_id] = annotationUuid;
+    runtime.redrawVisibleObjectUuid = null;
+    persistDraft();
+    renderAnnotationForm();
+    renderOverlay();
+  }
+
+  function objectLabel(annotationUuid, annotation = draft()) {
+    const index = annotationObjects(annotation).findIndex((item) => item.annotation_uuid === annotationUuid);
+    return index >= 0 ? `${objectKind(annotation)} ${index + 1}` : "Removed target";
+  }
+
+  function focalScopeApplies() {
+    return ["detection_gold_player_static", "detection_gold_dense_region"].includes(currentCase()?.task_type);
+  }
+
+  function requireFocalAnnotationScope() {
+    if (!focalScopeApplies() || runtime.view === "focal") return true;
+    showError("Static and dense annotations apply to the focal ROI only. Switch to Focal before drawing or editing.");
+    return false;
   }
 
   function defaultAnnotation(caseData) {
@@ -178,13 +227,18 @@
       case_id: caseData.case_id,
       annotation: draft(),
       geometry_drafts: clone(runtime.geometryDrafts[caseData.case_id] || {}),
+      selected_annotation_uuid: runtime.selectedObjectByCase[caseData.case_id] || null,
       updated_at: new Date().toISOString(),
     });
     setSaveState("Draft stored locally", false);
   }
 
   function pushHistory() {
-    runtime.history.push({case_id: currentCase().case_id, annotation: clone(draft())});
+    runtime.history.push({
+      case_id: currentCase().case_id,
+      annotation: clone(draft()),
+      selected_annotation_uuid: runtime.selectedObjectByCase[currentCase().case_id] || null,
+    });
     if (runtime.history.length > 60) runtime.history.shift();
   }
 
@@ -192,6 +246,12 @@
     const previous = runtime.history.pop();
     if (!previous || previous.case_id !== currentCase().case_id) return;
     runtime.drafts[previous.case_id] = previous.annotation;
+    if (previous.selected_annotation_uuid) {
+      runtime.selectedObjectByCase[previous.case_id] = previous.selected_annotation_uuid;
+    } else {
+      delete runtime.selectedObjectByCase[previous.case_id];
+    }
+    runtime.redrawVisibleObjectUuid = null;
     persistDraft();
     renderAnnotationForm();
     renderOverlay();
@@ -325,24 +385,72 @@
       svg.appendChild(rectangle);
     }
     const annotation = draft();
-    const boxes = [];
-    if (annotation.player_instances) {
-      for (const item of annotation.player_instances) {
-        boxes.push(item.visible_body_box);
-        if (item.full_body_box) boxes.push(item.full_body_box);
-        if (item.optional_head_box) boxes.push(item.optional_head_box);
-      }
+    const selectedUuid = selectedObject(annotation)?.annotation_uuid;
+    const appendSelectableBox = (rawBox, item, geometryClass = "") => {
+      if (!rawBox) return;
+      const box = toViewBox(rawBox);
+      const rectangle = makeSvg("rect", {
+        x: box.x1,
+        y: box.y1,
+        width: box.x2 - box.x1,
+        height: box.y2 - box.y1,
+        class: `dgHumanBox ${geometryClass} ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""}`,
+        "data-dg-object-uuid": item.annotation_uuid,
+        tabindex: 0,
+      });
+      rectangle.addEventListener("click", (event) => {
+        if (runtime.tool !== "select") return;
+        event.stopPropagation();
+        selectObject(item.annotation_uuid);
+      });
+      svg.appendChild(rectangle);
+    };
+    for (const item of annotation.player_instances || []) {
+      appendSelectableBox(item.visible_body_box, item, "dgVisibleBodyBox");
+      appendSelectableBox(item.full_body_box, item, "dgSupplementaryBox");
+      appendSelectableBox(item.optional_head_box, item, "dgHeadBox");
+      const point = pointToView(item.footpoint);
+      svg.appendChild(makeSvg("circle", {
+        cx: point.x,
+        cy: point.y,
+        r: 4,
+        class: `dgFootpoint ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""}`,
+      }));
     }
-    if (annotation.visible_masks) {
-      for (const item of annotation.visible_masks) {
-        boxes.push(item.visible_body_box);
-        if (item.full_body_box) boxes.push(item.full_body_box);
-        if (item.optional_head_box) boxes.push(item.optional_head_box);
-      }
+    for (const item of annotation.visible_masks || []) {
+      appendSelectableBox(item.visible_body_box, item, "dgVisibleBodyBox");
+      appendSelectableBox(item.full_body_box, item, "dgSupplementaryBox");
+      appendSelectableBox(item.optional_head_box, item, "dgHeadBox");
+      const polygon = item.polygon_original_pixels.map(pointToView).map((point) => `${point.x},${point.y}`).join(" ");
+      const node = makeSvg("polygon", {
+        points: polygon,
+        class: `dgHumanMask ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""}`,
+        "data-dg-object-uuid": item.annotation_uuid,
+        tabindex: 0,
+      });
+      node.addEventListener("click", (event) => {
+        if (runtime.tool !== "select") return;
+        event.stopPropagation();
+        selectObject(item.annotation_uuid);
+      });
+      svg.appendChild(node);
     }
     if (annotation.frames) {
       const frame = annotation.frames[runtime.frameIndex];
-      if (frame?.visible_body_box) boxes.push(frame.visible_body_box);
+      if (frame?.visible_body_box) {
+        const box = toViewBox(frame.visible_body_box);
+        svg.appendChild(makeSvg("rect", {
+          x: box.x1,
+          y: box.y1,
+          width: box.x2 - box.x1,
+          height: box.y2 - box.y1,
+          class: "dgHumanBox dgTemporalObservation",
+        }));
+      }
+      if (frame?.footpoint) {
+        const point = pointToView(frame.footpoint);
+        svg.appendChild(makeSvg("circle", {cx: point.x, cy: point.y, r: 4, class: "dgFootpoint"}));
+      }
       if (frame?.centre_point) {
         const point = pointToView(frame.centre_point);
         svg.appendChild(makeSvg("circle", {cx: point.x, cy: point.y, r: 5, class: "dgBallPoint"}));
@@ -369,28 +477,9 @@
         }));
       }
     }
-    for (const rawBox of boxes) {
-      const box = toViewBox(rawBox);
-      svg.appendChild(
-        makeSvg("rect", {
-          x: box.x1,
-          y: box.y1,
-          width: box.x2 - box.x1,
-          height: box.y2 - box.y1,
-          class: "dgHumanBox",
-        })
-      );
-    }
-    const points = [];
-    if (annotation.player_instances) points.push(...annotation.player_instances.map((item) => item.footpoint));
-    if (annotation.footpoint) points.push(annotation.footpoint);
-    for (const rawPoint of points) {
-      const point = pointToView(rawPoint);
+    if (annotation.footpoint) {
+      const point = pointToView(annotation.footpoint);
       svg.appendChild(makeSvg("circle", {cx: point.x, cy: point.y, r: 4, class: "dgFootpoint"}));
-    }
-    for (const mask of annotation.visible_masks || []) {
-      const polygon = mask.polygon_original_pixels.map(pointToView).map((point) => `${point.x},${point.y}`).join(" ");
-      svg.appendChild(makeSvg("polygon", {points: polygon, class: "dgHumanMask"}));
     }
     if (runtime.maskPoints.length) {
       const polygon = runtime.maskPoints.map(pointToView).map((point) => `${point.x},${point.y}`).join(" ");
@@ -412,6 +501,19 @@
       const polygon = pitchPolygon.map(pointToView).map((point) => `${point.x},${point.y}`).join(" ");
       svg.insertBefore(makeSvg("polygon", {points: polygon, class: "dgPitchPolygon"}), svg.firstChild);
     }
+    if (focalScopeApplies() && runtime.view === "panorama" && row.focal_bounds) {
+      const focal = toViewBox(row.focal_bounds);
+      svg.appendChild(makeSvg("rect", {
+        x: focal.x1,
+        y: focal.y1,
+        width: focal.x2 - focal.x1,
+        height: focal.y2 - focal.y1,
+        class: "dgFocalScopeRoi",
+      }));
+      const label = makeSvg("text", {x: focal.x1 + 8, y: focal.y1 + 18, class: "dgFocalScopeLabel"});
+      label.textContent = "ANNOTATION ROI";
+      svg.appendChild(label);
+    }
   }
 
   function candidateInstance(candidate, boxOverride = null) {
@@ -420,19 +522,20 @@
       annotation_uuid: uid("person"),
       visible_body_box: box,
       footpoint: {x: (box.x1 + box.x2) / 2, y: box.y2},
-      footpoint_uncertainty_pixels: 3,
-      visibility_state: "VISIBLE",
+      footpoint_uncertainty_pixels: 8,
+      visibility_state: "UNRESOLVED",
       occlusion_fraction: 0,
-      occlusion_type: "NONE",
+      occlusion_type: "UNKNOWN",
       truncation_flags: [],
       minimum_visible_dimensions: {width_pixels: box.x2 - box.x1, height_pixels: box.y2 - box.y1},
       ambiguity_ignore: false,
-      pitch_state: "ON_PITCH",
-      coarse_role: "PLAYER",
+      pitch_state: "BOUNDARY_UNCERTAIN",
+      coarse_role: "UNKNOWN",
     };
   }
 
   function acceptSelectedPerson(boxOverride = null) {
+    if (!requireFocalAnnotationScope()) return;
     const annotation = draft();
     const selectedMachineCandidate = boxOverride ? null : runtime.selectedCandidate;
     const candidate = selectedMachineCandidate || {bbox_original_pixels: boxOverride};
@@ -445,16 +548,7 @@
     if (currentCase().task_type === "detection_gold_player_static") {
       annotation.player_instances.push(instance);
       annotation.visible_person_count = annotation.player_instances.length;
-      if (selectedMachineCandidate) {
-        annotation.candidate_relations = annotation.candidate_relations.filter(
-          (row) => row.candidate_uuid !== selectedMachineCandidate.diagnostic_uuid
-        );
-        annotation.candidate_relations.push({
-          candidate_uuid: selectedMachineCandidate.diagnostic_uuid,
-          relation: "CLEAN_SINGLE_INSTANCE",
-          annotation_uuids: [instance.annotation_uuid],
-        });
-      }
+      runtime.selectedObjectByCase[currentCase().case_id] = instance.annotation_uuid;
     } else if (currentCase().task_type === "detection_gold_temporal_player") {
       annotation.stable_run_accepted = false;
       annotation.frames[runtime.frameIndex] = {
@@ -464,7 +558,7 @@
         visible_body_box: instance.visible_body_box,
         footpoint: instance.footpoint,
         current_frame_pixel_support: true,
-        candidate_uuids: [candidate.diagnostic_uuid],
+        candidate_uuids: selectedMachineCandidate ? [selectedMachineCandidate.diagnostic_uuid] : [],
       };
     }
     persistDraft();
@@ -473,6 +567,7 @@
   }
 
   function finishMask() {
+    if (!requireFocalAnnotationScope()) return;
     if (runtime.maskPoints.length < 3) throw new Error("A visible mask needs at least three points");
     const xs = runtime.maskPoints.map((point) => point.x);
     const ys = runtime.maskPoints.map((point) => point.y);
@@ -483,7 +578,7 @@
     annotation.visible_masks.push({
       annotation_uuid: maskId,
       polygon_original_pixels: clone(runtime.maskPoints),
-      mask_quality: "PRECISE",
+      mask_quality: "UNCERTAIN",
       visible_body_box: box,
       occlusion_order: annotation.visible_masks.length,
       pairwise_overlap_annotation_uuids: [],
@@ -491,16 +586,7 @@
       current_frame_pixel_support: true,
     });
     annotation.human_visible_person_count = annotation.visible_masks.length;
-    if (runtime.selectedCandidate?.class_name === "person") {
-      annotation.candidate_relations = annotation.candidate_relations.filter(
-        (row) => row.candidate_uuid !== runtime.selectedCandidate.diagnostic_uuid
-      );
-      annotation.candidate_relations.push({
-        candidate_uuid: runtime.selectedCandidate.diagnostic_uuid,
-        relation: "CLEAN_SINGLE_INSTANCE",
-        annotation_uuids: [maskId],
-      });
-    }
+    runtime.selectedObjectByCase[currentCase().case_id] = maskId;
     runtime.maskPoints = [];
     persistDraft();
     renderAnnotationForm();
@@ -509,12 +595,17 @@
 
   function handleOverlayClick(event) {
     if (runtime.tool === "select") return;
+    if (!requireFocalAnnotationScope()) return;
     const point = pointerOriginal(event);
     const annotation = draft();
     if (runtime.tool === "footpoint") {
       pushHistory();
       if (currentCase().task_type === "detection_gold_pitch_boundary") annotation.footpoint = point;
-      else if (annotation.player_instances?.length) annotation.player_instances.at(-1).footpoint = point;
+      else {
+        const person = selectedObject(annotation);
+        if (!person || !annotation.player_instances) return showError("Select a person before placing its footpoint.");
+        person.footpoint = point;
+      }
       persistDraft();
     } else if (runtime.tool === "mask") {
       runtime.maskPoints.push(point);
@@ -547,6 +638,7 @@
       return;
     }
     if (!["box", "fullbox", "headbox", "ellipse", "trail"].includes(runtime.tool) || event.button !== 0) return;
+    if (!requireFocalAnnotationScope()) return;
     runtime.drawingStart = pointerOriginal(event);
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -557,12 +649,6 @@
     runtime.viewTransform.x = runtime.panStart.x + event.clientX - runtime.panStart.clientX;
     runtime.viewTransform.y = runtime.panStart.y + event.clientY - runtime.panStart.clientY;
     clampViewTransform();
-  }
-
-  function latestGeometryTarget(annotation) {
-    if (annotation.player_instances?.length) return annotation.player_instances.at(-1);
-    if (annotation.visible_masks?.length) return annotation.visible_masks.at(-1);
-    return null;
   }
 
   function handlePointerUp(event) {
@@ -585,14 +671,33 @@
     if (box.x2 - box.x1 < 2 || box.y2 - box.y1 < 2) return;
     const annotation = draft();
     if (runtime.tool === "box") {
+      if (runtime.redrawVisibleObjectUuid) {
+        const target = annotationObjects(annotation).find(
+          (item) => item.annotation_uuid === runtime.redrawVisibleObjectUuid
+        );
+        if (!target) return showError("The selected object no longer exists. Select it again before redrawing.");
+        pushHistory();
+        target.visible_body_box = box;
+        if (target.minimum_visible_dimensions) {
+          target.minimum_visible_dimensions = {
+            width_pixels: box.x2 - box.x1,
+            height_pixels: box.y2 - box.y1,
+          };
+        }
+        runtime.redrawVisibleObjectUuid = null;
+        persistDraft();
+        renderAnnotationForm();
+        renderOverlay();
+        return;
+      }
       acceptSelectedPerson(box);
       return;
     }
     pushHistory();
     if (["fullbox", "headbox"].includes(runtime.tool)) {
-      const target = latestGeometryTarget(annotation);
+      const target = selectedObject(annotation);
       if (!target) {
-        showError("Create a person or visible mask before adding full-body or head geometry.");
+        showError("Select a person or visible mask before adding full-body or head geometry.");
         return;
       }
       target[runtime.tool === "fullbox" ? "full_body_box" : "optional_head_box"] = box;
@@ -642,50 +747,93 @@
     const selectedRelation = (annotation.candidate_relations || []).find(
       (row) => row.candidate_uuid === runtime.selectedCandidate?.diagnostic_uuid
     );
+    const targets = annotationObjects(annotation);
+    const selectedTargets = new Set(selectedRelation?.annotation_uuids || []);
+    const relationOptions = [
+      "BACKGROUND",
+      "CLEAN_SINGLE_INSTANCE",
+      "DUPLICATE_OF_INSTANCE",
+      "MERGED_MULTIPLE_INSTANCES",
+      "PARTIAL_INSTANCE",
+      "AMBIGUOUS",
+    ];
+    const relationMarkup = `<select id="dgCandidateRelation" ${runtime.selectedCandidate ? "" : "disabled"}>
+      <option value="" ${selectedRelation ? "" : "selected"}>Select relation...</option>
+      ${relationOptions.map((value) => `<option value="${value}" ${value === selectedRelation?.relation ? "selected" : ""}>${value.replaceAll("_", " ")}</option>`).join("")}
+    </select>`;
+    const targetMarkup = targets.length
+      ? targets.map((item) => {
+        const label = objectLabel(item.annotation_uuid, annotation);
+        return `<label class="dgTargetOption ${selectedTargets.has(item.annotation_uuid) ? "selected" : ""}">
+          <input data-dg-target-uuid="${item.annotation_uuid}" type="checkbox"
+            ${selectedTargets.has(item.annotation_uuid) ? "checked" : ""}
+            ${runtime.selectedCandidate && selectedRelation?.relation !== "BACKGROUND" ? "" : "disabled"}>
+          <span>${label}</span><small>${item.annotation_uuid.slice(-8)}</small>
+        </label>`;
+      }).join("")
+      : "<p class=\"dgEmptyHint\">Create the human objects before binding a proposal.</p>";
+    const selectedLabel = selectedRelation
+      ? selectedRelation.annotation_uuids.map((uuid) => objectLabel(uuid, annotation)).join(", ") || "No human targets"
+      : "Unbound";
+    const remaining = Math.max(0, coverage.total - coverage.covered);
     return `
       <section class="dgSummaryBand"><strong>${coverage.covered}/${coverage.total}</strong><span>machine candidates bound</span></section>
-      <label class="dgField">Selected candidate relation ${selectMarkup("dgCandidateRelation", ["BACKGROUND", "CLEAN_SINGLE_INSTANCE", "DUPLICATE_OF_INSTANCE", "MERGED_MULTIPLE_INSTANCES", "PARTIAL_INSTANCE", "AMBIGUOUS"], selectedRelation?.relation || "CLEAN_SINGLE_INSTANCE")}</label>
-      ${dense ? `<label class="dgField">Candidate-to-mask coverage <input id="dgCandidateMaskCoverage" type="number" min="0" max="1" step="0.01" value="${selectedRelation?.candidate_visible_mask_coverage ?? ""}"></label>` : ""}
-      <button id="dgMarkRemainingBackground" type="button">Mark reviewed remaining candidates as background</button>`;
+      <p class="dgBindingStatus">${runtime.selectedCandidate ? "Selected proposal" : "Select a proposal in the focal image"} | targets: ${selectedLabel}</p>
+      <label class="dgField">Selected candidate relation ${relationMarkup}</label>
+      <fieldset class="dgTargetSelector" ${runtime.selectedCandidate ? "" : "disabled"}>
+        <legend>Explicit human target${dense ? " mask" : ""} selection</legend>
+        ${targetMarkup}
+      </fieldset>
+      ${dense ? `<label class="dgField">Candidate-to-mask coverage <input id="dgCandidateMaskCoverage" type="number" min="0" max="1" step="0.01" value="${selectedRelation?.candidate_visible_mask_coverage ?? ""}" ${runtime.selectedCandidate && selectedRelation && selectedRelation.relation !== "BACKGROUND" && selectedRelation.annotation_uuids.length ? "" : "disabled"}></label>` : ""}
+      <button id="dgClearCandidateBinding" type="button" ${selectedRelation ? "" : "disabled"}>Clear selected candidate binding</button>
+      <button id="dgMarkRemainingBackground" type="button" ${remaining ? "" : "disabled"}>Review ${remaining} remaining as background...</button>`;
   }
 
   function renderPlayerForm(annotation) {
-    const latest = annotation.player_instances.at(-1);
+    const selected = selectedObject(annotation);
     return `
       <section class="dgSummaryBand"><strong>${annotation.visible_person_count}</strong><span>visible people annotated</span></section>
-      <button id="dgAcceptCandidate" type="button" ${runtime.selectedCandidate ? "" : "disabled"}>Use selected proposal as person</button>
-      <button id="dgRemoveLast" type="button" ${annotation.player_instances.length ? "" : "disabled"}>Remove last person</button>
+      <div class="dgScopeReminder">ANNOTATE FOCAL ROI ONLY</div>
+      <button id="dgAcceptCandidate" type="button" ${runtime.selectedCandidate ? "" : "disabled"}>Create unresolved draft geometry from proposal</button>
+      <button id="dgRedrawSelectedVisible" type="button" ${selected ? "" : "disabled"}>Redraw selected visible box</button>
+      <button id="dgRemoveSelected" type="button" ${selected ? "" : "disabled"}>Remove selected person</button>
       ${candidateBindingControls(annotation)}
       <label class="dgField">Earliest failure ${selectMarkup("dgFailureStage", ["NO_VALID_RAW_PROPOSAL", "BAD_RAW_LOCALIZATION", "VALID_PROPOSAL_LOW_CONFIDENCE", "VALID_PROPOSALS_NMS_COLLAPSED", "DUPLICATED_AFTER_VIEW_FUSION", "PITCH_GATE_ERROR", "RENDERER_OR_PROVENANCE_ERROR", "UNRESOLVED"], annotation.earliest_failure_stage)}</label>
-      ${latest ? `
-        <label class="dgField">Latest person visibility ${selectMarkup("dgPersonVisibility", ["VISIBLE", "PARTIALLY_VISIBLE", "HEAVILY_OCCLUDED", "UNRESOLVED"], latest.visibility_state)}</label>
-        <label class="dgField">Occlusion ${selectMarkup("dgOcclusionType", ["NONE", "PERSON", "EQUIPMENT", "FRAME_EDGE", "SCENE_STRUCTURE", "UNKNOWN"], latest.occlusion_type)}</label>
-        <label class="dgField">Occlusion fraction <input id="dgOcclusionFraction" type="number" min="0" max="1" step="0.05" value="${latest.occlusion_fraction}"></label>
-        <label class="dgField">Footpoint uncertainty <input id="dgPersonFootpointUncertainty" type="number" min="0" max="200" step="1" value="${latest.footpoint_uncertainty_pixels}"></label>
-        <label class="dgField">Pitch state ${selectMarkup("dgPersonPitchState", ["ON_PITCH", "OFF_PITCH", "BOUNDARY_UNCERTAIN"], latest.pitch_state)}</label>
-        <label class="dgField">Coarse role ${selectMarkup("dgPersonRole", ["PLAYER", "GOALKEEPER", "REFEREE", "OFFICIAL", "STAFF_OR_SPECTATOR", "UNKNOWN"], latest.coarse_role)}</label>
-        <label class="toggleChip dgWideToggle"><input id="dgPersonAmbiguityIgnore" type="checkbox" ${latest.ambiguity_ignore ? "checked" : ""}><span>Ambiguous / ignore instance</span></label>
-        <div class="dgField">Truncation ${["LEFT", "TOP", "RIGHT", "BOTTOM"].map((flag) => `<label class="toggleChip"><input data-dg-truncation="${flag}" type="checkbox" ${latest.truncation_flags.includes(flag) ? "checked" : ""}><span>${flag}</span></label>`).join("")}</div>
+      ${selected ? `
+        <section class="dgSelectedObject"><strong>${objectLabel(selected.annotation_uuid, annotation)} selected</strong><small>${selected.annotation_uuid.slice(-8)}</small></section>
+        <div class="dgUnresolvedNotice ${[selected.visibility_state, selected.occlusion_type, selected.pitch_state, selected.coarse_role].some((value) => ["UNRESOLVED", "UNKNOWN", "BOUNDARY_UNCERTAIN"].includes(value)) ? "" : "isResolved"}">Review every unresolved semantic field; proposal geometry is not truth.</div>
+        <label class="dgField">Selected person visibility ${selectMarkup("dgPersonVisibility", ["VISIBLE", "PARTIALLY_VISIBLE", "HEAVILY_OCCLUDED", "UNRESOLVED"], selected.visibility_state)}</label>
+        <label class="dgField">Occlusion ${selectMarkup("dgOcclusionType", ["NONE", "PERSON", "EQUIPMENT", "FRAME_EDGE", "SCENE_STRUCTURE", "UNKNOWN"], selected.occlusion_type)}</label>
+        <label class="dgField">Occlusion fraction <input id="dgOcclusionFraction" type="number" min="0" max="1" step="0.05" value="${selected.occlusion_fraction}"></label>
+        <label class="dgField">Footpoint uncertainty <input id="dgPersonFootpointUncertainty" type="number" min="0" max="200" step="1" value="${selected.footpoint_uncertainty_pixels}"></label>
+        <label class="dgField">Pitch state ${selectMarkup("dgPersonPitchState", ["ON_PITCH", "OFF_PITCH", "BOUNDARY_UNCERTAIN"], selected.pitch_state)}</label>
+        <label class="dgField">Coarse role ${selectMarkup("dgPersonRole", ["PLAYER", "GOALKEEPER", "REFEREE", "OFFICIAL", "STAFF_OR_SPECTATOR", "UNKNOWN"], selected.coarse_role)}</label>
+        <label class="toggleChip dgWideToggle"><input id="dgPersonAmbiguityIgnore" type="checkbox" ${selected.ambiguity_ignore ? "checked" : ""}><span>Ambiguous / ignore instance</span></label>
+        <div class="dgField">Truncation ${["LEFT", "TOP", "RIGHT", "BOTTOM"].map((flag) => `<label class="toggleChip"><input data-dg-truncation="${flag}" type="checkbox" ${selected.truncation_flags.includes(flag) ? "checked" : ""}><span>${flag}</span></label>`).join("")}</div>
       ` : ""}
-      <div class="dgInstanceList">${annotation.player_instances.map((item, index) => `<div><strong>Person ${index + 1}</strong><span>${item.visibility_state} | ${item.pitch_state} | ${item.coarse_role}</span></div>`).join("") || "<p>No human instance yet.</p>"}</div>
+      <div class="dgInstanceList">${annotation.player_instances.map((item, index) => `<button data-dg-object-select="${item.annotation_uuid}" class="${selected?.annotation_uuid === item.annotation_uuid ? "selected" : ""}" type="button"><strong>Person ${index + 1}</strong><span>${item.visibility_state} | ${item.pitch_state} | ${item.coarse_role}</span><small>${item.annotation_uuid.slice(-8)}</small></button>`).join("") || "<p>No human instance yet.</p>"}</div>
       ${baseNote(annotation)}`;
   }
 
   function renderDenseForm(annotation) {
-    const latest = annotation.visible_masks.at(-1);
+    const selected = selectedObject(annotation);
     return `
       <section class="dgSummaryBand"><strong>${annotation.human_visible_person_count}</strong><span>visible masks</span></section>
+      <div class="dgScopeReminder">ANNOTATE FOCAL ROI ONLY</div>
       <button id="dgFinishMask" type="button" ${runtime.maskPoints.length >= 3 ? "" : "disabled"}>Close visible mask</button>
-      <button id="dgRemoveLast" type="button" ${annotation.visible_masks.length ? "" : "disabled"}>Remove last mask</button>
+      <button id="dgRedrawSelectedVisible" type="button" ${selected ? "" : "disabled"}>Redraw selected visible box</button>
+      <button id="dgRemoveSelected" type="button" ${selected ? "" : "disabled"}>Remove selected mask</button>
       ${candidateBindingControls(annotation, {dense: true})}
       <label class="toggleChip dgWideToggle"><input id="dgDenseIgnore" type="checkbox" ${annotation.uncertain_or_ignore ? "checked" : ""}><span>Uncertain / ignore</span></label>
-      ${latest ? `
-        <label class="dgField">Latest mask quality ${selectMarkup("dgMaskQuality", ["PRECISE", "COARSE", "UNCERTAIN", "IGNORE"], latest.mask_quality)}</label>
-        <label class="dgField">Occlusion order <input id="dgOcclusionOrder" type="number" min="0" step="1" value="${latest.occlusion_order}"></label>
-        <label class="dgField">Occluder ${selectMarkup("dgOccluderUuid", ["", ...annotation.visible_masks.filter((item) => item.annotation_uuid !== latest.annotation_uuid).map((item) => item.annotation_uuid)], latest.occluder_uuid || "")}</label>
-        <div class="dgField">Pairwise overlap ${annotation.visible_masks.filter((item) => item.annotation_uuid !== latest.annotation_uuid).map((item, index) => `<label class="toggleChip"><input data-dg-overlap-uuid="${item.annotation_uuid}" type="checkbox" ${latest.pairwise_overlap_annotation_uuids.includes(item.annotation_uuid) ? "checked" : ""}><span>Mask ${index + 1}</span></label>`).join("") || "No other masks yet"}</div>
+      ${selected ? `
+        <section class="dgSelectedObject"><strong>${objectLabel(selected.annotation_uuid, annotation)} selected</strong><small>${selected.annotation_uuid.slice(-8)}</small></section>
+        <div class="dgUnresolvedNotice ${selected.mask_quality === "UNCERTAIN" ? "" : "isResolved"}">Visible masks begin uncertain. Confirm quality explicitly.</div>
+        <label class="dgField">Selected mask quality ${selectMarkup("dgMaskQuality", ["PRECISE", "COARSE", "UNCERTAIN", "IGNORE"], selected.mask_quality)}</label>
+        <label class="dgField">Occlusion order <input id="dgOcclusionOrder" type="number" min="0" step="1" value="${selected.occlusion_order}"></label>
+        <label class="dgField">Occluder ${selectMarkup("dgOccluderUuid", ["", ...annotation.visible_masks.filter((item) => item.annotation_uuid !== selected.annotation_uuid).map((item) => item.annotation_uuid)], selected.occluder_uuid || "")}</label>
+        <div class="dgField">Pairwise overlap ${annotation.visible_masks.filter((item) => item.annotation_uuid !== selected.annotation_uuid).map((item) => `<label class="toggleChip"><input data-dg-overlap-uuid="${item.annotation_uuid}" type="checkbox" ${selected.pairwise_overlap_annotation_uuids.includes(item.annotation_uuid) ? "checked" : ""}><span>${objectLabel(item.annotation_uuid, annotation)}</span></label>`).join("") || "No other masks yet"}</div>
       ` : ""}
-      <div class="dgInstanceList">${annotation.visible_masks.map((item, index) => `<div><strong>Mask ${index + 1}</strong><span>${item.mask_quality}; order ${item.occlusion_order}</span></div>`).join("") || "<p>Select Mask and mark each visible contour.</p>"}</div>
+      <div class="dgInstanceList">${annotation.visible_masks.map((item, index) => `<button data-dg-object-select="${item.annotation_uuid}" class="${selected?.annotation_uuid === item.annotation_uuid ? "selected" : ""}" type="button"><strong>Mask ${index + 1}</strong><span>${item.mask_quality}; order ${item.occlusion_order}</span><small>${item.annotation_uuid.slice(-8)}</small></button>`).join("") || "<p>Select Mask and mark each visible contour.</p>"}</div>
       ${baseNote(annotation)}`;
   }
 
@@ -739,6 +887,65 @@
     }
   }
 
+  function upsertSelectedCandidateRelation(annotation, relation, annotationUuids, coverageValue = undefined) {
+    if (!runtime.selectedCandidate) return null;
+    const candidateUuid = runtime.selectedCandidate.diagnostic_uuid;
+    const prior = (annotation.candidate_relations || []).find((row) => row.candidate_uuid === candidateUuid);
+    const row = {
+      candidate_uuid: candidateUuid,
+      relation,
+      annotation_uuids: [...new Set(annotationUuids)],
+    };
+    const coverage = coverageValue === undefined ? prior?.candidate_visible_mask_coverage : coverageValue;
+    if (relation !== "BACKGROUND" && coverage !== undefined && coverage !== null) {
+      row.candidate_visible_mask_coverage = coverage;
+    }
+    annotation.candidate_relations = (annotation.candidate_relations || []).filter(
+      (item) => item.candidate_uuid !== candidateUuid
+    );
+    annotation.candidate_relations.push(row);
+    return row;
+  }
+
+  function removeSelectedAnnotation(annotation) {
+    const selected = selectedObject(annotation);
+    if (!selected) return;
+    const label = objectLabel(selected.annotation_uuid, annotation);
+    const affected = (annotation.candidate_relations || []).filter(
+      (row) => row.annotation_uuids.includes(selected.annotation_uuid)
+    );
+    if (!window.confirm(`Remove ${label}? ${affected.length} affected candidate binding(s) will be cleared and must be reviewed again.`)) return;
+    pushHistory();
+    if (annotation.player_instances) {
+      annotation.player_instances = annotation.player_instances.filter(
+        (item) => item.annotation_uuid !== selected.annotation_uuid
+      );
+      annotation.visible_person_count = annotation.player_instances.length;
+    } else {
+      annotation.visible_masks = annotation.visible_masks.filter(
+        (item) => item.annotation_uuid !== selected.annotation_uuid
+      );
+      annotation.human_visible_person_count = annotation.visible_masks.length;
+      for (const mask of annotation.visible_masks) {
+        mask.pairwise_overlap_annotation_uuids = (mask.pairwise_overlap_annotation_uuids || []).filter(
+          (uuid) => uuid !== selected.annotation_uuid
+        );
+        if (mask.occluder_uuid === selected.annotation_uuid) delete mask.occluder_uuid;
+      }
+    }
+    annotation.candidate_relations = (annotation.candidate_relations || []).filter(
+      (row) => !row.annotation_uuids.includes(selected.annotation_uuid)
+    );
+    const replacement = annotationObjects(annotation)[0];
+    if (replacement) runtime.selectedObjectByCase[currentCase().case_id] = replacement.annotation_uuid;
+    else delete runtime.selectedObjectByCase[currentCase().case_id];
+    runtime.redrawVisibleObjectUuid = null;
+    persistDraft();
+    renderAnnotationForm();
+    renderOverlay();
+    if (affected.length) showError(`${affected.length} candidate binding(s) were cleared. Rebind them before saving.`);
+  }
+
   function renderAnnotationForm() {
     const annotation = draft();
     const task = currentCase().task_type;
@@ -753,71 +960,120 @@
     byId("dgAcceptCandidate")?.addEventListener("click", () => {
       try { acceptSelectedPerson(); } catch (error) { showError(error.message); }
     });
-    byId("dgRemoveLast")?.addEventListener("click", () => {
-      pushHistory();
-      if (annotation.player_instances) {
-        const removed = annotation.player_instances.pop();
-        annotation.visible_person_count = annotation.player_instances.length;
-        annotation.candidate_relations = annotation.candidate_relations.filter((row) => !row.annotation_uuids.includes(removed.annotation_uuid));
-      } else if (annotation.visible_masks) {
-        const removed = annotation.visible_masks.pop();
-        annotation.human_visible_person_count = annotation.visible_masks.length;
-        annotation.candidate_relations = annotation.candidate_relations.filter((row) => !row.annotation_uuids.includes(removed.annotation_uuid));
-      }
-      persistDraft(); renderAnnotationForm(); renderOverlay();
+    for (const button of document.querySelectorAll("[data-dg-object-select]")) {
+      button.addEventListener("click", () => selectObject(button.dataset.dgObjectSelect));
+    }
+    byId("dgRedrawSelectedVisible")?.addEventListener("click", () => {
+      const selected = selectedObject(annotation);
+      if (!selected || !requireFocalAnnotationScope()) return;
+      runtime.redrawVisibleObjectUuid = selected.annotation_uuid;
+      runtime.tool = "box";
+      document.querySelectorAll("[data-dg-tool]").forEach((item) => {
+        item.classList.toggle("active", item.dataset.dgTool === "box");
+      });
+      setSaveState(`Draw the replacement visible box for ${objectLabel(selected.annotation_uuid, annotation)}`, false);
     });
+    byId("dgRemoveSelected")?.addEventListener("click", () => removeSelectedAnnotation(annotation));
     byId("dgCandidateRelation")?.addEventListener("change", (event) => {
       if (!runtime.selectedCandidate) return;
       if (runtime.selectedCandidate.class_name !== "person") return showError("Player relations require a person proposal.");
       const relation = event.target.value;
-      const targets = annotation.player_instances || annotation.visible_masks || [];
-      let ids = [];
-      if (["CLEAN_SINGLE_INSTANCE", "DUPLICATE_OF_INSTANCE", "PARTIAL_INSTANCE"].includes(relation)) ids = targets.slice(-1).map((row) => row.annotation_uuid);
-      if (relation === "MERGED_MULTIPLE_INSTANCES") ids = targets.map((row) => row.annotation_uuid);
-      if (["CLEAN_SINGLE_INSTANCE", "DUPLICATE_OF_INSTANCE", "PARTIAL_INSTANCE"].includes(relation) && ids.length !== 1) return showError("Create or select the corresponding person first.");
-      if (relation === "MERGED_MULTIPLE_INSTANCES" && ids.length < 2) return showError("A merged candidate requires at least two visible people.");
+      if (!relation) return;
+      const prior = (annotation.candidate_relations || []).find(
+        (row) => row.candidate_uuid === runtime.selectedCandidate.diagnostic_uuid
+      );
+      const ids = relation === "BACKGROUND" ? [] : (prior?.annotation_uuids || []);
       pushHistory();
-      annotation.candidate_relations = annotation.candidate_relations.filter((row) => row.candidate_uuid !== runtime.selectedCandidate.diagnostic_uuid);
-      const row = {candidate_uuid: runtime.selectedCandidate.diagnostic_uuid, relation, annotation_uuids: ids};
-      const coverage = Number(byId("dgCandidateMaskCoverage")?.value);
-      if (Number.isFinite(coverage) && byId("dgCandidateMaskCoverage")?.value !== "") row.candidate_visible_mask_coverage = coverage;
-      annotation.candidate_relations.push(row);
+      upsertSelectedCandidateRelation(annotation, relation, ids, relation === "BACKGROUND" ? null : undefined);
       persistDraft();
       renderAnnotationForm();
     });
-    byId("dgMarkRemainingBackground")?.addEventListener("click", () => {
+    for (const toggle of document.querySelectorAll("[data-dg-target-uuid]")) {
+      toggle.addEventListener("change", () => {
+        if (!runtime.selectedCandidate) return;
+        const relation = byId("dgCandidateRelation")?.value;
+        if (!relation || relation === "BACKGROUND") return showError("Select a non-background relation before choosing human targets.");
+        const ids = [...document.querySelectorAll("[data-dg-target-uuid]:checked")].map(
+          (item) => item.dataset.dgTargetUuid
+        );
+        pushHistory();
+        upsertSelectedCandidateRelation(annotation, relation, ids);
+        persistDraft();
+        renderAnnotationForm();
+      });
+    }
+    byId("dgCandidateMaskCoverage")?.addEventListener("input", (event) => {
+      if (!runtime.selectedCandidate) return;
+      const relation = (annotation.candidate_relations || []).find(
+        (row) => row.candidate_uuid === runtime.selectedCandidate.diagnostic_uuid
+      );
+      if (!relation || relation.relation === "BACKGROUND" || !relation.annotation_uuids.length) {
+        event.target.value = "";
+        return showError("Choose a non-background relation and explicit target masks before entering coverage.");
+      }
+      if (event.target.value === "") {
+        delete relation.candidate_visible_mask_coverage;
+        persistDraft();
+        return;
+      }
+      const value = Number(event.target.value);
+      if (!Number.isFinite(value) || value < 0 || value > 1) return showError("Candidate-to-mask coverage must be between 0 and 1.");
+      relation.candidate_visible_mask_coverage = value;
+      persistDraft();
+    });
+    byId("dgClearCandidateBinding")?.addEventListener("click", () => {
+      if (!runtime.selectedCandidate) return;
       pushHistory();
+      annotation.candidate_relations = (annotation.candidate_relations || []).filter(
+        (row) => row.candidate_uuid !== runtime.selectedCandidate.diagnostic_uuid
+      );
+      persistDraft();
+      renderAnnotationForm();
+      renderOverlay();
+    });
+    byId("dgMarkRemainingBackground")?.addEventListener("click", () => {
       const covered = new Set(annotation.candidate_relations.map((row) => row.candidate_uuid));
-      for (const candidateUuid of currentCase().visible_metadata.candidate_uuids || []) {
-        if (!covered.has(candidateUuid)) annotation.candidate_relations.push({candidate_uuid: candidateUuid, relation: "BACKGROUND", annotation_uuids: []});
+      const remaining = (currentCase().visible_metadata.candidate_uuids || []).filter(
+        (candidateUuid) => !covered.has(candidateUuid)
+      );
+      if (!remaining.length) return;
+      const confirmed = window.confirm(
+        `Mark ${remaining.length} unbound candidate row(s) as BACKGROUND? Confirm that all enabled proposal layers and every visible person in the focal ROI were reviewed. Existing bindings will not change.`
+      );
+      if (!confirmed) return;
+      pushHistory();
+      for (const candidateUuid of remaining) {
+        annotation.candidate_relations.push({candidate_uuid: candidateUuid, relation: "BACKGROUND", annotation_uuids: []});
       }
       persistDraft(); renderAnnotationForm(); renderOverlay();
     });
     byId("dgFailureStage")?.addEventListener("change", (event) => { annotation.earliest_failure_stage = event.target.value; persistDraft(); });
     byId("dgFinishMask")?.addEventListener("click", finishMask);
     byId("dgDenseIgnore")?.addEventListener("change", (event) => { annotation.uncertain_or_ignore = event.target.checked; persistDraft(); });
-    byId("dgMaskQuality")?.addEventListener("change", (event) => { annotation.visible_masks.at(-1).mask_quality = event.target.value; persistDraft(); });
-    byId("dgOcclusionOrder")?.addEventListener("input", (event) => { annotation.visible_masks.at(-1).occlusion_order = Number(event.target.value); persistDraft(); });
-    byId("dgOccluderUuid")?.addEventListener("input", (event) => { const mask = annotation.visible_masks.at(-1); if (event.target.value) mask.occluder_uuid = event.target.value; else delete mask.occluder_uuid; persistDraft(); });
+    byId("dgMaskQuality")?.addEventListener("change", (event) => { const mask = selectedObject(annotation); if (mask) mask.mask_quality = event.target.value; persistDraft(); renderAnnotationForm(); renderOverlay(); });
+    byId("dgOcclusionOrder")?.addEventListener("input", (event) => { const mask = selectedObject(annotation); if (mask) mask.occlusion_order = Number(event.target.value); persistDraft(); });
+    byId("dgOccluderUuid")?.addEventListener("input", (event) => { const mask = selectedObject(annotation); if (!mask) return; if (event.target.value) mask.occluder_uuid = event.target.value; else delete mask.occluder_uuid; persistDraft(); });
     for (const toggle of document.querySelectorAll("[data-dg-overlap-uuid]")) {
       toggle.addEventListener("change", () => {
-        const mask = annotation.visible_masks.at(-1);
+        const mask = selectedObject(annotation);
+        if (!mask) return;
         const selected = new Set(mask.pairwise_overlap_annotation_uuids || []);
         if (toggle.checked) selected.add(toggle.dataset.dgOverlapUuid); else selected.delete(toggle.dataset.dgOverlapUuid);
         mask.pairwise_overlap_annotation_uuids = [...selected].sort();
         persistDraft();
       });
     }
-    byId("dgPersonVisibility")?.addEventListener("change", (event) => { annotation.player_instances.at(-1).visibility_state = event.target.value; persistDraft(); });
-    byId("dgOcclusionType")?.addEventListener("change", (event) => { annotation.player_instances.at(-1).occlusion_type = event.target.value; persistDraft(); });
-    byId("dgOcclusionFraction")?.addEventListener("input", (event) => { annotation.player_instances.at(-1).occlusion_fraction = Number(event.target.value); persistDraft(); });
-    byId("dgPersonFootpointUncertainty")?.addEventListener("input", (event) => { annotation.player_instances.at(-1).footpoint_uncertainty_pixels = Number(event.target.value); persistDraft(); });
-    byId("dgPersonPitchState")?.addEventListener("change", (event) => { annotation.player_instances.at(-1).pitch_state = event.target.value; persistDraft(); });
-    byId("dgPersonRole")?.addEventListener("change", (event) => { annotation.player_instances.at(-1).coarse_role = event.target.value; persistDraft(); });
-    byId("dgPersonAmbiguityIgnore")?.addEventListener("change", (event) => { annotation.player_instances.at(-1).ambiguity_ignore = event.target.checked; persistDraft(); });
+    byId("dgPersonVisibility")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.visibility_state = event.target.value; persistDraft(); renderAnnotationForm(); renderOverlay(); });
+    byId("dgOcclusionType")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.occlusion_type = event.target.value; persistDraft(); renderAnnotationForm(); });
+    byId("dgOcclusionFraction")?.addEventListener("input", (event) => { const person = selectedObject(annotation); if (person) person.occlusion_fraction = Number(event.target.value); persistDraft(); });
+    byId("dgPersonFootpointUncertainty")?.addEventListener("input", (event) => { const person = selectedObject(annotation); if (person) person.footpoint_uncertainty_pixels = Number(event.target.value); persistDraft(); });
+    byId("dgPersonPitchState")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.pitch_state = event.target.value; persistDraft(); renderAnnotationForm(); });
+    byId("dgPersonRole")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.coarse_role = event.target.value; persistDraft(); renderAnnotationForm(); });
+    byId("dgPersonAmbiguityIgnore")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.ambiguity_ignore = event.target.checked; persistDraft(); });
     for (const toggle of document.querySelectorAll("[data-dg-truncation]")) {
       toggle.addEventListener("change", () => {
-        const person = annotation.player_instances.at(-1);
+        const person = selectedObject(annotation);
+        if (!person) return;
         const selected = new Set(person.truncation_flags || []);
         if (toggle.checked) selected.add(toggle.dataset.dgTruncation); else selected.delete(toggle.dataset.dgTruncation);
         person.truncation_flags = [...selected].sort();
@@ -860,9 +1116,15 @@
     annotation.stable_run_accepted = false;
     const row = currentRecord();
     if (["OBSERVED", "OBSERVED_WITH_TEMPORAL_REFINEMENT"].includes(value)) {
-      if (!runtime.selectedCandidate) {
-        showError("Select a current-frame proposal before marking an observed state.");
+      const existing = annotation.frames[runtime.frameIndex];
+      if (!runtime.selectedCandidate && existing?.visible_body_box && existing.current_frame_pixel_support) {
+        annotation.frames[runtime.frameIndex] = {...clone(existing), state: value};
+        persistDraft(); renderAnnotationForm(); renderOverlay();
         return;
+      }
+      if (!runtime.selectedCandidate) return showError("Select a current-frame person proposal or draw a current-frame visible box first.");
+      if (runtime.selectedCandidate.class_name !== "person" || !runtime.selectedCandidate.diagnostic_uuid) {
+        return showError("Temporal observed states require a current-frame person proposal.");
       }
       const box = clone(runtime.selectedCandidate.bbox_original_pixels);
       annotation.frames[runtime.frameIndex] = {
@@ -1091,12 +1353,14 @@
   function renderCase() {
     runtime.selectedCandidate = null;
     runtime.maskPoints = [];
+    runtime.redrawVisibleObjectUuid = null;
     const caseData = currentCase();
     const info = moduleInfo();
     byId("dgTitle").textContent = runtime.uiConfig.review_title;
     byId("dgModuleEyebrow").textContent = info.eyebrow;
     byId("dgCaseTitle").textContent = `${info.label} ${caseData.visible_metadata.module_case_number}`;
     byId("dgQuestion").textContent = caseData.concise_question;
+    byId("dgScopeBadge").classList.toggle("isHidden", !focalScopeApplies());
     runtime.frameIndex = Math.min(runtime.frameIndex, Math.max(0, records().length - 1));
     byId("dgTimeline").max = String(Math.max(0, records().length - 1));
     byId("dgTimeline").value = String(runtime.frameIndex);
@@ -1113,6 +1377,7 @@
   function setFrame(index) {
     runtime.frameIndex = Math.max(0, Math.min(index, records().length - 1));
     runtime.selectedCandidate = null;
+    runtime.redrawVisibleObjectUuid = null;
     byId("dgTimeline").value = String(runtime.frameIndex);
     renderCase();
   }
@@ -1127,10 +1392,107 @@
     byId("dgFormError").classList.add("isHidden");
   }
 
+  function canonicalJson(value) {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    if (value && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  function validateDraftForSave(caseData, annotation) {
+    if (canonicalJson(annotation.source_binding) !== canonicalJson(sourceBinding(caseData))) {
+      throw new Error("Source binding diverged from the immutable case evidence. Reload this case before saving.");
+    }
+    const width = Number(annotation.source_binding.image_width);
+    const height = Number(annotation.source_binding.image_height);
+    const validatePoint = (point, label) => {
+      if (!point) return;
+      if (![point.x, point.y].every(Number.isFinite) || point.x < 0 || point.x > width || point.y < 0 || point.y > height) {
+        throw new Error(`${label} lies outside the source image.`);
+      }
+    };
+    const validateBox = (box, label) => {
+      if (!box) return;
+      if (![box.x1, box.y1, box.x2, box.y2].every(Number.isFinite)
+        || box.x1 < 0 || box.y1 < 0 || box.x2 > width || box.y2 > height
+        || box.x2 <= box.x1 || box.y2 <= box.y1) {
+        throw new Error(`${label} lies outside source pixels or has invalid dimensions.`);
+      }
+    };
+    for (const item of [...(annotation.player_instances || []), ...(annotation.visible_masks || [])]) {
+      validateBox(item.visible_body_box, "Visible geometry");
+      validateBox(item.full_body_box, "Full-body geometry");
+      validateBox(item.optional_head_box, "Head geometry");
+      validatePoint(item.footpoint, "Footpoint");
+      for (const point of item.polygon_original_pixels || []) validatePoint(point, "Mask point");
+    }
+    validatePoint(annotation.footpoint, "Pitch footpoint");
+
+    if (["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData.task_type)) {
+      const objects = annotationObjects(annotation);
+      const objectIds = new Set(objects.map((item) => item.annotation_uuid));
+      const required = new Set(caseData.visible_metadata.candidate_uuids || []);
+      const relations = annotation.candidate_relations || [];
+      const actual = relations.map((row) => row.candidate_uuid);
+      if (actual.length !== new Set(actual).size || actual.length !== required.size || actual.some((uuid) => !required.has(uuid))) {
+        throw new Error("Candidate coverage is incomplete. Bind every candidate or use the confirmed background action.");
+      }
+      for (const relation of relations) {
+        const ids = [...new Set(relation.annotation_uuids || [])];
+        if (ids.some((uuid) => !objectIds.has(uuid))) throw new Error("A candidate relation references a removed human target. Rebind it.");
+        if (relation.relation === "BACKGROUND" && ids.length !== 0) throw new Error("BACKGROUND requires zero human targets.");
+        if (["CLEAN_SINGLE_INSTANCE", "DUPLICATE_OF_INSTANCE", "PARTIAL_INSTANCE"].includes(relation.relation) && ids.length !== 1) {
+          throw new Error(`${relation.relation} requires exactly one explicitly selected human target.`);
+        }
+        if (relation.relation === "MERGED_MULTIPLE_INSTANCES" && ids.length < 2) {
+          throw new Error("MERGED_MULTIPLE_INSTANCES requires an explicit subset of at least two targets.");
+        }
+        const maskCoverage = relation.candidate_visible_mask_coverage;
+        if (relation.relation === "BACKGROUND" && maskCoverage !== undefined) {
+          throw new Error("BACKGROUND candidates cannot carry visible-mask coverage.");
+        }
+        if (maskCoverage !== undefined && (!Number.isFinite(maskCoverage) || maskCoverage < 0 || maskCoverage > 1 || !ids.length)) {
+          throw new Error("Dense candidate-to-mask coverage must be between 0 and 1 and bound to selected target masks.");
+        }
+      }
+    }
+
+    if (caseData.task_type === "detection_gold_temporal_player") {
+      if (!annotation.contact_strip_reviewed || annotation.frames.some((frame) => frame.state === "UNRESOLVED")) {
+        throw new Error("Review the full temporal strip and resolve every frame before saving.");
+      }
+      const expected = caseData.visible_metadata.frame_records || [];
+      if (annotation.frames.length !== expected.length) throw new Error("Temporal frame coverage diverged from the immutable strip.");
+      annotation.frames.forEach((frame, index) => {
+        const row = expected[index];
+        if (frame.frame_sequence !== row.frame_sequence || frame.source_frame_sha256 !== row.source_frame_sha256) {
+          throw new Error("Temporal frame or source hash binding diverged.");
+        }
+        if (!(frame.candidate_uuids || []).every((uuid) => typeof uuid === "string" && uuid.length > 0)) {
+          throw new Error("Temporal candidate UUIDs cannot contain null or undefined values.");
+        }
+        validateBox(frame.visible_body_box, "Temporal visible geometry");
+        validatePoint(frame.footpoint, "Temporal footpoint");
+      });
+    }
+    if (caseData.task_type === "detection_gold_football_burst") {
+      if (!annotation.full_contact_strip_reviewed || annotation.frames.some((frame) => frame.state === "UNRESOLVED")) {
+        throw new Error("Review the full football strip and resolve every frame before saving.");
+      }
+    }
+  }
+
   async function enqueueSave() {
     clearError();
     if (runtime.evidenceBlocked) return showError("Case saving is blocked until exact evidence verifies.");
     const caseData = currentCase();
+    try {
+      validateDraftForSave(caseData, draft());
+    } catch (error) {
+      showError(error.message);
+      return;
+    }
     const clientEventId = uid("detection-case");
     const item = {
       event_type: "DETECTION_CASE_SAVED",
@@ -1190,6 +1552,9 @@
       if (!annotations[runtime.manifest.cases[index].case_id]) {
         runtime.activeIndex = index;
         runtime.frameIndex = 0;
+        runtime.view = "focal";
+        byId("dgFocalView").classList.add("active");
+        byId("dgPanoramaView").classList.remove("active");
         renderCase();
         return;
       }
@@ -1250,22 +1615,23 @@
   }
 
   function bind() {
-    byId("dgPrevCase").addEventListener("click", () => { runtime.activeIndex = Math.max(0, runtime.activeIndex - 1); runtime.frameIndex = 0; renderCase(); });
+    byId("dgPrevCase").addEventListener("click", () => { runtime.activeIndex = Math.max(0, runtime.activeIndex - 1); runtime.frameIndex = 0; runtime.view = "focal"; byId("dgFocalView").classList.add("active"); byId("dgPanoramaView").classList.remove("active"); renderCase(); });
     byId("dgNextCase").addEventListener("click", goNextUnresolved);
     byId("dgPreviousFrame").addEventListener("click", () => setFrame(runtime.frameIndex - 1));
     byId("dgNextFrame").addEventListener("click", () => setFrame(runtime.frameIndex + 1));
     byId("dgTimeline").addEventListener("input", (event) => setFrame(Number(event.target.value)));
-    byId("dgFocalView").addEventListener("click", () => { runtime.view = "focal"; fitEvidence(); byId("dgFocalView").classList.add("active"); byId("dgPanoramaView").classList.remove("active"); renderEvidence(); });
-    byId("dgPanoramaView").addEventListener("click", () => { runtime.view = "panorama"; fitEvidence(); byId("dgPanoramaView").classList.add("active"); byId("dgFocalView").classList.remove("active"); renderEvidence(); });
+    byId("dgFocalView").addEventListener("click", () => { runtime.view = "focal"; runtime.redrawVisibleObjectUuid = null; fitEvidence(); byId("dgFocalView").classList.add("active"); byId("dgPanoramaView").classList.remove("active"); renderEvidence(); renderAnnotationForm(); });
+    byId("dgPanoramaView").addEventListener("click", () => { runtime.view = "panorama"; runtime.redrawVisibleObjectUuid = null; fitEvidence(); byId("dgPanoramaView").classList.add("active"); byId("dgFocalView").classList.remove("active"); renderEvidence(); renderAnnotationForm(); });
     document.querySelectorAll("[data-dg-layer]").forEach((toggle) => toggle.addEventListener("change", renderOverlay));
     document.querySelectorAll("[data-dg-tool]").forEach((button) => button.addEventListener("click", () => {
       runtime.tool = button.dataset.dgTool;
+      runtime.redrawVisibleObjectUuid = null;
       document.querySelectorAll("[data-dg-tool]").forEach((item) => item.classList.toggle("active", item === button));
     }));
     document.querySelectorAll("[data-dg-module]").forEach((button) => button.addEventListener("click", () => {
       const index = runtime.manifest.cases.findIndex((caseData) => caseData.task_type === button.dataset.dgModule && !(runtime.state.annotations || {})[caseData.case_id]);
       runtime.activeIndex = index >= 0 ? index : runtime.manifest.cases.findIndex((caseData) => caseData.task_type === button.dataset.dgModule);
-      runtime.frameIndex = 0; renderCase();
+      runtime.frameIndex = 0; runtime.view = "focal"; byId("dgFocalView").classList.add("active"); byId("dgPanoramaView").classList.remove("active"); renderCase();
     }));
     byId("dgOverlay").addEventListener("click", handleOverlayClick);
     byId("dgOverlay").addEventListener("pointerdown", handlePointerDown);
@@ -1320,6 +1686,7 @@
     for (const row of storedDrafts) {
       runtime.drafts[row.case_id] = row.annotation;
       runtime.geometryDrafts[row.case_id] = row.geometry_drafts || {};
+      if (row.selected_annotation_uuid) runtime.selectedObjectByCase[row.case_id] = row.selected_annotation_uuid;
     }
     runtime.outbox = await dbAll("outbox");
     const recovery = await api("/api/review/detection-gold-recover", {

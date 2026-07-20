@@ -90,6 +90,21 @@ body.detectionGoldPresentation {
 
 .dgViewerHeader p { margin: 5px 0 0; color: #b8c5c1; }
 
+.dgScopeBadge,
+.dgScopeReminder {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 7px;
+  padding: 4px 7px;
+  border: 1px solid #f4c65d;
+  color: #f8d77f;
+  background: #2a2414;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.dgScopeReminder { margin: 0; justify-content: center; }
+
 .dgContextStrip {
   display: grid;
   grid-template-columns: 1fr 1.3fr 1fr;
@@ -200,6 +215,14 @@ body.detectionGoldPresentation {
   vector-effect: non-scaling-stroke;
 }
 
+.dgHumanBox.selectedObject {
+  stroke: #f4c65d;
+  stroke-width: 4;
+}
+
+.dgSupplementaryBox { stroke-dasharray: 7 4; fill: transparent; }
+.dgHeadBox { stroke: #a6f1ed; fill: rgba(166, 241, 237, 0.08); }
+
 .dgGeometryDraft {
   fill: rgba(244, 198, 93, 0.06);
   stroke: #f4c65d;
@@ -215,6 +238,12 @@ body.detectionGoldPresentation {
   vector-effect: non-scaling-stroke;
 }
 
+.dgHumanMask.selectedObject {
+  fill: rgba(244, 198, 93, 0.3);
+  stroke: #f4c65d;
+  stroke-width: 4;
+}
+
 .dgMaskDraft {
   fill: none;
   stroke: #f4c65d;
@@ -223,10 +252,13 @@ body.detectionGoldPresentation {
 }
 
 .dgFootpoint { fill: #f4c65d; stroke: #101614; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.dgFootpoint.selectedObject { fill: #ffffff; stroke: #f4c65d; stroke-width: 3; }
 .dgBallPoint { fill: #ff5b83; stroke: #ffffff; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .dgBallTrail { stroke: #ff9ab2; stroke-width: 5; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .dgBallEllipse { fill: rgba(255, 91, 131, 0.08); stroke: #ff5b83; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .dgPitchPolygon { fill: rgba(94, 225, 220, 0.08); stroke: #5ee1dc; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.dgFocalScopeRoi { fill: rgba(244, 198, 93, 0.05); stroke: #f4c65d; stroke-width: 3; stroke-dasharray: 9 5; vector-effect: non-scaling-stroke; }
+.dgFocalScopeLabel { fill: #f8d77f; font-size: 13px; font-weight: 800; paint-order: stroke; stroke: #080c0b; stroke-width: 3px; }
 
 .dgTimelineRow {
   display: grid;
@@ -333,15 +365,71 @@ body.detectionGoldPresentation {
 
 .dgWideToggle { justify-content: flex-start; width: 100%; box-sizing: border-box; }
 
+.dgBindingStatus,
+.dgUnresolvedNotice,
+.dgEmptyHint {
+  margin: 0;
+  padding: 7px;
+  color: #b8c7c3;
+  background: #0c1211;
+  font-size: 10px;
+}
+
+.dgUnresolvedNotice {
+  border-left: 3px solid #f4c65d;
+  color: #f8d77f;
+}
+
+.dgUnresolvedNotice.isResolved { border-left-color: #64d6a3; color: #9fe6c4; }
+
+.dgSelectedObject {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #f4c65d;
+  background: #211d12;
+}
+
+.dgSelectedObject small { color: #dacb9b; }
+
+.dgTargetSelector {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 7px;
+  border: 1px solid #34423f;
+}
+
+.dgTargetSelector legend { color: #b8c7c3; font-size: 10px; }
+
+.dgTargetOption {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid #2a3734;
+  font-size: 10px;
+}
+
+.dgTargetOption.selected { border-color: #5ee1dc; background: #10211f; }
+.dgTargetOption small { color: #8ea29e; }
+
 .dgInstanceList,
 .dgStateGrid {
   display: grid;
   gap: 4px;
 }
 
-.dgInstanceList > div {
-  display: flex;
-  justify-content: space-between;
+.dgInstanceList > div,
+.dgInstanceList > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  text-align: left;
   gap: 8px;
   padding: 7px;
   border: 1px solid #2a3734;
@@ -349,6 +437,8 @@ body.detectionGoldPresentation {
 }
 
 .dgInstanceList span { color: #9badaa; text-align: right; }
+.dgInstanceList small { color: #7f918d; }
+.dgInstanceList > button.selected { border-color: #f4c65d; background: #211d12; color: #f8d77f; }
 
 .dgStateGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .dgStateGrid button { min-width: 0; padding: 5px 2px; display: grid; gap: 2px; }
