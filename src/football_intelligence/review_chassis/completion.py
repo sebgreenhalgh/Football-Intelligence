@@ -98,8 +98,12 @@ def validate_completion_bundle(decisions_root: Path) -> dict[str, Any]:
         )
         if not gold_hashes_valid or not identities_unique:
             errors.append("duplicate gold event sequence is not provenance-safe")
-    completion_events = [event for event in events if event.get("event_type") in {"complete", "REVIEW_COMPLETED"}]
-    if not events or events[-1].get("event_type") not in {"complete", "REVIEW_COMPLETED"}:
+    completion_scope = summary.get("completion_scope")
+    completion_event_types = (
+        {"DETECTION_TRANCHE_COMPLETED"} if completion_scope == "TRANCHE" else {"complete", "REVIEW_COMPLETED"}
+    )
+    completion_events = [event for event in events if event.get("event_type") in completion_event_types]
+    if not events or events[-1].get("event_type") not in completion_event_types:
         errors.append("completion event is missing from the event ledger")
     if len(completion_events) != 1:
         errors.append("completion event count is not exactly one")

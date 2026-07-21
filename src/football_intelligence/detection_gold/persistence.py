@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import copy
 import json
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from football_intelligence.detection_gold.incremental import (
+    R3_WIZARD_SCHEMA,
+    STATIC_TASK_TYPES,
+    authoritative_candidate_binding_hash,
+    authoritative_candidate_uuids,
+    authoritative_frame_record,
+    r3_enabled,
+    tranche_contract,
+    tranche_for_case,
+)
 from football_intelligence.detection_gold.models import SourceBinding, validate_case_annotation
+from football_intelligence.review.schemas import safety_payload
+from football_intelligence.review_chassis.completion import validate_completion_bundle, write_completion_transaction
 from football_intelligence.review_chassis.hashing import stable_hash
 from football_intelligence.review_chassis.persistence import (
     GenericReviewPersistence,
@@ -19,7 +32,12 @@ from football_intelligence.review_chassis.persistence import (
 )
 
 RECOVERY_SIDECAR_FILENAME = "detection_gold_recovery_materialization.json"
-DETECTION_EVENT_TYPES = {"DETECTION_CASE_SAVED", "DETECTION_CASE_REOPENED", "REVIEW_COMPLETED"}
+DETECTION_EVENT_TYPES = {
+    "DETECTION_CASE_SAVED",
+    "DETECTION_CASE_REOPENED",
+    "DETECTION_TRANCHE_COMPLETED",
+    "REVIEW_COMPLETED",
+}
 
 
 class DetectionGoldPilotPersistence(GenericReviewPersistence):
@@ -33,7 +51,18 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         state["persistence_mode"] = "detection_gold_pilot_v1"
         if self.ui_config.question_contract.get("novice_guided_wizard") is True:
             state["wizard_states"] = {}
+        if self._r3_enabled():
+            state["tranche_completions"] = {}
+            state["active_tranche_id"] = str(
+                self.ui_config.question_contract.get("default_tranche_id") or next(iter(self._tranches()))
+            )
         return state
+
+    def _r3_enabled(self) -> bool:
+        return r3_enabled(self.ui_config.question_contract)
+
+    def _tranches(self) -> dict[str, dict[str, Any]]:
+        return tranche_contract(self.ui_config.question_contract)
 
     @property
     def recovery_sidecar_path(self) -> Path:
@@ -44,7 +73,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         task_by_case = {case.case_id: case.task_type for case in self.manifest.cases}
         module_counts = Counter(task_by_case.get(case_id, "unknown") for case_id in annotations)
         total_by_module = Counter(case.task_type for case in self.manifest.cases)
-        return {
+        result = {
             "total_cases": len(self.manifest.cases),
             "reviewed": len(annotations),
             "remaining": max(0, len(self.manifest.cases) - len(annotations)),
@@ -52,6 +81,19 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             "total_by_module": dict(sorted(total_by_module.items())),
             "completed": bool(state.get("completed")),
         }
+        if self._r3_enabled():
+            completed = state.get("tranche_completions", {})
+            result["tranches"] = {
+                tranche_id: {
+                    "total": len(value["case_ids"]),
+                    "reviewed": sum(case_id in annotations for case_id in value["case_ids"]),
+                    "completed": tranche_id in completed,
+                }
+                for tranche_id, value in self._tranches().items()
+            }
+            result["completed_tranche_count"] = len(completed)
+            result["total_tranche_count"] = len(self._tranches())
+        return result
 
     def resume_case_id(self, state: dict[str, Any]) -> str | None:
         annotations = state.get("annotations", {}) if isinstance(state.get("annotations"), dict) else {}
@@ -114,6 +156,8 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
 
     def _validate_candidate_bindings(self, case: Any, annotation: dict[str, Any]) -> None:
         expected = {str(value) for value in case.visible_metadata.get("candidate_uuids", [])}
+        if self._r3_enabled() and case.task_type in STATIC_TASK_TYPES:
+            expected = set(authoritative_candidate_uuids(case))
         if case.task_type in {"detection_gold_player_static", "detection_gold_dense_region"}:
             relations = annotation.get("candidate_relations", [])
             actual = [str(row.get("candidate_uuid")) for row in relations]
@@ -158,6 +202,57 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                     raise ValueError(f"temporal annotation references wrong-frame candidates: {unknown}")
                 if any(available[value].get("class_name") != "person" for value in candidate_uuids):
                     raise ValueError("temporal player observations may bind only person candidates")
+
+    def _validate_r3_wizard_state(self, case: Any, wizard_state: dict[str, Any]) -> str:
+        if wizard_state.get("schema_version") != R3_WIZARD_SCHEMA:
+            raise ValueError("unsupported incremental wizard-state schema")
+        tranche_id = str(wizard_state.get("active_tranche_id") or "")
+        expected_tranche = tranche_for_case(self.ui_config.question_contract, case.case_id)
+        if tranche_id != expected_tranche:
+            raise ValueError("wizard state tranche binding mismatch")
+        if case.task_type not in STATIC_TASK_TYPES:
+            return tranche_id
+        record = authoritative_frame_record(case)
+        checks = {
+            "authoritative_frame_sequence": int(record["frame_sequence"]),
+            "primary_canvas_frame_sequence": int(record["frame_sequence"]),
+            "authoritative_source_frame_sha256": str(record["source_frame_sha256"]),
+            "primary_canvas_source_frame_sha256": str(record["source_frame_sha256"]),
+            "candidate_queue_binding_hash": authoritative_candidate_binding_hash(case),
+        }
+        mismatches = [key for key, expected in checks.items() if wizard_state.get(key) != expected]
+        if mismatches:
+            raise ValueError(f"non-authoritative static canvas or candidate binding: {mismatches}")
+        return tranche_id
+
+    @staticmethod
+    def _validate_r3_footpoints(case: Any, annotation: dict[str, Any], wizard_state: dict[str, Any]) -> None:
+        if case.task_type != "detection_gold_player_static":
+            return
+        reviews = wizard_state.get("footpoint_reviews")
+        if not isinstance(reviews, dict):
+            raise ValueError("incremental static saves require footpoint review decisions")
+        people = annotation.get("player_instances", [])
+        person_ids = {str(person["annotation_uuid"]) for person in people}
+        if set(reviews) != person_ids:
+            raise ValueError("footpoint review coverage must match every visible person")
+        allowed = {"YES", "MOVE_IT", "FEET_NOT_VISIBLE", "CANNOT_TELL"}
+        for person in people:
+            person_id = str(person["annotation_uuid"])
+            review = reviews[person_id]
+            if not isinstance(review, dict) or review.get("decision") not in allowed:
+                raise ValueError(f"invalid footpoint review for {person_id}")
+            point = person.get("footpoint")
+            box = person.get("visible_body_box")
+            if not isinstance(point, dict) or not isinstance(box, dict):
+                raise ValueError("every static person requires visible geometry and a footpoint")
+            if review["decision"] in {"FEET_NOT_VISIBLE", "CANNOT_TELL"}:
+                if review.get("estimated") is not True or float(person.get("footpoint_uncertainty_pixels", 0)) < 20:
+                    raise ValueError("hidden or uncertain feet require a labelled high-uncertainty estimate")
+                if abs(float(point["y"]) - float(box["y2"])) < 0.5:
+                    raise ValueError("an upper-body visible-box bottom cannot be reused as an estimated footpoint")
+            elif review.get("estimated") is True:
+                raise ValueError("observed footpoint decisions cannot be labelled estimated")
 
     def _validate_full_strip_gates(self, case: Any, annotation: dict[str, Any]) -> None:
         unresolved_allowed = self.ui_config.question_contract.get("reviewed_unresolved_states_allowed") is True
@@ -257,6 +352,10 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         case = self.case_map().get(case_id)
         if case is None:
             raise ValueError(f"unknown detection-gold case: {case_id}")
+        if self._r3_enabled():
+            completed_tranches = state.get("tranche_completions", {})
+            if tranche_for_case(self.ui_config.question_contract, case_id) in completed_tranches:
+                raise ValueError("completed tranches are immutable")
         raw_annotation = payload.get("annotation")
         if not isinstance(raw_annotation, dict):
             raise ValueError("annotation must be an object")
@@ -266,14 +365,20 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         self._validate_original_pixel_geometry(annotation)
         self._validate_full_strip_gates(case, annotation)
         wizard_state = payload.get("wizard_state")
+        active_tranche_id: str | None = None
         if self.ui_config.question_contract.get("novice_guided_wizard") is True:
             if not isinstance(wizard_state, dict):
                 raise ValueError("novice-guided saves require wizard_state")
             if wizard_state.get("case_id") != case_id:
                 raise ValueError("wizard state case binding mismatch")
-            if wizard_state.get("schema_version") != "football_intelligence.m5_5g1a_r2.wizard_state.v1":
+            if self._r3_enabled():
+                active_tranche_id = self._validate_r3_wizard_state(case, wizard_state)
+                self._validate_r3_footpoints(case, annotation, wizard_state)
+            elif wizard_state.get("schema_version") != "football_intelligence.m5_5g1a_r2.wizard_state.v1":
                 raise ValueError("unsupported novice wizard-state schema")
             state.setdefault("wizard_states", {})[case_id] = copy.deepcopy(wizard_state)
+        if active_tranche_id is not None:
+            state["active_tranche_id"] = active_tranche_id
         annotation_hash = stable_hash(annotation)
         prior = state.setdefault("annotations", {}).get(case_id)
         state["annotations"][case_id] = annotation
@@ -298,6 +403,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 "annotation": annotation,
                 "annotation_hash": annotation_hash,
                 "wizard_state": copy.deepcopy(wizard_state) if isinstance(wizard_state, dict) else None,
+                "active_tranche_id": active_tranche_id,
                 "expected_server_state_hash": expected_hash,
                 "prior_annotation_hash": stable_hash(prior) if isinstance(prior, dict) else None,
             },
@@ -330,6 +436,10 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         case_id = str(payload.get("case_id") or "")
         if case_id not in self.case_map():
             raise ValueError("unknown detection-gold case")
+        if self._r3_enabled() and tranche_for_case(self.ui_config.question_contract, case_id) in state.get(
+            "tranche_completions", {}
+        ):
+            raise ValueError("completed tranches are immutable")
         prior = state.setdefault("annotations", {}).pop(case_id, None)
         state.setdefault("annotation_hashes", {}).pop(case_id, None)
         state.setdefault("decisions", {}).pop(case_id, None)
@@ -375,6 +485,8 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             "unsaved_drafts_clear": int(unresolved_draft_count) == 0,
             "divergence_clear": not unresolved_divergence,
         }
+        if self._r3_enabled():
+            checks["all_tranches_completed"] = set(state.get("tranche_completions", {})) == set(self._tranches())
         return {
             "eligible": all(checks.values()) and state.get("completed") is not True,
             "already_completed": state.get("completed") is True,
@@ -402,11 +514,18 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 if isinstance(event.get("wizard_state"), dict):
                     state.setdefault("wizard_states", {})[case_id] = copy.deepcopy(event["wizard_state"])
                 state["last_viewed_case_id"] = case_id
+                if event.get("active_tranche_id"):
+                    state["active_tranche_id"] = event["active_tranche_id"]
             elif event_type == "DETECTION_CASE_REOPENED" and case_id:
                 for key in ("annotations", "annotation_hashes", "decisions", "structured_reviews", "wizard_states"):
                     if key not in state:
                         continue
                     state[key].pop(case_id, None)
+            elif event_type == "DETECTION_TRANCHE_COMPLETED":
+                completion = copy.deepcopy(event.get("tranche_completion"))
+                if isinstance(completion, dict) and completion.get("tranche_id"):
+                    state.setdefault("tranche_completions", {})[completion["tranche_id"]] = completion
+                    state["active_tranche_id"] = completion["tranche_id"]
             elif event_type == "REVIEW_COMPLETED":
                 state["completed"] = True
                 state["completed_at"] = event.get("timestamp")
@@ -435,6 +554,8 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             "decisions",
             "structured_reviews",
             "wizard_states",
+            "tranche_completions",
+            "active_tranche_id",
             "completed",
         )
         replay_matches = all(materialized.get(key) == state.get(key) for key in comparable_fields)
@@ -468,6 +589,211 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         if write_sidecar:
             atomic_write_json(self.recovery_sidecar_path, response)
         return response
+
+    def tranche_completion_eligibility(
+        self,
+        state: dict[str, Any],
+        tranche_id: str,
+        *,
+        pending_outbox_events: int = 0,
+        evidence_blocker_count: int = 0,
+        unresolved_draft_count: int = 0,
+        unresolved_divergence: bool = False,
+    ) -> dict[str, Any]:
+        if not self._r3_enabled():
+            raise ValueError("incremental tranche completion is not configured")
+        tranches = self._tranches()
+        if tranche_id not in tranches:
+            raise ValueError(f"unknown detection-gold tranche: {tranche_id}")
+        case_ids = tranches[tranche_id]["case_ids"]
+        annotations = state.get("annotations", {}) if isinstance(state.get("annotations"), dict) else {}
+        checks = {
+            "exact_tranche_case_set": all(case_id in annotations for case_id in case_ids),
+            "all_tranche_schemas_valid": all(
+                validate_case_annotation(self.case_map()[case_id].task_type, annotations[case_id]) is not None
+                for case_id in case_ids
+                if case_id in annotations
+            )
+            and all(case_id in annotations for case_id in case_ids),
+            "pending_outbox_empty": int(pending_outbox_events) == 0,
+            "evidence_blockers_clear": int(evidence_blocker_count) == 0,
+            "unsaved_drafts_clear": int(unresolved_draft_count) == 0,
+            "divergence_clear": not unresolved_divergence,
+        }
+        already_completed = tranche_id in state.get("tranche_completions", {})
+        return {
+            "eligible": all(checks.values()) and not already_completed and state.get("completed") is not True,
+            "already_completed": already_completed,
+            "tranche_id": tranche_id,
+            "case_ids": case_ids,
+            "reviewed": sum(case_id in annotations for case_id in case_ids),
+            "total": len(case_ids),
+            "checks": checks,
+        }
+
+    def _tranche_event_bytes(self, tranche_id: str, completion_event: dict[str, Any]) -> bytes:
+        case_ids = set(self._tranches()[tranche_id]["case_ids"])
+        events = [
+            copy.deepcopy(event)
+            for event in self._detection_events()
+            if event.get("case_id") in case_ids
+            and event.get("event_type") in {"DETECTION_CASE_SAVED", "DETECTION_CASE_REOPENED"}
+        ]
+        events.append(copy.deepcopy(completion_event))
+        for sequence, event in enumerate(events, start=1):
+            event["source_server_event_sequence"] = event.get("event_sequence")
+            event["event_sequence"] = sequence
+        return b"".join(
+            (json.dumps(event, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8") for event in events
+        )
+
+    def _write_tranche_completion_bundle(
+        self,
+        *,
+        state: dict[str, Any],
+        tranche_id: str,
+        completion_event: dict[str, Any],
+        transaction_id: str,
+    ) -> dict[str, Any]:
+        tranche = self._tranches()[tranche_id]
+        case_ids = tranche["case_ids"]
+        filtered = canonical_decision_state(copy.deepcopy(state))
+        for key in ("annotations", "annotation_hashes", "decisions", "structured_reviews", "wizard_states"):
+            values = filtered.get(key)
+            if isinstance(values, dict):
+                filtered[key] = {case_id: values[case_id] for case_id in case_ids if case_id in values}
+        filtered["completed"] = True
+        filtered["completed_at"] = completion_event["timestamp"]
+        filtered["event_sequence"] = sum(
+            1 for line in self._tranche_event_bytes(tranche_id, completion_event).splitlines()
+        )
+        filtered["completion_scope"] = "TRANCHE"
+        filtered["completed_tranche_id"] = tranche_id
+        decision_state_hash = stable_hash(filtered)
+        common = {
+            "review_id": self.manifest.review_id,
+            "stage_id": self.manifest.stage_id,
+            "manifest_hash": self.manifest_hash_value,
+            "ui_config_hash": self.ui_config_hash_value,
+            "decision_state_hash": decision_state_hash,
+            "completion_transaction_id": transaction_id,
+        }
+        export = {
+            "schema_version": "football_intelligence.m5_5g1a_r3.tranche_export.v1",
+            "created_at": completion_event["timestamp"],
+            **common,
+            "state": filtered,
+            "summary": {
+                "completed": True,
+                "completion_scope": "TRANCHE",
+                "tranche_id": tranche_id,
+                "tranche_label": tranche["label"],
+                "total_cases": len(case_ids),
+                "reviewed": len(case_ids),
+                "remaining": 0,
+                "human_approved": False,
+            },
+            **safety_payload(),
+        }
+        manifest = {
+            "schema_version": "football_intelligence.m5_5g1a_r3.tranche_completed_manifest.v1",
+            "created_at": completion_event["timestamp"],
+            **common,
+            "completion_scope": "TRANCHE",
+            "tranche_id": tranche_id,
+            "case_ids": case_ids,
+            "case_set_hash": stable_hash(case_ids),
+            "human_approved": False,
+            **safety_payload(),
+        }
+        summary = {
+            "schema_version": "football_intelligence.m5_5g1a_r3.tranche_completed_summary.v1",
+            "created_at": completion_event["timestamp"],
+            **common,
+            **export["summary"],
+            "reviewer_session_id": self.reviewer_session_id,
+            **safety_payload(),
+        }
+        root = self.decisions_root / "completed_tranches" / tranche_id
+        return write_completion_transaction(
+            decisions_root=root,
+            completed_review=export,
+            completed_events=self._tranche_event_bytes(tranche_id, completion_event),
+            completed_manifest=manifest,
+            completed_summary=summary,
+        )
+
+    @synchronized
+    def complete_tranche(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._r3_enabled():
+            raise ValueError("incremental tranche completion is not configured")
+        tranche_id = str(payload.get("tranche_id") or "")
+        if tranche_id not in self._tranches():
+            raise ValueError(f"unknown detection-gold tranche: {tranche_id}")
+        state = self.ensure_state()
+        if tranche_id in state.get("tranche_completions", {}):
+            bundle = self.decisions_root / "completed_tranches" / tranche_id
+            validation = validate_completion_bundle(bundle)
+            if not validation.get("passed"):
+                raise ValueError("completed tranche bundle is missing or invalid")
+            return self._response(state, duplicate=True)
+        expected_hash = payload.get("expected_server_state_hash")
+        if expected_hash not in (None, "", self._server_state_hash(state)):
+            raise ValueError("server state divergence; recover before tranche completion")
+        eligibility = self.tranche_completion_eligibility(
+            state,
+            tranche_id,
+            pending_outbox_events=int(payload.get("pending_outbox_events", 0)),
+            evidence_blocker_count=int(payload.get("evidence_blocker_count", 0)),
+            unresolved_draft_count=int(payload.get("unresolved_draft_count", 0)),
+            unresolved_divergence=bool(payload.get("unresolved_divergence", False)),
+        )
+        if not eligibility["eligible"]:
+            failed = [name for name, passed in eligibility["checks"].items() if not passed]
+            raise ValueError(f"detection-gold tranche completion is blocked: {failed}")
+        client_event_id = str(payload.get("client_event_id") or "")
+        idempotency_key = str(payload.get("idempotency_key") or "")
+        if not client_event_id or not idempotency_key:
+            raise ValueError("client_event_id and idempotency_key are required")
+        timestamp = utc_now()
+        transaction_id = f"tranche_{tranche_id}_{uuid.uuid4().hex}"
+        marker = {
+            "tranche_id": tranche_id,
+            "completed_at": timestamp,
+            "case_ids": self._tranches()[tranche_id]["case_ids"],
+            "case_set_hash": stable_hash(self._tranches()[tranche_id]["case_ids"]),
+            "completion_transaction_id": transaction_id,
+            "bundle_relative_path": f"completed_tranches/{tranche_id}",
+        }
+        state.setdefault("tranche_completions", {})[tranche_id] = marker
+        state["active_tranche_id"] = tranche_id
+        event = self._event(
+            event_type="DETECTION_TRANCHE_COMPLETED",
+            case_id=None,
+            prior_decision=None,
+            new_decision=None,
+            notes=None,
+            state=state,
+            input_source="detection_gold_ui",
+            extra={
+                "detection_gold_event": True,
+                "client_event_id": client_event_id,
+                "idempotency_key": idempotency_key,
+                "expected_server_state_hash": expected_hash,
+                "tranche_completion": marker,
+                "completion_eligibility": eligibility,
+            },
+        )
+        bundle = self._write_tranche_completion_bundle(
+            state=state,
+            tranche_id=tranche_id,
+            completion_event=event,
+            transaction_id=transaction_id,
+        )
+        if not bundle.get("passed"):
+            raise RuntimeError(f"tranche completion bundle failed validation: {bundle}")
+        persisted = self._persist(state, event)
+        return self._response(persisted)
 
     @synchronized
     def complete_detection(self, payload: dict[str, Any]) -> dict[str, Any]:

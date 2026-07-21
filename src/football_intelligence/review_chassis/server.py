@@ -314,6 +314,10 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 if not isinstance(persistence, DetectionGoldPilotPersistence):
                     raise ValueError("detection-gold persistence is not enabled")
                 _json_response(self, persistence.complete_detection(body))
+            elif path == "/api/review/detection-gold-tranche-complete":
+                if not isinstance(persistence, DetectionGoldPilotPersistence):
+                    raise ValueError("detection-gold persistence is not enabled")
+                _json_response(self, persistence.complete_tranche(body))
             else:
                 _text_response(self, "not found", status=404)
         except Exception as exc:

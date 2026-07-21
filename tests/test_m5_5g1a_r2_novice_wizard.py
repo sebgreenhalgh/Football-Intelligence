@@ -10,7 +10,7 @@ import pytest
 from football_intelligence.detection_gold.models import validate_case_annotation
 from football_intelligence.detection_gold.persistence import DetectionGoldPilotPersistence
 from football_intelligence.review_chassis.config import load_ui_config
-from football_intelligence.review_chassis.hashing import stable_hash
+from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
 from football_intelligence.review_chassis.manifest import load_manifest
 from football_intelligence.review_chassis.validation import validate_review_chassis_package
 
@@ -243,16 +243,32 @@ def test_server_materializes_and_replays_wizard_state(tmp_path: Path) -> None:
     assert recovery["materialized_state"]["wizard_states"][case.case_id] == result["wizard_states"][case.case_id]
 
 
-def test_r2_production_root_is_fresh_and_uses_a_new_browser_namespace() -> None:
-    state = read_json(PACKAGE / "decisions" / "review_decisions.json")
-    events = PACKAGE / "decisions" / "review_decision_events.jsonl"
+def test_r2_populated_historical_root_does_not_contaminate_fresh_fixture(tmp_path: Path) -> None:
+    historical_state_path = PACKAGE / "decisions" / "review_decisions.json"
+    historical_events_path = PACKAGE / "decisions" / "review_decision_events.jsonl"
+    before = {
+        "state": sha256_file(historical_state_path),
+        "events": sha256_file(historical_events_path),
+    }
+    manifest = load_manifest(PACKAGE / "reviewer_manifest.json")
+    persistence = DetectionGoldPilotPersistence(
+        manifest=manifest,
+        ui_config=load_ui_config(PACKAGE / "ui_config.json"),
+        decisions_root=tmp_path / "fresh-decisions",
+        reviewer_session_id=REVIEWER,
+    )
+    state = persistence.ensure_state()
+    events = persistence.events_path
     app = (REPO / "src/football_intelligence/review_chassis/static/detection_gold_app.js").read_text()
     assert not state["annotations"] and not state["decisions"] and not state["wizard_states"]
     assert state["event_sequence"] == 0
     assert events.stat().st_size == 0
-    assert not list((PACKAGE / "decisions").glob("completed_review*"))
+    assert not list(persistence.decisions_root.glob("completed_review*"))
     assert "fi_detection_gold_${runtime.manifest.review_id}" in app
     assert read_json(PACKAGE / "reviewer_manifest.json")["review_id"] == REVIEW_ID
+    assert read_json(historical_state_path)["event_sequence"] == 6
+    assert sha256_file(historical_state_path) == before["state"]
+    assert sha256_file(historical_events_path) == before["events"]
 
 
 def test_timing_counts_only_modules_with_machine_candidate_queues() -> None:

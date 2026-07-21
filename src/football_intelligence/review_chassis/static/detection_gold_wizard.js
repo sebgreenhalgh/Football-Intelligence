@@ -118,8 +118,12 @@
     }
 
     defaultState(caseData) {
+      const r3 = this.host.incrementalR3?.() === true;
+      const authoritative = r3 ? this.host.authoritativeBinding?.(caseData) : null;
       return {
-        schema_version: "football_intelligence.m5_5g1a_r2.wizard_state.v1",
+        schema_version: r3
+          ? "football_intelligence.m5_5g1a_r3.wizard_state.v1"
+          : "football_intelligence.m5_5g1a_r2.wizard_state.v1",
         case_id: caseData.case_id,
         step: 1,
         drawing_complete: false,
@@ -127,6 +131,8 @@
         question_index: 0,
         completed_object_uuids: [],
         footpoint_placed_uuids: [],
+        footpoint_reviews: {},
+        pending_footpoint_decision: null,
         candidate_index: 0,
         candidate_phase: "relation",
         candidate_relation: null,
@@ -141,6 +147,12 @@
         football_candidate_answers: {},
         failure_reviewed: false,
         help_opened: false,
+        active_tranche_id: r3 ? this.host.currentTrancheId() : null,
+        authoritative_frame_sequence: authoritative?.frame_sequence ?? null,
+        authoritative_source_frame_sha256: authoritative?.source_frame_sha256 ?? null,
+        primary_canvas_frame_sequence: authoritative?.frame_sequence ?? null,
+        primary_canvas_source_frame_sha256: authoritative?.source_frame_sha256 ?? null,
+        candidate_queue_binding_hash: authoritative?.candidate_queue_binding_hash ?? null,
       };
     }
 
@@ -172,10 +184,17 @@
     }
 
     candidates(caseData = this.host.caseData()) {
-      const required = new Set(caseData.visible_metadata.candidate_uuids || []);
+      const required = new Set(
+        this.host.incrementalR3?.() === true
+          ? this.host.authoritativeCandidateUuids(caseData)
+          : (caseData.visible_metadata.candidate_uuids || [])
+      );
       const rows = [];
       const seen = new Set();
       (caseData.visible_metadata.frame_records || []).forEach((record, frameIndex) => {
+        if (this.host.incrementalR3?.() === true
+          && ["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData.task_type)
+          && frameIndex !== this.host.authoritativeFrameIndex(caseData)) return;
         for (const candidate of record.candidates || []) {
           if (!required.has(candidate.diagnostic_uuid) || seen.has(candidate.diagnostic_uuid)) continue;
           seen.add(candidate.diagnostic_uuid);
@@ -202,7 +221,12 @@
         candidateUuid: entry?.candidate.diagnostic_uuid || this.host.selectedCandidate()?.diagnostic_uuid || null,
         humanInteractive: !(relationQueue || footballQueue),
         numberHumans: true,
-        footpointUuids: [...state.footpoint_placed_uuids],
+        footpointUuids: this.host.incrementalR3?.() === true && task === "detection_gold_player_static"
+          ? this.host.objects().map((row) => row.annotation_uuid)
+          : [...state.footpoint_placed_uuids],
+        estimatedFootpointUuids: Object.entries(state.footpoint_reviews || {})
+          .filter(([, review]) => review?.estimated === true)
+          .map(([annotationUuid]) => annotationUuid),
         showTemporalFootpoint: state.frame_phase !== "footpoint",
         pitchFootpointSet: state.pitch_footpoint_set,
         candidateLabel: entry ? `Machine Box ${state.candidate_index + 1}` : "Machine suggestion",
@@ -214,7 +238,10 @@
       if (state.step !== 3) return;
       const entry = this.currentCandidateEntry();
       if (!entry) return;
-      this.host.setFrameSilently(entry.frameIndex);
+      if (!(this.host.incrementalR3?.() === true
+        && ["detection_gold_player_static", "detection_gold_dense_region"].includes(this.host.caseData().task_type))) {
+        this.host.setFrameSilently(entry.frameIndex);
+      }
       this.host.setSelectedCandidate(entry.candidate);
     }
 
@@ -248,6 +275,13 @@
         this.mutate((state) => {
           if (state.current_object_uuid && !state.footpoint_placed_uuids.includes(state.current_object_uuid)) {
             state.footpoint_placed_uuids.push(state.current_object_uuid);
+          }
+          if (this.host.incrementalR3?.() === true && state.current_object_uuid) {
+            const prior = state.footpoint_reviews[state.current_object_uuid];
+            state.footpoint_reviews[state.current_object_uuid] = prior?.estimated
+              ? {...prior, adjusted: true}
+              : {decision: "MOVE_IT", estimated: false, adjusted: true};
+            state.pending_footpoint_decision = null;
           }
           state.question_index += 1;
         }, {history: false});
@@ -298,7 +332,10 @@
       if (!person) return "";
       const hidden = ["PARTIALLY_VISIBLE", "HEAVILY_OCCLUDED"].includes(person.visibility_state);
       const edgeRelevant = this.edgeQuestionRelevant(person.visible_body_box);
-      const questions = ["role", "visibility", ...(hidden ? ["occluder", "hidden_amount"] : []), "footpoint", "foot_uncertainty", "pitch", ...(edgeRelevant ? ["edge"] : [])];
+      const r3 = this.host.incrementalR3?.() === true;
+      const questions = r3
+        ? ["role", "visibility", ...(hidden ? ["occluder", "hidden_amount"] : []), "footpoint_review", "pitch", ...(edgeRelevant ? ["edge"] : [])]
+        : ["role", "visibility", ...(hidden ? ["occluder", "hidden_amount"] : []), "footpoint", "foot_uncertainty", "pitch", ...(edgeRelevant ? ["edge"] : [])];
       if (state.question_index >= questions.length) {
         queueMicrotask(() => this.finishObjectQuestions(person.annotation_uuid));
         return `<div class="nwWaiting">Person ${this.host.objectIndex(person.annotation_uuid) + 1} is ready.</div>`;
@@ -308,6 +345,10 @@
       if (key === "visibility") return answerButtons("How much of this person can you see?", VISIBILITY_CHOICES, key, {columns: 2});
       if (key === "occluder") return answerButtons("What is hiding them?", OCCLUDER_CHOICES, key, {columns: 2});
       if (key === "hidden_amount") return answerButtons("About how much is hidden?", OCCLUSION_FRACTIONS, key, {columns: 2});
+      if (key === "footpoint_review") {
+        const review = state.footpoint_reviews[person.annotation_uuid];
+        return `<section class="nwQuestionCard" data-nw-question="footpoint_review"><span class="nwQuestionLabel">ONE SHORT QUESTION</span><h3>Is this roughly where their feet touch the ground?</h3><p class="nwQuestionHint">The suggested point starts at the visible-box bottom centre. Choose Move it when the feet are visible elsewhere. Hidden-foot estimates remain adjustable and carry high uncertainty.</p><div class="nwChoices nwColumns1"><button type="button" data-nw-answer-key="footpoint_review" data-nw-answer-value="YES">Yes</button><button type="button" data-nw-answer-key="footpoint_review" data-nw-answer-value="MOVE_IT">Move it</button><button type="button" data-nw-answer-key="footpoint_review" data-nw-answer-value="FEET_NOT_VISIBLE">Feet not visible</button><button type="button" data-nw-answer-key="footpoint_review" data-nw-answer-value="CANNOT_TELL">Cannot tell</button></div>${review?.estimated ? '<p class="nwEstimatedNotice">Estimated because the feet are not visible</p><button id="nwAdjustFootpoint" type="button">Adjust estimate</button>' : ""}</section>`;
+      }
       if (key === "footpoint") return `<section class="nwQuestionCard" data-nw-question="footpoint"><span class="nwQuestionLabel">ONE SHORT QUESTION</span><h3>Where do their feet touch the ground?</h3><p class="nwQuestionHint">Choose the button, then click the image. You can zoom first.</p><button id="nwPlaceFootpoint" class="nwPrimary" type="button">Place the foot point</button></section>`;
       if (key === "foot_uncertainty") return answerButtons("How sure are you about that foot position?", FOOT_UNCERTAINTY, key, {columns: 1});
       if (key === "pitch") return answerButtons("Are their feet inside the playing field?", PITCH_CHOICES, key, {columns: 1});
@@ -355,7 +396,7 @@
       if (state.step === 1) {
         const objects = dense ? annotation.visible_masks : annotation.player_instances;
         const label = dense ? "visible shapes" : "people";
-        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3><p>${dense ? "Trace only the part of each person you can actually see. Do not draw through someone in front." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwScopeNote">Only label the middle frame. Previous and Next are for reference.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button><button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the highlighted area." : "Draw one box around each visible person in the highlighted area.");
+        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3><p>${dense ? "Trace only the part of each person you can actually see. Do not draw through someone in front." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle frame only. Nearby frames are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button><button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the highlighted area." : "Draw one box around each visible person in the highlighted area.");
       }
       if (state.step === 2) {
         const label = this.host.objectIndex(state.current_object_uuid) + 1;
@@ -526,6 +567,33 @@
           }
         } else if (key === "occluder") selected.occlusion_type = rawValue;
         else if (key === "hidden_amount") selected.occlusion_fraction = Number(rawValue);
+        else if (key === "footpoint_review") {
+          if (rawValue === "MOVE_IT") {
+            draftState.pending_footpoint_decision = "MOVE_IT";
+            this.host.setTool("footpoint");
+            return;
+          }
+          if (rawValue === "YES") {
+            const box = selected.visible_body_box;
+            selected.footpoint = {x: (box.x1 + box.x2) / 2, y: box.y2};
+            selected.footpoint_uncertainty_pixels = 3;
+            draftState.footpoint_reviews[selected.annotation_uuid] = {
+              decision: "YES",
+              estimated: false,
+              adjusted: false,
+            };
+          } else {
+            this.host.estimateHiddenFootpoint(selected);
+            draftState.footpoint_reviews[selected.annotation_uuid] = {
+              decision: rawValue,
+              estimated: true,
+              adjusted: false,
+            };
+          }
+          if (!draftState.footpoint_placed_uuids.includes(selected.annotation_uuid)) {
+            draftState.footpoint_placed_uuids.push(selected.annotation_uuid);
+          }
+        }
         else if (key === "foot_uncertainty") selected.footpoint_uncertainty_pixels = Number(rawValue);
         else if (key === "pitch") selected.pitch_state = rawValue;
         else if (key === "edge") {
@@ -754,6 +822,7 @@
       one("#nwQuestionBack", () => this.mutate((state) => { state.question_index = Math.max(0, state.question_index - 1); }));
       one("#nwDeleteObject", this.host.removeSelected);
       one("#nwPlaceFootpoint", () => this.host.setTool("footpoint"));
+      one("#nwAdjustFootpoint", () => this.host.setTool("footpoint"));
       one("#nwPlaceBall", () => this.host.setTool("ball"));
       one("#nwDrawBallTrail", () => this.host.setTool("trail"));
       one("#nwSkipBallTrail", () => this.finishCurrentFrame());
@@ -835,6 +904,18 @@
         if (ids.some((uuid) => !state.completed_object_uuids.includes(uuid))) throw new Error("Finish the short questions for every marked person.");
         if (state.candidate_answered_uuids.length !== this.candidates().length) throw new Error("Check every machine box before saving.");
         if (task === "detection_gold_player_static" && !state.failure_reviewed) throw new Error("Answer the final machine-difficulty question.");
+        if (this.host.incrementalR3?.() === true) {
+          const binding = this.host.authoritativeBinding();
+          if (state.primary_canvas_frame_sequence !== binding.frame_sequence
+            || state.primary_canvas_source_frame_sha256 !== binding.source_frame_sha256
+            || state.candidate_queue_binding_hash !== binding.candidate_queue_binding_hash) {
+            throw new Error("The editable canvas or candidate queue is not bound to the authoritative middle frame.");
+          }
+          if (task === "detection_gold_player_static"
+            && ids.some((uuid) => !state.footpoint_reviews?.[uuid])) {
+            throw new Error("Confirm or correct the proposed footpoint for every marked person.");
+          }
+        }
       }
       if (["detection_gold_temporal_player", "detection_gold_football_burst"].includes(task)) {
         if (state.frame_answered_sequences.length !== this.host.annotation().frames.length) throw new Error("Check every frame before saving.");

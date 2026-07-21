@@ -59,6 +59,29 @@ body.detectionGoldPresentation {
   min-width: 0;
 }
 
+.dgTrancheControls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dgTrancheControls label,
+.dgTrancheControls span { font-size: 11px; color: #b8c8c3; white-space: nowrap; }
+.dgTrancheControls select { min-width: 150px; max-width: 220px; }
+
+.dgStaticFrameInstruction {
+  margin: 7px 0 0 !important;
+  padding: 7px 9px;
+  border-left: 3px solid #77dd9c;
+  color: #e8fff0 !important;
+  background: #142a1c;
+  font-weight: 700;
+}
+
+.dgTimelineRow.isStaticLocked button,
+.dgTimelineRow.isStaticLocked input { opacity: 0.45; cursor: not-allowed; }
+
 .dgServerState {
   color: #9eb0ac;
   font-size: 11px;
@@ -1333,6 +1356,7 @@ body.detectionGoldNovice {
 }
 
 body.detectionGoldNovice .detectionGoldShell {
+  width: 100%;
   min-height: 100vh;
   height: auto;
   grid-template-rows: auto auto;
@@ -1539,6 +1563,15 @@ body.detectionGoldNovice .dgAnnotationColumn {
   line-height: 1.45;
 }
 
+.nwVisibleBodyRule,
+.nwEstimatedNotice {
+  padding: 8px 10px;
+  border-left: 3px solid #f4c65d;
+  color: #ffe8a8 !important;
+  background: #261f0f;
+  font-weight: 700;
+}
+
 .nwChoices {
   display: grid;
   gap: 8px;
@@ -1687,6 +1720,21 @@ body.detectionGoldNovice .dgAnnotationColumn {
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
+
+.dgEstimatedFootpointLabel {
+  fill: #ffe092;
+  font-size: 12px;
+  font-weight: 750;
+  paint-order: stroke;
+  stroke: #090c0b;
+  stroke-width: 4px;
+  pointer-events: none;
+}
+
+body.detectionGoldIncremental .dgHeaderActions,
+body.detectionGoldIncremental .dgTrancheControls { flex-wrap: wrap; }
+body.detectionGoldIncremental .dgTrancheControls button,
+body.detectionGoldIncremental .dgTrancheControls select { min-height: 36px; }
 
 .nwCandidateReviewLinks > div {
   display: grid;

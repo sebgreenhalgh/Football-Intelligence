@@ -363,6 +363,12 @@
         <div class="progressTrack"><span id="dgProgressBar"></span></div>
       </div>
       <div class="dgHeaderActions">
+        <div id="dgTrancheControls" class="dgTrancheControls isHidden">
+          <label for="dgTrancheSelect">Gold tranche</label>
+          <select id="dgTrancheSelect" aria-label="Gold tranche"></select>
+          <span id="dgTrancheStatus">0/0 saved</span>
+          <button id="dgCompleteTranche" type="button" disabled>Complete tranche</button>
+        </div>
         <button id="dgPrevCase" class="iconButton" type="button" title="Previous case" aria-label="Previous case">&#8592;</button>
         <button id="dgNextCase" class="iconButton" type="button" title="Next unresolved case" aria-label="Next unresolved case">&#8594;</button>
         <span id="dgSaveState" class="saveState" role="status">Draft</span>
@@ -378,6 +384,7 @@
             <span id="dgModuleEyebrow" class="eyebrow">PLAYER INSTANCE</span>
             <h2 id="dgCaseTitle">Case</h2>
             <p id="dgQuestion" class="primaryQuestion"></p>
+            <p id="dgStaticFrameInstruction" class="dgStaticFrameInstruction isHidden">Label the middle frame only. Nearby frames are reference images.</p>
             <span id="dgScopeBadge" class="dgScopeBadge isHidden">ANNOTATE FOCAL ROI ONLY</span>
           </div>
           <div class="viewSwitch" role="group" aria-label="Evidence view">
@@ -434,7 +441,7 @@
               <div id="dgEvidenceBlocker" class="evidenceBlocker isHidden" role="alert">Evidence unavailable</div>
             </div>
           </div>
-          <div class="dgTimelineRow">
+          <div id="dgTimelineRow" class="dgTimelineRow">
             <button id="dgPreviousFrame" type="button" aria-label="Previous frame">&#8592;</button>
             <input id="dgTimeline" type="range" min="0" max="0" value="0" aria-label="Frame stepper">
             <button id="dgNextFrame" type="button" aria-label="Next frame">&#8594;</button>

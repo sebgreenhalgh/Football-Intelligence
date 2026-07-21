@@ -49,6 +49,10 @@
     activeSeconds: 0,
     lastActiveTick: Date.now(),
     novice: false,
+    incrementalR3: false,
+    tranches: {},
+    trancheOrder: [],
+    currentTrancheId: null,
     wizard: null,
     lastCaseId: null,
     positionsByCase: {},
@@ -56,12 +60,41 @@
 
   const byId = (id) => document.getElementById(id);
   const clone = (value) => JSON.parse(JSON.stringify(value));
-  const currentCase = () => runtime.manifest.cases[runtime.activeIndex];
+  const activeCases = () => {
+    if (!runtime.incrementalR3) return runtime.manifest.cases;
+    const caseIds = new Set(runtime.tranches[runtime.currentTrancheId]?.case_ids || []);
+    return runtime.manifest.cases.filter((caseData) => caseIds.has(caseData.case_id));
+  };
+  const currentCase = () => activeCases()[runtime.activeIndex];
   const records = () => currentCase()?.visible_metadata?.frame_records || [];
   const currentRecord = () => records()[runtime.frameIndex] || records()[0];
   const moduleInfo = () => MODULES[currentCase()?.task_type] || {label: "Unknown", eyebrow: "REVIEW"};
   const evidenceUrl = (relativePath) =>
     `/evidence/${encodeURIComponent(currentCase().case_id)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+
+  function staticFrameLocked(caseData = currentCase()) {
+    return runtime.incrementalR3 && ["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData?.task_type);
+  }
+
+  function authoritativeBinding(caseData = currentCase()) {
+    return runtime.uiConfig?.question_contract?.static_authoritative_bindings?.[caseData?.case_id] || null;
+  }
+
+  function authoritativeFrameIndex(caseData = currentCase()) {
+    if (!staticFrameLocked(caseData)) return runtime.wizard?.initialFrameIndex(caseData) || 0;
+    const binding = authoritativeBinding(caseData);
+    const index = (caseData.visible_metadata.frame_records || []).findIndex((row) =>
+      Number(row.frame_sequence) === Number(binding?.frame_sequence)
+      && row.source_frame_sha256 === binding?.source_frame_sha256
+    );
+    if (index < 0) throw new Error("Authoritative static frame is not present in the immutable case evidence.");
+    return index;
+  }
+
+  function authoritativeCandidateUuids(caseData = currentCase()) {
+    if (!staticFrameLocked(caseData)) return [...(caseData.visible_metadata.candidate_uuids || [])];
+    return [...(authoritativeBinding(caseData)?.candidate_uuids || [])];
+  }
 
   function uid(prefix) {
     return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID()}`;
@@ -69,11 +102,12 @@
 
   function openDatabase() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(`fi_detection_gold_${runtime.manifest.review_id}`, 1);
+      const request = indexedDB.open(`fi_detection_gold_${runtime.manifest.review_id}`, runtime.incrementalR3 ? 2 : 1);
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains("outbox")) database.createObjectStore("outbox", {keyPath: "client_event_id"});
         if (!database.objectStoreNames.contains("drafts")) database.createObjectStore("drafts", {keyPath: "case_id"});
+        if (runtime.incrementalR3 && !database.objectStoreNames.contains("session")) database.createObjectStore("session", {keyPath: "key"});
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -265,6 +299,16 @@
       undo_history: clone(runtime.history.filter((row) => row.case_id === caseData.case_id).slice(-20)),
       updated_at: new Date().toISOString(),
     });
+    if (runtime.incrementalR3) {
+      await dbPut("session", {
+        key: "navigation",
+        current_tranche_id: runtime.currentTrancheId,
+        case_id: caseData.case_id,
+        frame_index: runtime.frameIndex,
+        wizard_step: runtime.wizard?.state()?.step || 1,
+        updated_at: new Date().toISOString(),
+      });
+    }
     setSaveState("Draft stored locally", false);
   }
 
@@ -491,6 +535,15 @@
           r: 4,
           class: `dgFootpoint ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""}`,
         }));
+        if (novicePolicy?.estimatedFootpointUuids?.includes(item.annotation_uuid)) {
+          const label = makeSvg("text", {
+            x: point.x + 8,
+            y: Math.max(14, point.y - 8),
+            class: "dgEstimatedFootpointLabel",
+          });
+          label.textContent = "Estimated because the feet are not visible";
+          svg.appendChild(label);
+        }
       }
     }
     for (const [index, item] of (annotation.visible_masks || []).entries()) {
@@ -607,7 +660,7 @@
       annotation_uuid: uid("person"),
       visible_body_box: box,
       footpoint: {x: (box.x1 + box.x2) / 2, y: box.y2},
-      footpoint_uncertainty_pixels: 8,
+      footpoint_uncertainty_pixels: runtime.incrementalR3 ? 3 : 8,
       visibility_state: "UNRESOLVED",
       occlusion_fraction: 0,
       occlusion_type: "UNKNOWN",
@@ -617,6 +670,21 @@
       pitch_state: "BOUNDARY_UNCERTAIN",
       coarse_role: "UNKNOWN",
     };
+  }
+
+  function estimateHiddenFootpoint(person) {
+    const binding = draft().source_binding;
+    const box = person.visible_body_box;
+    const visibleHeight = Math.max(2, Number(box.y2) - Number(box.y1));
+    person.footpoint = {
+      x: (Number(box.x1) + Number(box.x2)) / 2,
+      y: Math.min(Number(binding.image_height), Number(box.y2) + Math.max(4, visibleHeight * 0.35)),
+    };
+    if (Math.abs(person.footpoint.y - Number(box.y2)) < 0.5) {
+      person.footpoint.y = Math.max(0, Number(box.y2) - Math.max(4, visibleHeight * 0.2));
+    }
+    person.footpoint_uncertainty_pixels = Math.max(20, Math.round(visibleHeight * 0.5));
+    return clone(person.footpoint);
   }
 
   function acceptSelectedPerson(boxOverride = null) {
@@ -1058,6 +1126,7 @@
       wizardState.footpoint_placed_uuids = wizardState.footpoint_placed_uuids.filter(
         (uuid) => uuid !== selected.annotation_uuid
       );
+      if (wizardState.footpoint_reviews) delete wizardState.footpoint_reviews[selected.annotation_uuid];
       wizardState.current_object_uuid = null;
       wizardState.question_index = 0;
       wizardState.step = 1;
@@ -1488,7 +1557,12 @@
       const label = document.createElement("span");
       label.textContent = String(index + 1);
       button.append(image, label);
-      button.addEventListener("click", () => setFrame(index));
+      if (staticFrameLocked()) {
+        button.disabled = true;
+        button.title = index === authoritativeFrameIndex() ? "Authoritative middle frame" : "Reference image only";
+      } else {
+        button.addEventListener("click", () => setFrame(index));
+      }
       container.appendChild(button);
     });
     container.classList.toggle("isCompact", records().length <= 3);
@@ -1496,20 +1570,39 @@
 
   function renderProgress() {
     const counts = runtime.state.counts || {};
-    const reviewed = counts.reviewed || Object.keys(runtime.state.annotations || {}).length;
-    byId("dgCaseProgress").textContent = `Case ${runtime.activeIndex + 1} of ${runtime.manifest.cases.length}`;
+    const allReviewed = counts.reviewed ?? Object.keys(runtime.state.annotations || {}).length;
+    const cases = activeCases();
+    const tranche = counts.tranches?.[runtime.currentTrancheId];
+    const reviewed = runtime.incrementalR3
+      ? (tranche?.reviewed ?? cases.filter((row) => runtime.state.annotations?.[row.case_id]).length)
+      : allReviewed;
+    byId("dgCaseProgress").textContent = runtime.incrementalR3
+      ? `Case ${runtime.activeIndex + 1} of ${cases.length} in ${runtime.tranches[runtime.currentTrancheId]?.label || runtime.currentTrancheId}`
+      : `Case ${runtime.activeIndex + 1} of ${cases.length}`;
     byId("dgModuleProgress").textContent = `${moduleInfo().label} | ${reviewed} saved`;
-    byId("dgProgressBar").style.width = `${(reviewed / runtime.manifest.cases.length) * 100}%`;
-    byId("dgComplete").disabled = Boolean(runtime.state.completed) || reviewed !== runtime.manifest.cases.length || runtime.outbox.length > 0;
+    byId("dgProgressBar").style.width = `${cases.length ? (reviewed / cases.length) * 100 : 0}%`;
+    if (runtime.incrementalR3) {
+      const completed = Boolean(runtime.state.tranche_completions?.[runtime.currentTrancheId]);
+      byId("dgCompleteTranche").disabled = completed || reviewed !== cases.length || runtime.outbox.length > 0;
+      byId("dgTrancheStatus").textContent = completed ? "Tranche completed" : `${reviewed}/${cases.length} saved`;
+    }
+    const allTranchesComplete = !runtime.incrementalR3
+      || runtime.trancheOrder.every((trancheId) => runtime.state.tranche_completions?.[trancheId]);
+    byId("dgComplete").disabled = Boolean(runtime.state.completed)
+      || allReviewed !== runtime.manifest.cases.length
+      || runtime.outbox.length > 0
+      || !allTranchesComplete;
   }
 
   function setFrameSilently(index) {
-    runtime.frameIndex = Math.max(0, Math.min(index, records().length - 1));
+    runtime.frameIndex = staticFrameLocked()
+      ? authoritativeFrameIndex()
+      : Math.max(0, Math.min(index, records().length - 1));
     if (byId("dgTimeline")) byId("dgTimeline").value = String(runtime.frameIndex);
   }
 
   function currentFrameCandidates(className = null) {
-    const required = new Set(currentCase().visible_metadata.candidate_uuids || []);
+    const required = new Set(authoritativeCandidateUuids());
     return (currentRecord()?.candidates || [])
       .filter((candidate) => (!className || candidate.class_name === className)
         && (!required.size || required.has(candidate.diagnostic_uuid)))
@@ -1552,12 +1645,16 @@
       runtime.maskPoints = [];
       runtime.redrawVisibleObjectUuid = null;
       const savedPosition = runtime.positionsByCase[caseData.case_id];
-      runtime.frameIndex = savedPosition?.frame_index ?? (runtime.wizard?.initialFrameIndex(caseData) || 0);
+      runtime.frameIndex = staticFrameLocked(caseData)
+        ? authoritativeFrameIndex(caseData)
+        : (savedPosition?.frame_index ?? (runtime.wizard?.initialFrameIndex(caseData) || 0));
       runtime.view = savedPosition?.view || (runtime.novice && caseData.task_type === "detection_gold_football_burst" ? "panorama" : "focal");
       byId("dgFocalView").classList.toggle("active", runtime.view === "focal");
       byId("dgPanoramaView").classList.toggle("active", runtime.view === "panorama");
     }
-    runtime.frameIndex = Math.min(runtime.frameIndex, Math.max(0, records().length - 1));
+    runtime.frameIndex = staticFrameLocked(caseData)
+      ? authoritativeFrameIndex(caseData)
+      : Math.min(runtime.frameIndex, Math.max(0, records().length - 1));
     if (runtime.novice) runtime.wizard.syncCandidate();
     const info = runtime.novice ? NOVICE_MODULES[caseData.task_type] : moduleInfo();
     runtime.lastCaseId = caseData.case_id;
@@ -1567,6 +1664,9 @@
     byId("dgQuestion").textContent = runtime.novice ? info.question : caseData.concise_question;
     byId("dgScopeBadge").textContent = runtime.novice ? "MARK THE HIGHLIGHTED AREA ONLY" : "ANNOTATE FOCAL ROI ONLY";
     byId("dgScopeBadge").classList.toggle("isHidden", !focalScopeApplies());
+    byId("dgStaticFrameInstruction").classList.toggle("isHidden", !staticFrameLocked(caseData));
+    byId("dgTimelineRow").classList.toggle("isStaticLocked", staticFrameLocked(caseData));
+    for (const id of ["dgPreviousFrame", "dgNextFrame", "dgTimeline", "dgPlay"]) byId(id).disabled = staticFrameLocked(caseData);
     byId("dgTimeline").max = String(Math.max(0, records().length - 1));
     byId("dgTimeline").value = String(runtime.frameIndex);
     byId("dgFrameReadout").textContent = `Frame ${currentRecord().frame_sequence} | ${currentRecord().timestamp_seconds.toFixed(3)}s`;
@@ -1580,6 +1680,11 @@
   }
 
   function setFrame(index) {
+    if (staticFrameLocked()) {
+      setFrameSilently(authoritativeFrameIndex());
+      setSaveState("Reference frames are view-only; the middle frame remains locked.", false);
+      return;
+    }
     setFrameSilently(index);
     runtime.selectedCandidate = null;
     runtime.redrawVisibleObjectUuid = null;
@@ -1635,9 +1740,19 @@
     validatePoint(annotation.footpoint, "Pitch footpoint");
 
     if (["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData.task_type)) {
+      if (staticFrameLocked(caseData)) {
+        const binding = authoritativeBinding(caseData);
+        const row = currentRecord();
+        if (runtime.frameIndex !== authoritativeFrameIndex(caseData)
+          || Number(row.frame_sequence) !== Number(binding.frame_sequence)
+          || row.source_frame_sha256 !== binding.source_frame_sha256
+          || annotation.source_binding.source_frame_sha256 !== binding.source_frame_sha256) {
+          throw new Error("Static annotation is not bound to the authoritative middle frame.");
+        }
+      }
       const objects = annotationObjects(annotation);
       const objectIds = new Set(objects.map((item) => item.annotation_uuid));
-      const required = new Set(caseData.visible_metadata.candidate_uuids || []);
+      const required = new Set(authoritativeCandidateUuids(caseData));
       const relations = annotation.candidate_relations || [];
       const actual = relations.map((row) => row.candidate_uuid);
       if (actual.length !== new Set(actual).size || actual.length !== required.size || actual.some((uuid) => !required.has(uuid))) {
@@ -1755,10 +1870,11 @@
 
   function goNextUnresolved() {
     const annotations = runtime.state.annotations || {};
+    const cases = activeCases();
     const start = runtime.activeIndex;
-    for (let offset = 1; offset <= runtime.manifest.cases.length; offset += 1) {
-      const index = (start + offset) % runtime.manifest.cases.length;
-      if (!annotations[runtime.manifest.cases[index].case_id]) {
+    for (let offset = 1; offset <= cases.length; offset += 1) {
+      const index = (start + offset) % cases.length;
+      if (!annotations[cases[index].case_id]) {
         runtime.activeIndex = index;
         runtime.frameIndex = 0;
         runtime.view = "focal";
@@ -1768,6 +1884,25 @@
         return;
       }
     }
+    renderCase();
+  }
+
+  async function switchTranche(trancheId) {
+    if (!runtime.incrementalR3 || !runtime.tranches[trancheId]) return;
+    runtime.currentTrancheId = trancheId;
+    const annotations = runtime.state.annotations || {};
+    runtime.activeIndex = Math.max(0, activeCases().findIndex((caseData) => !annotations[caseData.case_id]));
+    runtime.frameIndex = 0;
+    runtime.view = "focal";
+    runtime.lastCaseId = null;
+    await dbPut("session", {
+      key: "navigation",
+      current_tranche_id: trancheId,
+      case_id: currentCase()?.case_id || null,
+      frame_index: 0,
+      wizard_step: runtime.wizard?.state()?.step || 1,
+      updated_at: new Date().toISOString(),
+    });
     renderCase();
   }
 
@@ -1826,6 +1961,34 @@
     } catch (error) { showError(error.message); }
   }
 
+  async function completeCurrentTranche() {
+    clearError();
+    try {
+      await flushOutbox();
+      const caseIds = new Set(runtime.tranches[runtime.currentTrancheId].case_ids);
+      const unresolvedDrafts = (await dbAll("drafts")).filter((row) => caseIds.has(row.case_id));
+      const response = await runtime.api("/api/review/detection-gold-tranche-complete", {
+        method: "POST",
+        body: JSON.stringify({
+          tranche_id: runtime.currentTrancheId,
+          client_event_id: uid("complete-tranche"),
+          idempotency_key: `${runtime.manifest.review_id}:complete-tranche:${runtime.currentTrancheId}`,
+          expected_server_state_hash: runtime.serverStateHash,
+          pending_outbox_events: runtime.outbox.length,
+          evidence_blocker_count: runtime.evidenceBlocked ? 1 : 0,
+          unresolved_draft_count: unresolvedDrafts.length,
+          unresolved_divergence: false,
+          elapsed_active_seconds: activeSeconds(),
+        }),
+      });
+      runtime.state = response;
+      runtime.serverStateHash = response.ack.server_state_hash;
+      runtime.serverSequence = response.ack.server_event_sequence;
+      setSaveState(`${runtime.tranches[runtime.currentTrancheId].label} completed`, false);
+      renderProgress();
+    } catch (error) { showError(error.message); }
+  }
+
   function bind() {
     byId("dgPrevCase").addEventListener("click", () => { runtime.activeIndex = Math.max(0, runtime.activeIndex - 1); runtime.frameIndex = 0; runtime.view = "focal"; byId("dgFocalView").classList.add("active"); byId("dgPanoramaView").classList.remove("active"); renderCase(); });
     byId("dgNextCase").addEventListener("click", goNextUnresolved);
@@ -1839,8 +2002,11 @@
       setTool(button.dataset.dgTool);
     }));
     document.querySelectorAll("[data-dg-module]").forEach((button) => button.addEventListener("click", () => {
-      const index = runtime.manifest.cases.findIndex((caseData) => caseData.task_type === button.dataset.dgModule && !(runtime.state.annotations || {})[caseData.case_id]);
-      runtime.activeIndex = index >= 0 ? index : runtime.manifest.cases.findIndex((caseData) => caseData.task_type === button.dataset.dgModule);
+      const cases = activeCases();
+      const index = cases.findIndex((caseData) => caseData.task_type === button.dataset.dgModule && !(runtime.state.annotations || {})[caseData.case_id]);
+      const fallback = cases.findIndex((caseData) => caseData.task_type === button.dataset.dgModule);
+      if (index < 0 && fallback < 0) return;
+      runtime.activeIndex = index >= 0 ? index : fallback;
       runtime.frameIndex = 0; runtime.view = "focal"; byId("dgFocalView").classList.add("active"); byId("dgPanoramaView").classList.remove("active"); renderCase();
     }));
     byId("dgOverlay").addEventListener("click", handleOverlayClick);
@@ -1872,6 +2038,8 @@
     byId("dgSaveCase").addEventListener("click", enqueueSave);
     byId("dgReopenCase").addEventListener("click", reopenCase);
     byId("dgComplete").addEventListener("click", completePilot);
+    byId("dgCompleteTranche").addEventListener("click", completeCurrentTranche);
+    byId("dgTrancheSelect").addEventListener("change", (event) => switchTranche(event.target.value));
     byId("dgPlay").addEventListener("click", () => {
       runtime.playing = !runtime.playing;
       byId("dgPlay").textContent = runtime.playing ? "Pause" : "Play";
@@ -1897,10 +2065,36 @@
     runtime.state = state;
     runtime.api = api;
     runtime.novice = uiConfig.question_contract.novice_guided_wizard === true;
+    runtime.incrementalR3 = uiConfig.question_contract.incremental_gold_tranches === true;
+    runtime.tranches = runtime.incrementalR3 ? (uiConfig.question_contract.gold_tranches || {}) : {};
+    runtime.trancheOrder = runtime.incrementalR3 ? (uiConfig.question_contract.tranche_order || []) : [];
+    runtime.currentTrancheId = runtime.incrementalR3
+      ? (state.active_tranche_id || uiConfig.question_contract.default_tranche_id || runtime.trancheOrder[0])
+      : null;
     document.body.classList.toggle("detectionGoldNovice", runtime.novice);
+    document.body.classList.toggle("detectionGoldIncremental", runtime.incrementalR3);
+    byId("dgTrancheControls").classList.toggle("isHidden", !runtime.incrementalR3);
+    if (runtime.incrementalR3) {
+      const select = byId("dgTrancheSelect");
+      select.replaceChildren();
+      for (const trancheId of runtime.trancheOrder) {
+        const option = document.createElement("option");
+        option.value = trancheId;
+        option.textContent = runtime.tranches[trancheId].label;
+        option.selected = trancheId === runtime.currentTrancheId;
+        select.appendChild(option);
+      }
+    }
     runtime.serverStateHash = state.server_state_hash || "";
     runtime.serverSequence = Number(state.event_sequence || 0);
     runtime.db = await openDatabase();
+    if (runtime.incrementalR3) {
+      const navigation = (await dbAll("session")).find((row) => row.key === "navigation");
+      if (navigation?.current_tranche_id && runtime.tranches[navigation.current_tranche_id]) {
+        runtime.currentTrancheId = navigation.current_tranche_id;
+        byId("dgTrancheSelect").value = runtime.currentTrancheId;
+      }
+    }
     if (runtime.novice) {
       if (!window.DetectionGoldNoviceWizard) throw new Error("Novice wizard module failed to load");
       runtime.wizard = window.DetectionGoldNoviceWizard.create({
@@ -1934,6 +2128,12 @@
         maskPointCount: () => runtime.maskPoints.length,
         save: enqueueSave,
         reviewId: () => runtime.manifest.review_id,
+        incrementalR3: () => runtime.incrementalR3,
+        authoritativeFrameIndex,
+        authoritativeBinding,
+        authoritativeCandidateUuids,
+        currentTrancheId: () => runtime.currentTrancheId,
+        estimateHiddenFootpoint,
       });
     }
     const storedDrafts = await dbAll("drafts");
@@ -1959,7 +2159,8 @@
     runtime.state.counts = recovery.completion_eligibility;
     runtime.serverStateHash = recovery.server_state_hash;
     runtime.serverSequence = recovery.server_event_sequence;
-    runtime.activeIndex = Math.max(0, manifest.cases.findIndex((caseData) => caseData.case_id === (state.resume_case_id || recovery.materialized_state.last_viewed_case_id)));
+    const resumeId = state.resume_case_id || recovery.materialized_state.last_viewed_case_id;
+    runtime.activeIndex = Math.max(0, activeCases().findIndex((caseData) => caseData.case_id === resumeId));
     bind();
     updateServerState();
     await flushOutbox();
