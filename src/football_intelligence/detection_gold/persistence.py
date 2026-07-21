@@ -31,6 +31,8 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         state["annotations"] = {}
         state["annotation_hashes"] = {}
         state["persistence_mode"] = "detection_gold_pilot_v1"
+        if self.ui_config.question_contract.get("novice_guided_wizard") is True:
+            state["wizard_states"] = {}
         return state
 
     @property
@@ -157,17 +159,21 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 if any(available[value].get("class_name") != "person" for value in candidate_uuids):
                     raise ValueError("temporal player observations may bind only person candidates")
 
-    @staticmethod
-    def _validate_full_strip_gates(case: Any, annotation: dict[str, Any]) -> None:
+    def _validate_full_strip_gates(self, case: Any, annotation: dict[str, Any]) -> None:
+        unresolved_allowed = self.ui_config.question_contract.get("reviewed_unresolved_states_allowed") is True
         if case.task_type == "detection_gold_temporal_player":
             if annotation.get("contact_strip_reviewed") is not True:
                 raise ValueError("the complete temporal contact strip must be reviewed")
-            if any(frame.get("state") == "UNRESOLVED" for frame in annotation.get("frames", [])):
+            if not unresolved_allowed and any(
+                frame.get("state") == "UNRESOLVED" for frame in annotation.get("frames", [])
+            ):
                 raise ValueError("all temporal frames must be resolved before saving")
         if case.task_type == "detection_gold_football_burst":
             if annotation.get("full_contact_strip_reviewed") is not True:
                 raise ValueError("the complete football contact strip must be reviewed")
-            if any(frame.get("state") == "UNRESOLVED" for frame in annotation.get("frames", [])):
+            if not unresolved_allowed and any(
+                frame.get("state") == "UNRESOLVED" for frame in annotation.get("frames", [])
+            ):
                 raise ValueError("all football frames must be resolved before saving")
 
     @staticmethod
@@ -259,6 +265,15 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         self._validate_candidate_bindings(case, annotation)
         self._validate_original_pixel_geometry(annotation)
         self._validate_full_strip_gates(case, annotation)
+        wizard_state = payload.get("wizard_state")
+        if self.ui_config.question_contract.get("novice_guided_wizard") is True:
+            if not isinstance(wizard_state, dict):
+                raise ValueError("novice-guided saves require wizard_state")
+            if wizard_state.get("case_id") != case_id:
+                raise ValueError("wizard state case binding mismatch")
+            if wizard_state.get("schema_version") != "football_intelligence.m5_5g1a_r2.wizard_state.v1":
+                raise ValueError("unsupported novice wizard-state schema")
+            state.setdefault("wizard_states", {})[case_id] = copy.deepcopy(wizard_state)
         annotation_hash = stable_hash(annotation)
         prior = state.setdefault("annotations", {}).get(case_id)
         state["annotations"][case_id] = annotation
@@ -282,6 +297,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 "idempotency_key": idempotency_key,
                 "annotation": annotation,
                 "annotation_hash": annotation_hash,
+                "wizard_state": copy.deepcopy(wizard_state) if isinstance(wizard_state, dict) else None,
                 "expected_server_state_hash": expected_hash,
                 "prior_annotation_hash": stable_hash(prior) if isinstance(prior, dict) else None,
             },
@@ -383,9 +399,13 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 state["annotation_hashes"][case_id] = event.get("annotation_hash")
                 state["decisions"][case_id] = "ANNOTATED"
                 state["structured_reviews"][case_id] = annotation
+                if isinstance(event.get("wizard_state"), dict):
+                    state.setdefault("wizard_states", {})[case_id] = copy.deepcopy(event["wizard_state"])
                 state["last_viewed_case_id"] = case_id
             elif event_type == "DETECTION_CASE_REOPENED" and case_id:
-                for key in ("annotations", "annotation_hashes", "decisions", "structured_reviews"):
+                for key in ("annotations", "annotation_hashes", "decisions", "structured_reviews", "wizard_states"):
+                    if key not in state:
+                        continue
                     state[key].pop(case_id, None)
             elif event_type == "REVIEW_COMPLETED":
                 state["completed"] = True
@@ -409,7 +429,14 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         client_ids = [str(event.get("client_event_id")) for event in events]
         idempotency_keys = [str(event.get("idempotency_key")) for event in events]
         materialized = self._materialize_events(events)
-        comparable_fields = ("annotations", "annotation_hashes", "decisions", "structured_reviews", "completed")
+        comparable_fields = (
+            "annotations",
+            "annotation_hashes",
+            "decisions",
+            "structured_reviews",
+            "wizard_states",
+            "completed",
+        )
         replay_matches = all(materialized.get(key) == state.get(key) for key in comparable_fields)
         audit = {
             "event_count": len(events),

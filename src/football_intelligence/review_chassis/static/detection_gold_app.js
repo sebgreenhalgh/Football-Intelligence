@@ -8,6 +8,13 @@
     detection_gold_pitch_boundary: {label: "Pitch / boundary", eyebrow: "PITCH AND ROLE"},
     detection_gold_football_burst: {label: "Football burst", eyebrow: "FOOTBALL VISIBILITY"},
   };
+  const NOVICE_MODULES = {
+    detection_gold_player_static: {label: "Visible people", eyebrow: "MARK PEOPLE", question: "Find and mark every visible person in the highlighted area."},
+    detection_gold_dense_region: {label: "Crowded people", eyebrow: "TRACE PEOPLE", question: "Trace the visible shape of each person in this crowded area."},
+    detection_gold_temporal_player: {label: "Person over time", eyebrow: "CHECK EACH FRAME", question: "Follow the same person through this short set of frames."},
+    detection_gold_pitch_boundary: {label: "Playing-field position", eyebrow: "MARK THE FEET", question: "Decide where this person's feet are relative to the playing field."},
+    detection_gold_football_burst: {label: "Football over time", eyebrow: "FIND THE FOOTBALL", question: "Check the full image for the football in each frame."},
+  };
   const LAYERS = ["RAW", "CONFIDENCE", "PRE_NMS", "POST_NMS", "FUSED"];
   const SVG_NS = "http://www.w3.org/2000/svg";
   const runtime = {
@@ -41,6 +48,10 @@
     serverSequence: 0,
     activeSeconds: 0,
     lastActiveTick: Date.now(),
+    novice: false,
+    wizard: null,
+    lastCaseId: null,
+    positionsByCase: {},
   };
 
   const byId = (id) => document.getElementById(id);
@@ -135,6 +146,22 @@
     return false;
   }
 
+  function setTool(tool) {
+    runtime.tool = tool;
+    runtime.redrawVisibleObjectUuid = null;
+    document.querySelectorAll("[data-dg-tool]").forEach((item) => {
+      item.classList.toggle("active", item.dataset.dgTool === tool);
+    });
+    const labels = {
+      box: "Draw the visible person on the image.",
+      footpoint: "Click where the feet touch the ground.",
+      mask: "Click around the visible outline, then finish the outline.",
+      ball: "Click the centre of the football.",
+      trail: "Drag from one end of the blur trail to the other.",
+    };
+    if (labels[tool]) setSaveState(labels[tool], false);
+  }
+
   function defaultAnnotation(caseData) {
     const binding = sourceBinding(caseData);
     const frameRows = caseData.visible_metadata.frame_records || [];
@@ -223,11 +250,19 @@
 
   async function persistDraft() {
     const caseData = currentCase();
+    runtime.positionsByCase[caseData.case_id] = {
+      frame_index: runtime.frameIndex,
+      view: runtime.view,
+      selected_candidate_uuid: runtime.selectedCandidate?.diagnostic_uuid || null,
+    };
     await dbPut("drafts", {
       case_id: caseData.case_id,
       annotation: draft(),
       geometry_drafts: clone(runtime.geometryDrafts[caseData.case_id] || {}),
       selected_annotation_uuid: runtime.selectedObjectByCase[caseData.case_id] || null,
+      wizard_state: runtime.wizard?.snapshot(caseData.case_id) || null,
+      position: clone(runtime.positionsByCase[caseData.case_id]),
+      undo_history: clone(runtime.history.filter((row) => row.case_id === caseData.case_id).slice(-20)),
       updated_at: new Date().toISOString(),
     });
     setSaveState("Draft stored locally", false);
@@ -238,6 +273,7 @@
       case_id: currentCase().case_id,
       annotation: clone(draft()),
       selected_annotation_uuid: runtime.selectedObjectByCase[currentCase().case_id] || null,
+      wizard_state: runtime.wizard?.snapshot(currentCase().case_id) || null,
     });
     if (runtime.history.length > 60) runtime.history.shift();
   }
@@ -246,6 +282,7 @@
     const previous = runtime.history.pop();
     if (!previous || previous.case_id !== currentCase().case_id) return;
     runtime.drafts[previous.case_id] = previous.annotation;
+    if (runtime.wizard && previous.wizard_state) runtime.wizard.replace(previous.case_id, previous.wizard_state);
     if (previous.selected_annotation_uuid) {
       runtime.selectedObjectByCase[previous.case_id] = previous.selected_annotation_uuid;
     } else {
@@ -362,31 +399,51 @@
     const enabled = new Set(
       [...document.querySelectorAll("[data-dg-layer]:checked")].map((element) => element.dataset.dgLayer)
     );
+    const novicePolicy = runtime.wizard?.overlayPolicy() || null;
     const row = currentRecord();
+    const noviceCandidateNodes = [];
+    let noviceCandidateRendered = false;
     for (const candidate of row?.candidates || []) {
-      if (!enabled.has(candidate.stage)) continue;
+      if (runtime.novice) {
+        if (!novicePolicy?.showMachine || candidate.diagnostic_uuid !== novicePolicy.candidateUuid) continue;
+        if (noviceCandidateRendered) continue;
+        noviceCandidateRendered = true;
+      } else if (!enabled.has(candidate.stage)) continue;
       const box = toViewBox(candidate.bbox_original_pixels);
       const rectangle = makeSvg("rect", {
         x: box.x1,
         y: box.y1,
         width: box.x2 - box.x1,
         height: box.y2 - box.y1,
-        class: `dgProposal dgLayer${candidate.stage} ${runtime.selectedCandidate?.diagnostic_uuid === candidate.diagnostic_uuid ? "selected" : ""}`,
+        class: `dgProposal dgLayer${candidate.stage} ${runtime.selectedCandidate?.diagnostic_uuid === candidate.diagnostic_uuid ? "selected" : ""} ${runtime.novice ? "dgNoviceCandidate" : ""}`,
         tabindex: 0,
       });
       rectangle.addEventListener("click", (event) => {
-        if (runtime.tool !== "select") return;
+        if (runtime.tool !== "select" || (runtime.novice && novicePolicy?.humanInteractive === false)) return;
         event.stopPropagation();
         runtime.selectedCandidate = candidate;
         renderOverlay();
         renderProvenance();
         renderAnnotationForm();
       });
-      svg.appendChild(rectangle);
+      if (runtime.novice) noviceCandidateNodes.push(rectangle);
+      else svg.appendChild(rectangle);
+      if (runtime.novice) {
+        const viewWidth = bounds.x2 - bounds.x1;
+        const anchorAtRight = box.x1 > viewWidth * 0.65;
+        const label = makeSvg("text", {
+          x: anchorAtRight ? box.x2 : box.x1 + 4,
+          y: box.y2 + 18 <= bounds.y2 - bounds.y1 ? box.y2 + 18 : Math.max(16, box.y1 - 6),
+          class: "dgNoviceCandidateLabel",
+          "text-anchor": anchorAtRight ? "end" : "start",
+        });
+        label.textContent = novicePolicy?.candidateLabel || "Machine suggestion";
+        noviceCandidateNodes.push(label);
+      }
     }
     const annotation = draft();
     const selectedUuid = selectedObject(annotation)?.annotation_uuid;
-    const appendSelectableBox = (rawBox, item, geometryClass = "") => {
+    const appendSelectableBox = (rawBox, item, geometryClass = "", objectIndex = null) => {
       if (!rawBox) return;
       const box = toViewBox(rawBox);
       const rectangle = makeSvg("rect", {
@@ -394,31 +451,50 @@
         y: box.y1,
         width: box.x2 - box.x1,
         height: box.y2 - box.y1,
-        class: `dgHumanBox ${geometryClass} ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""}`,
+        class: `dgHumanBox ${geometryClass} ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""} ${runtime.novice && novicePolicy?.humanInteractive === false ? "dgCandidateReference" : ""}`,
         "data-dg-object-uuid": item.annotation_uuid,
         tabindex: 0,
       });
       rectangle.addEventListener("click", (event) => {
-        if (runtime.tool !== "select") return;
+        if (runtime.tool !== "select" || (runtime.novice && novicePolicy?.humanInteractive === false)) return;
         event.stopPropagation();
         selectObject(item.annotation_uuid);
       });
       svg.appendChild(rectangle);
+      if (runtime.novice && Number.isInteger(objectIndex) && geometryClass === "dgVisibleBodyBox") {
+        const label = makeSvg("text", {
+          x: box.x1 + 4,
+          y: Math.max(16, box.y1 - 6),
+          class: "dgNovicePersonLabel",
+        });
+        label.textContent = `Person ${objectIndex + 1}`;
+        svg.appendChild(label);
+      }
     };
-    for (const item of annotation.player_instances || []) {
-      appendSelectableBox(item.visible_body_box, item, "dgVisibleBodyBox");
+    for (const [index, item] of (annotation.player_instances || []).entries()) {
+      appendSelectableBox(item.visible_body_box, item, "dgVisibleBodyBox", index);
       appendSelectableBox(item.full_body_box, item, "dgSupplementaryBox");
       appendSelectableBox(item.optional_head_box, item, "dgHeadBox");
-      const point = pointToView(item.footpoint);
-      svg.appendChild(makeSvg("circle", {
-        cx: point.x,
-        cy: point.y,
-        r: 4,
-        class: `dgFootpoint ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""}`,
-      }));
+      if (!runtime.novice || novicePolicy?.footpointUuids?.includes(item.annotation_uuid)) {
+        const point = pointToView(item.footpoint);
+        if (Number(item.footpoint_uncertainty_pixels) > 0) {
+          svg.appendChild(makeSvg("circle", {
+            cx: point.x,
+            cy: point.y,
+            r: Number(item.footpoint_uncertainty_pixels),
+            class: "dgFootpointUncertainty",
+          }));
+        }
+        svg.appendChild(makeSvg("circle", {
+          cx: point.x,
+          cy: point.y,
+          r: 4,
+          class: `dgFootpoint ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""}`,
+        }));
+      }
     }
-    for (const item of annotation.visible_masks || []) {
-      appendSelectableBox(item.visible_body_box, item, "dgVisibleBodyBox");
+    for (const [index, item] of (annotation.visible_masks || []).entries()) {
+      appendSelectableBox(item.visible_body_box, item, "dgVisibleBodyBox", index);
       appendSelectableBox(item.full_body_box, item, "dgSupplementaryBox");
       appendSelectableBox(item.optional_head_box, item, "dgHeadBox");
       const polygon = item.polygon_original_pixels.map(pointToView).map((point) => `${point.x},${point.y}`).join(" ");
@@ -447,7 +523,7 @@
           class: "dgHumanBox dgTemporalObservation",
         }));
       }
-      if (frame?.footpoint) {
+      if (frame?.footpoint && (!runtime.novice || novicePolicy?.showTemporalFootpoint)) {
         const point = pointToView(frame.footpoint);
         svg.appendChild(makeSvg("circle", {cx: point.x, cy: point.y, r: 4, class: "dgFootpoint"}));
       }
@@ -477,8 +553,16 @@
         }));
       }
     }
-    if (annotation.footpoint) {
+    if (annotation.footpoint && (!runtime.novice || novicePolicy?.pitchFootpointSet)) {
       const point = pointToView(annotation.footpoint);
+      if (Number(annotation.footpoint_uncertainty_pixels) > 0) {
+        svg.appendChild(makeSvg("circle", {
+          cx: point.x,
+          cy: point.y,
+          r: Number(annotation.footpoint_uncertainty_pixels),
+          class: "dgFootpointUncertainty",
+        }));
+      }
       svg.appendChild(makeSvg("circle", {cx: point.x, cy: point.y, r: 4, class: "dgFootpoint"}));
     }
     if (runtime.maskPoints.length) {
@@ -514,6 +598,7 @@
       label.textContent = "ANNOTATION ROI";
       svg.appendChild(label);
     }
+    noviceCandidateNodes.forEach((node) => svg.appendChild(node));
   }
 
   function candidateInstance(candidate, boxOverride = null) {
@@ -554,7 +639,7 @@
       annotation.frames[runtime.frameIndex] = {
         frame_sequence: currentRecord().frame_sequence,
         source_frame_sha256: currentRecord().source_frame_sha256,
-        state: "OBSERVED",
+        state: runtime.novice ? (runtime.wizard.state().desired_frame_state || "OBSERVED") : "OBSERVED",
         visible_body_box: instance.visible_body_box,
         footpoint: instance.footpoint,
         current_frame_pixel_support: true,
@@ -562,6 +647,10 @@
       };
     }
     persistDraft();
+    if (runtime.novice) {
+      runtime.wizard.objectCreated(instance.annotation_uuid);
+      return;
+    }
     renderAnnotationForm();
     renderOverlay();
   }
@@ -589,6 +678,10 @@
     runtime.selectedObjectByCase[currentCase().case_id] = maskId;
     runtime.maskPoints = [];
     persistDraft();
+    if (runtime.novice) {
+      runtime.wizard.objectCreated(maskId);
+      return;
+    }
     renderAnnotationForm();
     renderOverlay();
   }
@@ -600,13 +693,22 @@
     const annotation = draft();
     if (runtime.tool === "footpoint") {
       pushHistory();
-      if (currentCase().task_type === "detection_gold_pitch_boundary") annotation.footpoint = point;
-      else {
+      if (currentCase().task_type === "detection_gold_pitch_boundary") {
+        annotation.footpoint = point;
+      } else if (currentCase().task_type === "detection_gold_temporal_player") {
+        const frame = annotation.frames[runtime.frameIndex];
+        if (!frame?.visible_body_box) return showError("Mark the visible person before placing the foot point.");
+        frame.footpoint = point;
+      } else {
         const person = selectedObject(annotation);
         if (!person || !annotation.player_instances) return showError("Select a person before placing its footpoint.");
         person.footpoint = point;
       }
       persistDraft();
+      if (runtime.novice) {
+        runtime.wizard.footpointPlaced();
+        return;
+      }
     } else if (runtime.tool === "mask") {
       runtime.maskPoints.push(point);
       renderAnnotationForm();
@@ -615,11 +717,15 @@
       annotation.frames[runtime.frameIndex] = {
         frame_sequence: currentRecord().frame_sequence,
         source_frame_sha256: currentRecord().source_frame_sha256,
-        state: "VISIBLE_CLEAR",
+        state: runtime.novice ? (runtime.wizard.state().desired_frame_state || "VISIBLE_CLEAR") : "VISIBLE_CLEAR",
         centre_point: point,
         geometry_uncertainty_pixels: 3,
       };
       persistDraft();
+      if (runtime.novice) {
+        runtime.wizard.footballPointPlaced();
+        return;
+      }
       renderAnnotationForm();
     }
     renderOverlay();
@@ -724,6 +830,10 @@
       }
     }
     persistDraft();
+    if (runtime.novice && runtime.tool === "trail") {
+      runtime.wizard.footballTrailDrawn();
+      return;
+    }
     renderAnnotationForm();
     renderOverlay();
   }
@@ -940,9 +1050,24 @@
     if (replacement) runtime.selectedObjectByCase[currentCase().case_id] = replacement.annotation_uuid;
     else delete runtime.selectedObjectByCase[currentCase().case_id];
     runtime.redrawVisibleObjectUuid = null;
+    if (runtime.novice) {
+      const wizardState = runtime.wizard.state();
+      wizardState.completed_object_uuids = wizardState.completed_object_uuids.filter(
+        (uuid) => uuid !== selected.annotation_uuid
+      );
+      wizardState.footpoint_placed_uuids = wizardState.footpoint_placed_uuids.filter(
+        (uuid) => uuid !== selected.annotation_uuid
+      );
+      wizardState.current_object_uuid = null;
+      wizardState.question_index = 0;
+      wizardState.step = 1;
+    }
     persistDraft();
-    renderAnnotationForm();
-    renderOverlay();
+    if (runtime.novice) renderCase();
+    else {
+      renderAnnotationForm();
+      renderOverlay();
+    }
     if (affected.length) showError(`${affected.length} candidate binding(s) were cleared. Rebind them before saving.`);
   }
 
@@ -950,11 +1075,15 @@
     const annotation = draft();
     const task = currentCase().task_type;
     const form = byId("dgAnnotationForm");
-    if (task === "detection_gold_player_static") form.innerHTML = renderPlayerForm(annotation);
-    else if (task === "detection_gold_dense_region") form.innerHTML = renderDenseForm(annotation);
-    else if (task === "detection_gold_temporal_player") form.innerHTML = renderTemporalForm(annotation);
-    else if (task === "detection_gold_pitch_boundary") form.innerHTML = renderPitchForm(annotation);
-    else form.innerHTML = renderFootballForm(annotation);
+    let legacyMarkup;
+    if (task === "detection_gold_player_static") legacyMarkup = renderPlayerForm(annotation);
+    else if (task === "detection_gold_dense_region") legacyMarkup = renderDenseForm(annotation);
+    else if (task === "detection_gold_temporal_player") legacyMarkup = renderTemporalForm(annotation);
+    else if (task === "detection_gold_pitch_boundary") legacyMarkup = renderPitchForm(annotation);
+    else legacyMarkup = renderFootballForm(annotation);
+    form.innerHTML = runtime.novice
+      ? `${runtime.wizard.render(annotation)}<details class="nwAdvancedDetails"><summary>Advanced details</summary><div class="nwAdvancedBody">${legacyMarkup}</div></details>`
+      : legacyMarkup;
     bindCommonForm(annotation);
 
     byId("dgAcceptCandidate")?.addEventListener("click", () => {
@@ -1108,6 +1237,7 @@
     });
     byId("dgBallContactReviewed")?.addEventListener("change", (event) => { annotation.full_contact_strip_reviewed = event.target.checked; persistDraft(); renderAnnotationForm(); });
     byId("dgApplyBallState")?.addEventListener("click", applyFootballStateToBurst);
+    runtime.wizard?.bind();
   }
 
   function setTemporalState(value) {
@@ -1163,13 +1293,17 @@
       copied_from_frame_sequence: current.frame_sequence,
       human_truth: false,
     };
+    if (runtime.novice) {
+      runtime.wizard.geometryCopiedToFrame(nextIndex);
+      return;
+    }
     persistDraft();
     setFrame(nextIndex);
   }
 
   function confirmGeometryDraft() {
     const geometry = currentGeometryDraft();
-    if (!geometry) return;
+    if (!geometry) return false;
     const annotation = draft();
     pushHistory();
     annotation.stable_run_accepted = false;
@@ -1183,7 +1317,23 @@
       candidate_uuids: [],
     };
     delete caseGeometryDrafts()[String(currentRecord().frame_sequence)];
-    persistDraft(); renderAnnotationForm(); renderOverlay();
+    if (!runtime.novice) {
+      persistDraft();
+      renderAnnotationForm();
+      renderOverlay();
+    }
+    return true;
+  }
+
+  function rejectGeometryDraft() {
+    if (!currentGeometryDraft()) return false;
+    delete caseGeometryDrafts()[String(currentRecord().frame_sequence)];
+    if (!runtime.novice) {
+      persistDraft();
+      renderAnnotationForm();
+      renderOverlay();
+    }
+    return true;
   }
 
   function jumpToUnresolvedFrame() {
@@ -1283,6 +1433,7 @@
     if (!row) return;
     runtime.evidenceBlocked = true;
     byId("dgSaveCase").disabled = true;
+    if (byId("nwSaveCase")) byId("nwSaveCase").disabled = true;
     byId("dgEvidenceBlocker").classList.add("isHidden");
     byId("dgEvidenceStatus").textContent = "Verifying exact source bytes";
     const basePath = runtime.view === "focal" ? row.focal_asset_path : row.panorama_asset_path;
@@ -1312,12 +1463,14 @@
       runtime.evidenceBlocked = false;
       byId("dgEvidenceStatus").textContent = `Evidence verified | ${row.image_width} x ${row.image_height} | ${row.source_frame_sha256.slice(0, 12)}`;
       byId("dgSaveCase").disabled = false;
+      if (byId("nwSaveCase")) byId("nwSaveCase").disabled = false;
     } catch (error) {
       if (token !== runtime.evidenceToken) return;
       byId("dgEvidenceBlocker").classList.remove("isHidden");
       byId("dgEvidenceBlocker").textContent = `Evidence unavailable: ${error.message}`;
       byId("dgEvidenceStatus").textContent = "Evidence blocked";
       runtime.evidenceBlocked = true;
+      if (byId("nwSaveCase")) byId("nwSaveCase").disabled = true;
     }
     renderOverlay();
   }
@@ -1350,18 +1503,70 @@
     byId("dgComplete").disabled = Boolean(runtime.state.completed) || reviewed !== runtime.manifest.cases.length || runtime.outbox.length > 0;
   }
 
+  function setFrameSilently(index) {
+    runtime.frameIndex = Math.max(0, Math.min(index, records().length - 1));
+    if (byId("dgTimeline")) byId("dgTimeline").value = String(runtime.frameIndex);
+  }
+
+  function currentFrameCandidates(className = null) {
+    const required = new Set(currentCase().visible_metadata.candidate_uuids || []);
+    return (currentRecord()?.candidates || [])
+      .filter((candidate) => (!className || candidate.class_name === className)
+        && (!required.size || required.has(candidate.diagnostic_uuid)))
+      .sort((left, right) => Number(right.score || 0) - Number(left.score || 0)
+        || left.diagnostic_uuid.localeCompare(right.diagnostic_uuid));
+  }
+
+  function setFirstFrameCandidate(className = null) {
+    runtime.selectedCandidate = currentFrameCandidates(className)[0] || null;
+  }
+
+  function nextFrameCandidate() {
+    const candidates = currentFrameCandidates("person");
+    if (!candidates.length) return;
+    const current = candidates.findIndex(
+      (candidate) => candidate.diagnostic_uuid === runtime.selectedCandidate?.diagnostic_uuid
+    );
+    runtime.selectedCandidate = candidates[(current + 1) % candidates.length];
+    renderOverlay();
+    renderAnnotationForm();
+  }
+
+  function useTemporalCandidate(desiredState) {
+    if (!runtime.selectedCandidate) setFirstFrameCandidate("person");
+    if (!runtime.selectedCandidate) return showError("No machine suggestion is available. Draw the visible person instead.");
+    runtime.wizard.state().desired_frame_state = desiredState || "OBSERVED";
+    acceptSelectedPerson();
+  }
+
+  function upsertCandidateRelation(annotation, candidate, relation, annotationUuids, coverageValue) {
+    runtime.selectedCandidate = candidate;
+    return upsertSelectedCandidateRelation(annotation, relation, annotationUuids, coverageValue);
+  }
+
   function renderCase() {
-    runtime.selectedCandidate = null;
-    runtime.maskPoints = [];
-    runtime.redrawVisibleObjectUuid = null;
     const caseData = currentCase();
-    const info = moduleInfo();
+    const caseChanged = runtime.lastCaseId !== caseData.case_id;
+    if (caseChanged) {
+      runtime.selectedCandidate = null;
+      runtime.maskPoints = [];
+      runtime.redrawVisibleObjectUuid = null;
+      const savedPosition = runtime.positionsByCase[caseData.case_id];
+      runtime.frameIndex = savedPosition?.frame_index ?? (runtime.wizard?.initialFrameIndex(caseData) || 0);
+      runtime.view = savedPosition?.view || (runtime.novice && caseData.task_type === "detection_gold_football_burst" ? "panorama" : "focal");
+      byId("dgFocalView").classList.toggle("active", runtime.view === "focal");
+      byId("dgPanoramaView").classList.toggle("active", runtime.view === "panorama");
+    }
+    runtime.frameIndex = Math.min(runtime.frameIndex, Math.max(0, records().length - 1));
+    if (runtime.novice) runtime.wizard.syncCandidate();
+    const info = runtime.novice ? NOVICE_MODULES[caseData.task_type] : moduleInfo();
+    runtime.lastCaseId = caseData.case_id;
     byId("dgTitle").textContent = runtime.uiConfig.review_title;
     byId("dgModuleEyebrow").textContent = info.eyebrow;
     byId("dgCaseTitle").textContent = `${info.label} ${caseData.visible_metadata.module_case_number}`;
-    byId("dgQuestion").textContent = caseData.concise_question;
+    byId("dgQuestion").textContent = runtime.novice ? info.question : caseData.concise_question;
+    byId("dgScopeBadge").textContent = runtime.novice ? "MARK THE HIGHLIGHTED AREA ONLY" : "ANNOTATE FOCAL ROI ONLY";
     byId("dgScopeBadge").classList.toggle("isHidden", !focalScopeApplies());
-    runtime.frameIndex = Math.min(runtime.frameIndex, Math.max(0, records().length - 1));
     byId("dgTimeline").max = String(Math.max(0, records().length - 1));
     byId("dgTimeline").value = String(runtime.frameIndex);
     byId("dgFrameReadout").textContent = `Frame ${currentRecord().frame_sequence} | ${currentRecord().timestamp_seconds.toFixed(3)}s`;
@@ -1375,10 +1580,10 @@
   }
 
   function setFrame(index) {
-    runtime.frameIndex = Math.max(0, Math.min(index, records().length - 1));
+    setFrameSilently(index);
     runtime.selectedCandidate = null;
     runtime.redrawVisibleObjectUuid = null;
-    byId("dgTimeline").value = String(runtime.frameIndex);
+    persistDraft();
     renderCase();
   }
 
@@ -1459,7 +1664,8 @@
     }
 
     if (caseData.task_type === "detection_gold_temporal_player") {
-      if (!annotation.contact_strip_reviewed || annotation.frames.some((frame) => frame.state === "UNRESOLVED")) {
+      const unresolvedAllowed = runtime.uiConfig.question_contract.reviewed_unresolved_states_allowed === true;
+      if (!annotation.contact_strip_reviewed || (!unresolvedAllowed && annotation.frames.some((frame) => frame.state === "UNRESOLVED"))) {
         throw new Error("Review the full temporal strip and resolve every frame before saving.");
       }
       const expected = caseData.visible_metadata.frame_records || [];
@@ -1477,7 +1683,8 @@
       });
     }
     if (caseData.task_type === "detection_gold_football_burst") {
-      if (!annotation.full_contact_strip_reviewed || annotation.frames.some((frame) => frame.state === "UNRESOLVED")) {
+      const unresolvedAllowed = runtime.uiConfig.question_contract.reviewed_unresolved_states_allowed === true;
+      if (!annotation.full_contact_strip_reviewed || (!unresolvedAllowed && annotation.frames.some((frame) => frame.state === "UNRESOLVED"))) {
         throw new Error("Review the full football strip and resolve every frame before saving.");
       }
     }
@@ -1488,6 +1695,7 @@
     if (runtime.evidenceBlocked) return showError("Case saving is blocked until exact evidence verifies.");
     const caseData = currentCase();
     try {
+      runtime.wizard?.validateForSave();
       validateDraftForSave(caseData, draft());
     } catch (error) {
       showError(error.message);
@@ -1500,6 +1708,7 @@
       reviewer_session_id: runtime.uiConfig.question_contract.reviewer_session_id,
       case_id: caseData.case_id,
       annotation: clone(draft()),
+      wizard_state: runtime.wizard?.snapshot(caseData.case_id) || null,
       client_event_id: clientEventId,
       idempotency_key: `${runtime.manifest.review_id}:${caseData.case_id}:${clientEventId}`,
       expected_server_state_hash: runtime.serverStateHash,
@@ -1584,6 +1793,9 @@
       runtime.serverSequence = response.ack.server_event_sequence;
       runtime.drafts[caseData.case_id] = clone(response.annotations?.[caseData.case_id] || defaultAnnotation(caseData));
       runtime.geometryDrafts[caseData.case_id] = {};
+      if (runtime.wizard && response.wizard_states?.[caseData.case_id]) {
+        runtime.wizard.restore(caseData.case_id, response.wizard_states[caseData.case_id]);
+      }
       setSaveState("Case reopened", false);
       renderCase();
     } catch (error) { showError(error.message); }
@@ -1624,9 +1836,7 @@
     byId("dgPanoramaView").addEventListener("click", () => { runtime.view = "panorama"; runtime.redrawVisibleObjectUuid = null; fitEvidence(); byId("dgPanoramaView").classList.add("active"); byId("dgFocalView").classList.remove("active"); renderEvidence(); renderAnnotationForm(); });
     document.querySelectorAll("[data-dg-layer]").forEach((toggle) => toggle.addEventListener("change", renderOverlay));
     document.querySelectorAll("[data-dg-tool]").forEach((button) => button.addEventListener("click", () => {
-      runtime.tool = button.dataset.dgTool;
-      runtime.redrawVisibleObjectUuid = null;
-      document.querySelectorAll("[data-dg-tool]").forEach((item) => item.classList.toggle("active", item === button));
+      setTool(button.dataset.dgTool);
     }));
     document.querySelectorAll("[data-dg-module]").forEach((button) => button.addEventListener("click", () => {
       const index = runtime.manifest.cases.findIndex((caseData) => caseData.task_type === button.dataset.dgModule && !(runtime.state.annotations || {})[caseData.case_id]);
@@ -1651,6 +1861,13 @@
     byId("dgZoomIn").addEventListener("click", () => {
       const rectangle = byId("dgViewport").getBoundingClientRect();
       zoomAt(rectangle.left + rectangle.width / 2, rectangle.top + rectangle.height / 2, runtime.viewTransform.scale * 1.25);
+    });
+    byId("nwFit")?.addEventListener("click", fitEvidence);
+    byId("nwZoomOut")?.addEventListener("click", () => byId("dgZoomOut").click());
+    byId("nwZoomIn")?.addEventListener("click", () => byId("dgZoomIn").click());
+    byId("nwAdvancedToggle")?.addEventListener("click", () => {
+      const details = document.querySelector(".nwAdvancedDetails");
+      if (details) details.open = !details.open;
     });
     byId("dgSaveCase").addEventListener("click", enqueueSave);
     byId("dgReopenCase").addEventListener("click", reopenCase);
@@ -1679,14 +1896,54 @@
     runtime.uiConfig = uiConfig;
     runtime.state = state;
     runtime.api = api;
+    runtime.novice = uiConfig.question_contract.novice_guided_wizard === true;
+    document.body.classList.toggle("detectionGoldNovice", runtime.novice);
     runtime.serverStateHash = state.server_state_hash || "";
     runtime.serverSequence = Number(state.event_sequence || 0);
     runtime.db = await openDatabase();
+    if (runtime.novice) {
+      if (!window.DetectionGoldNoviceWizard) throw new Error("Novice wizard module failed to load");
+      runtime.wizard = window.DetectionGoldNoviceWizard.create({
+        caseData: currentCase,
+        annotation: draft,
+        objects: annotationObjects,
+        objectIndex: (annotationUuid) => annotationObjects().findIndex((item) => item.annotation_uuid === annotationUuid),
+        selectedCandidate: () => runtime.selectedCandidate,
+        setSelectedCandidate: (candidate) => { runtime.selectedCandidate = candidate; },
+        frameIndex: () => runtime.frameIndex,
+        records,
+        record: currentRecord,
+        setFrame,
+        setFrameSilently,
+        currentFrameCandidates,
+        setFirstFrameCandidate,
+        nextFrameCandidate,
+        setTool,
+        useTemporalCandidate,
+        copyGeometry: copyGeometryToNextFrame,
+        hasGeometryDraft: () => Boolean(currentGeometryDraft()),
+        confirmGeometryDraft,
+        rejectGeometryDraft,
+        upsertCandidateRelation,
+        pushHistory,
+        persist: persistDraft,
+        render: renderCase,
+        undo,
+        removeSelected: () => removeSelectedAnnotation(draft()),
+        finishMask,
+        maskPointCount: () => runtime.maskPoints.length,
+        save: enqueueSave,
+        reviewId: () => runtime.manifest.review_id,
+      });
+    }
     const storedDrafts = await dbAll("drafts");
     for (const row of storedDrafts) {
       runtime.drafts[row.case_id] = row.annotation;
       runtime.geometryDrafts[row.case_id] = row.geometry_drafts || {};
+      runtime.positionsByCase[row.case_id] = row.position || {};
       if (row.selected_annotation_uuid) runtime.selectedObjectByCase[row.case_id] = row.selected_annotation_uuid;
+      if (runtime.wizard && row.wizard_state) runtime.wizard.restore(row.case_id, row.wizard_state);
+      for (const historyRow of row.undo_history || []) runtime.history.push(historyRow);
     }
     runtime.outbox = await dbAll("outbox");
     const recovery = await api("/api/review/detection-gold-recover", {
@@ -1707,6 +1964,7 @@
     updateServerState();
     await flushOutbox();
     renderCase();
+    runtime.wizard?.showTour(false);
     setInterval(activeSeconds, 10000);
   }
 

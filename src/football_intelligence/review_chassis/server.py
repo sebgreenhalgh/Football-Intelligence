@@ -174,7 +174,13 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 _json_response(self, self.server.persistence.export_payload())
             elif path in {"/", "/index.html"}:
                 self._serve_file(STATIC_ROOT / "index.html")
-            elif path in {"/annotation_canvas.js", "/app.js", "/detection_gold_app.js", "/styles.css"}:
+            elif path in {
+                "/annotation_canvas.js",
+                "/app.js",
+                "/detection_gold_app.js",
+                "/detection_gold_wizard.js",
+                "/styles.css",
+            }:
                 self._serve_file(STATIC_ROOT / path.lstrip("/"))
             elif path.startswith("/evidence/"):
                 self._serve_evidence(path)

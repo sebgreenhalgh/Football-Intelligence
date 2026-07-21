@@ -1322,6 +1322,438 @@ body.goldPresentation #goldShell .goldHeaderActions { justify-content: flex-end;
   .goldSeedEvidence { grid-template-columns: 1fr; }
   .goldSeedEvidence figure:not(.current) { display: none; }
 }
+
+/* R2 novice-guided detection-gold presentation. */
+.nwViewerToolbar,
+.nwTour { display: none; }
+
+body.detectionGoldNovice {
+  overflow: auto;
+  background: #0b0f12;
+}
+
+body.detectionGoldNovice .detectionGoldShell {
+  min-height: 100vh;
+  height: auto;
+  grid-template-rows: auto auto;
+}
+
+body.detectionGoldNovice .dgHeader {
+  position: sticky;
+  z-index: 8;
+  top: 0;
+  grid-template-columns: minmax(220px, 1fr) minmax(230px, 390px) minmax(360px, 1fr);
+  min-height: 66px;
+}
+
+body.detectionGoldNovice .dgServerState,
+body.detectionGoldNovice .dgModuleTabs,
+body.detectionGoldNovice .dgCaseActions,
+body.detectionGoldNovice .dgToolbar,
+body.detectionGoldNovice #dgProvenanceDrawer {
+  display: none;
+}
+
+body.detectionGoldNovice .dgMain {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 410px);
+  align-items: start;
+  min-height: auto;
+}
+
+body.detectionGoldNovice .dgEvidenceColumn {
+  grid-template-rows: auto 88px auto;
+  min-height: auto;
+  overflow: visible;
+  padding: 16px;
+}
+
+body.detectionGoldNovice .dgViewerHeader {
+  min-height: 74px;
+}
+
+body.detectionGoldNovice .dgViewerHeader p {
+  max-width: 760px;
+  color: #d0dad7;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+body.detectionGoldNovice .dgViewerCard {
+  grid-template-rows: auto minmax(360px, 58vh) auto auto auto;
+  border-color: #41514c;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+body.detectionGoldNovice .nwViewerToolbar {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #35423f;
+  color: #c8d4d0;
+  background: #151d1a;
+}
+
+.nwViewerToolbar > div,
+.nwActionRow,
+.nwTourActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+body.detectionGoldNovice button,
+body.detectionGoldNovice summary,
+body.detectionGoldNovice input[type="range"] {
+  min-height: 44px;
+}
+
+body.detectionGoldNovice .dgContextStrip figure,
+body.detectionGoldNovice .dgViewerCard,
+body.detectionGoldNovice .nwQuestionCard,
+body.detectionGoldNovice .nwActionCard,
+body.detectionGoldNovice .nwReviewCard {
+  border-radius: 6px;
+}
+
+body.detectionGoldNovice .dgAnnotationColumn {
+  position: sticky;
+  top: 86px;
+  max-height: none;
+  min-height: auto;
+  overflow: visible;
+  padding: 14px;
+  border-left-color: #3a4844;
+}
+
+.nwWizard {
+  display: grid;
+  gap: 14px;
+}
+
+.nwStepper {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nwStepper li {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  padding: 7px 5px;
+  border: 1px solid #3b4845;
+  color: #9fadaa;
+  background: #101614;
+}
+
+.nwStepper li span {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  font-size: 12px;
+}
+
+.nwStepper li strong {
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.nwStepper li.active {
+  border-color: #77dd9c;
+  color: #f4fff7;
+  background: #173522;
+}
+
+.nwStepper li.done {
+  border-color: #68b8dc;
+  color: #cceeff;
+  background: #142935;
+}
+
+.nwTaskIntro {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 5px 12px;
+}
+
+.nwTaskIntro p {
+  grid-column: 1;
+  margin: 0;
+  color: #e4ece9;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.nwStepEyebrow,
+.nwQuestionLabel {
+  color: #8fd9ef;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.nwHelpButton {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: #cde8f3;
+}
+
+.nwQuestionCard,
+.nwActionCard,
+.nwReviewCard {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #42524d;
+  background: #0d1311;
+}
+
+.nwQuestionCard h3,
+.nwActionCard h3,
+.nwReviewCard h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.nwQuestionCard p,
+.nwActionCard p,
+.nwReviewCard p {
+  margin: 0;
+  color: #becbc7;
+  line-height: 1.45;
+}
+
+.nwChoices {
+  display: grid;
+  gap: 8px;
+}
+
+.nwColumns2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.nwColumns1 { grid-template-columns: 1fr; }
+
+.nwChoices button,
+.nwPersonCards button,
+.nwObjectSummary button {
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.nwChoices button:hover,
+.nwPersonCards button:hover,
+.nwObjectSummary button:hover {
+  border-color: #8fd9ef;
+}
+
+.nwPrimary {
+  border-color: #76e19f !important;
+  color: #07120b !important;
+  background: #76e19f !important;
+  font-weight: 750;
+}
+
+.nwPrimary:hover { background: #92edb3 !important; }
+
+.nwObjectSummary,
+.nwPersonCards,
+.nwReviewStats {
+  display: grid;
+  gap: 7px;
+}
+
+.nwObjectSummary button,
+.nwPersonCards button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.nwPersonCards button.selected {
+  border-color: #f5cb65;
+  color: #fff2c5;
+  background: #2d2715;
+}
+
+.nwCurrentObject,
+.nwCandidateHeader,
+.nwFrameHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-left: 4px solid #8fd9ef;
+  color: #e8f5f8;
+  background: #10212a;
+}
+
+.nwReviewStats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.nwReviewStats span {
+  padding: 10px;
+  border: 1px solid #35423f;
+  background: #151c1a;
+}
+
+.nwReviewList {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nwReviewList li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid #2d3936;
+}
+
+.nwReviewList span { color: #b5c2be; }
+.nwReviewList button { min-height: 36px !important; }
+.nwNote textarea { width: 100%; box-sizing: border-box; }
+.nwSave { width: 100%; }
+
+.nwAdvancedDetails {
+  margin-top: 5px;
+  border-top: 1px solid #384641;
+  color: #b9c6c2;
+}
+
+.nwAdvancedDetails > summary {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.nwAdvancedBody {
+  display: grid;
+  gap: 9px;
+  padding: 10px 0;
+}
+
+.dgNoviceCandidate {
+  fill: rgba(62, 207, 255, 0.08);
+  stroke: #52d6ff !important;
+  stroke-width: 5 !important;
+  stroke-dasharray: 10 6;
+  pointer-events: none;
+}
+
+.dgNoviceCandidateLabel,
+.dgNovicePersonLabel {
+  fill: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: #090c0b;
+  stroke-width: 4px;
+  pointer-events: none;
+}
+
+.dgNovicePersonLabel { fill: #ffb7ca; }
+.dgNoviceCandidateLabel { fill: #52d6ff; }
+.dgCandidateReference { opacity: 0.58; }
+.dgFootpointUncertainty {
+  fill: none;
+  stroke: #f4c65d;
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.nwCandidateReviewLinks > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  padding-top: 10px;
+}
+body.detectionGoldNovice .dgHumanBox,
+body.detectionGoldNovice .dgHumanMask { pointer-events: none; }
+
+body.detectionGoldNovice .nwTour {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 5, 4, 0.88);
+}
+
+body.detectionGoldNovice .nwTour.isHidden { display: none; }
+
+.nwTour > section {
+  width: min(620px, 100%);
+  padding: 24px;
+  border: 1px solid #71827c;
+  border-radius: 8px;
+  color: #ecf5f2;
+  background: #131b18;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+}
+
+.nwTour h2 { margin: 5px 0 14px; }
+.nwTour ol { display: grid; gap: 10px; padding-left: 24px; }
+.nwTour li span { display: block; margin-top: 3px; color: #b9c8c3; }
+.nwTourActions { justify-content: flex-end; margin-top: 18px; }
+
+@media (max-width: 1180px) {
+  body.detectionGoldNovice .dgHeader {
+    grid-template-columns: minmax(190px, 1fr) minmax(200px, 300px) minmax(300px, 1fr);
+  }
+  body.detectionGoldNovice .dgMain { grid-template-columns: minmax(0, 1fr) 360px; }
+  body.detectionGoldNovice .dgContextStrip { display: grid; }
+}
+
+@media (max-width: 900px) {
+  body.detectionGoldNovice .dgHeader { position: relative; grid-template-columns: 1fr; }
+  body.detectionGoldNovice .dgMain { grid-template-columns: 1fr; }
+  body.detectionGoldNovice .dgAnnotationColumn {
+    position: relative;
+    top: auto;
+    border-top: 1px solid #3a4844;
+    border-left: 0;
+  }
+  body.detectionGoldNovice .dgEvidenceColumn { min-height: auto; }
+  body.detectionGoldNovice .dgViewerCard { grid-template-rows: auto minmax(340px, 58vh) auto auto auto; }
+}
+
+@media (max-width: 620px) {
+  .nwStepper { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nwColumns2,
+  .nwReviewStats { grid-template-columns: 1fr; }
+  .nwTaskIntro { grid-template-columns: 1fr; }
+  .nwHelpButton { grid-column: 1; grid-row: auto; }
+  .nwViewerToolbar { align-items: flex-start; flex-direction: column; }
+  .nwReviewList li { grid-template-columns: 1fr; }
+}
 @media (max-width: 760px) {
   body.goldPresentation #goldShell .goldMain { grid-template-columns: 1fr; overflow-y: auto; }
   body.goldPresentation #goldShell .goldTools { max-height: 46vh; border-top: 1px solid #344139; border-left: 0; }

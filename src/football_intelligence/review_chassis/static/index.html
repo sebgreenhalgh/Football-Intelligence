@@ -393,6 +393,15 @@
         </div>
 
         <div class="dgViewerCard">
+          <div id="nwViewerToolbar" class="nwViewerToolbar" aria-label="Image controls">
+            <span>Use the image to answer the current step.</span>
+            <div>
+              <button id="nwZoomOut" type="button" title="Make the image smaller" aria-label="Zoom out">&#8722;</button>
+              <button id="nwZoomIn" type="button" title="Make the image larger" aria-label="Zoom in">&#43;</button>
+              <button id="nwFit" type="button">Fit image</button>
+              <button id="nwAdvancedToggle" type="button">Advanced details</button>
+            </div>
+          </div>
           <div class="dgToolbar">
             <div class="layerChips" role="group" aria-label="Proposal layers">
               <label class="toggleChip"><input data-dg-layer="RAW" type="checkbox"><span>Raw</span></label>
@@ -458,9 +467,27 @@
         </div>
       </aside>
     </main>
+
+    <div id="nwTour" class="nwTour isHidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="nwTourTitle">
+      <section>
+        <span class="eyebrow">QUICK TOUR</span>
+        <h2 id="nwTourTitle">Four simple steps</h2>
+        <ol>
+          <li><strong>Draw what is really visible.</strong><span>Start with people or the football, not the machine's answer.</span></li>
+          <li><strong>Answer the short questions.</strong><span>Only one question appears at a time.</span></li>
+          <li><strong>Review one machine box at a time.</strong><span>The current box is selected for you.</span></li>
+          <li><strong>Check and save.</strong><span>Nothing is saved as complete until the server accepts it.</span></li>
+        </ol>
+        <div class="nwTourActions">
+          <button id="nwTourSkip" type="button">Skip tour</button>
+          <button id="nwTourStart" class="primaryCommand" type="button">Start guided review</button>
+        </div>
+      </section>
+    </div>
   </div>
 
   <script src="/annotation_canvas.js"></script>
+  <script src="/detection_gold_wizard.js"></script>
   <script src="/detection_gold_app.js"></script>
   <script src="/app.js"></script>
 </body>
