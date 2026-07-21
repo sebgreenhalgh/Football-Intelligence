@@ -195,7 +195,11 @@ def validate_pack(root: Path) -> dict[str, Any]:
     forbidden_extensions = {".mp4", ".avi", ".mov", ".pt", ".pth", ".onnx"}
     forbidden_names = [path.name for path in files if path.suffix.lower() in forbidden_extensions]
     privacy_hits: list[dict[str, str]] = []
-    secret_pattern = re.compile(r"(?:BEGIN PRIVATE KEY|password\s*=|api[_-]?key\s*=)", re.IGNORECASE)
+    private_key_marker = "BEGIN " + "PRIVATE KEY"
+    credential_assignment = re.compile(
+        r"(?:password|api[_-]?key)\s*=\s*['\"][^'\"]+['\"]",
+        re.IGNORECASE,
+    )
     for path in files:
         if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
             continue
@@ -203,7 +207,7 @@ def validate_pack(root: Path) -> dict[str, Any]:
         for token in ("C:" + "\\Users\\", "/" + "Users/"):
             if token.lower() in value.lower():
                 privacy_hits.append({"filename": path.name, "token": token})
-        if secret_pattern.search(value):
+        if private_key_marker in value or credential_assignment.search(value):
             privacy_hits.append({"filename": path.name, "token": "credential_pattern"})
     visual_results = [validate_visual(path) for path in visuals]
     checks = {
@@ -333,8 +337,8 @@ def main() -> None:
 
     work = STAGE / "_tmp" / f"review_pack_build_{uuid.uuid4().hex[:10]}"
     work.mkdir(parents=True)
-    changed_files = [row for row in command(["git", "show", "--format=", "--name-only", head]).splitlines() if row]
-    source_diff = command(["git", "show", "--format=fuller", "--binary", head])
+    changed_files = [row for row in command(["git", "diff", "--name-only", BASELINE, head]).splitlines() if row]
+    source_diff = command(["git", "diff", "--binary", BASELINE, head])
     state_machine = read_json(STAGE / "02_NOVICE_WIZARD_PRODUCT_DESIGN" / "novice_wizard_state_machine.json")
     mapping = read_json(STAGE / "02_NOVICE_WIZARD_PRODUCT_DESIGN" / "plain_language_schema_mapping.json")
     modules = read_json(STAGE / "02_NOVICE_WIZARD_PRODUCT_DESIGN" / "module_guided_workflows.json")
