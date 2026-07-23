@@ -290,7 +290,7 @@ def populate_pack(repository: dict[str, Any], commands: list[dict[str, Any]]) ->
 
     live = read_json(STAGE / "01_LIVE_STATE_AND_PRESERVATION_AUDIT" / "live_state_precondition.json")
     preservation = read_json(STAGE / "01_LIVE_STATE_AND_PRESERVATION_AUDIT" / "saved_case_preservation.json")
-    stale = read_json(STAGE / "01_LIVE_STATE_AND_PRESERVATION_AUDIT" / "stale_draft_disposition.json")
+    stale = read_json(STAGE / "01_LIVE_STATE_AND_PRESERVATION_AUDIT" / "stale_case7_draft_disposition.json")
     revision = read_json(STAGE / "02_REVISION_AWARE_WIZARD_STATE" / "revision_and_invalidation_contract.json")
     invalidation = read_json(STAGE / "02_REVISION_AWARE_WIZARD_STATE" / "wizard_dependency_graph.json")
     progress = read_json(STAGE / "02_REVISION_AWARE_WIZARD_STATE" / "candidate_answer_validity_matrix.json")
