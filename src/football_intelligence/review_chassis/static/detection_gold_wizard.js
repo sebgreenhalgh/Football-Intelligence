@@ -138,6 +138,15 @@
         candidate_relation: null,
         candidate_targets: [],
         candidate_answered_uuids: [],
+        candidate_answer_records: {},
+        human_truth_revision: 0,
+        person_question_revision: 0,
+        candidate_answer_revision: 0,
+        summary_revision: 0,
+        person_question_completion_revisions: {},
+        summary_validity: "UNANSWERED",
+        summary_human_truth_revision: null,
+        invalidation_notice: null,
         frame_answered_sequences: [],
         frame_phase: "visibility",
         desired_frame_state: null,
@@ -158,11 +167,11 @@
 
     state(caseData = this.host.caseData()) {
       if (!this.states[caseData.case_id]) this.states[caseData.case_id] = this.defaultState(caseData);
-      return this.states[caseData.case_id];
+      return this.ensureRevisionState(this.states[caseData.case_id]);
     }
 
     restore(caseId, value) {
-      if (value && value.case_id === caseId) this.states[caseId] = clone(value);
+      if (value && value.case_id === caseId) this.states[caseId] = this.ensureRevisionState(clone(value));
     }
 
     snapshot(caseId = this.host.caseData().case_id) {
@@ -170,7 +179,30 @@
     }
 
     replace(caseId, value) {
-      this.states[caseId] = clone(value);
+      this.states[caseId] = this.ensureRevisionState(clone(value));
+    }
+
+    revisionAware() {
+      return this.host.revisionAware?.() === true;
+    }
+
+    ensureRevisionState(state) {
+      state.candidate_answer_records ||= {};
+      state.person_question_completion_revisions ||= {};
+      state.human_truth_revision = Number.isInteger(state.human_truth_revision) ? state.human_truth_revision : 0;
+      state.person_question_revision = Number.isInteger(state.person_question_revision) ? state.person_question_revision : 0;
+      state.candidate_answer_revision = Number.isInteger(state.candidate_answer_revision) ? state.candidate_answer_revision : 0;
+      state.summary_revision = Number.isInteger(state.summary_revision) ? state.summary_revision : 0;
+      state.summary_validity ||= "UNANSWERED";
+      state.summary_human_truth_revision ??= null;
+      state.invalidation_notice ??= null;
+      state.candidate_answered_uuids ||= [];
+      return state;
+    }
+
+    reset(caseId = this.host.caseData().case_id) {
+      this.states[caseId] = this.defaultState(this.host.caseData());
+      return this.state();
     }
 
     initialFrameIndex(caseData) {
@@ -202,6 +234,172 @@
         }
       });
       return rows;
+    }
+
+    candidateProgress(state = this.state()) {
+      const entries = this.candidates();
+      const counts = {total: entries.length, valid: 0, stale: 0, unanswered: 0, invalid: 0};
+      for (const entry of entries) {
+        const validity = state.candidate_answer_records[entry.candidate.diagnostic_uuid]?.validity || "UNANSWERED";
+        if (validity === "VALID") counts.valid += 1;
+        else if (validity === "NEEDS_REVIEW") counts.stale += 1;
+        else if (validity === "INVALID") counts.invalid += 1;
+        else counts.unanswered += 1;
+      }
+      return counts;
+    }
+
+    syncCandidateAnswered(state = this.state()) {
+      state.candidate_answered_uuids = this.candidates()
+        .map((entry) => entry.candidate.diagnostic_uuid)
+        .filter((candidateUuid) => state.candidate_answer_records[candidateUuid]?.validity === "VALID");
+    }
+
+    markSummaryStale(state, reason) {
+      state.summary_validity = "NEEDS_REVIEW";
+      state.summary_revision += 1;
+      state.invalidation_notice = reason;
+    }
+
+    markSummaryReady(state) {
+      const progress = this.candidateProgress(state);
+      if (progress.stale || progress.unanswered || progress.invalid) return false;
+      state.summary_validity = "VALID";
+      state.summary_revision += 1;
+      state.summary_human_truth_revision = state.human_truth_revision;
+      state.invalidation_notice = null;
+      state.step = 4;
+      return true;
+    }
+
+    invalidateCandidateAnswers(state, reason, predicate = () => true) {
+      for (const [candidateUuid, answer] of Object.entries(state.candidate_answer_records)) {
+        if (!predicate(answer, candidateUuid) || answer.validity === "INVALID") continue;
+        answer.validity = "NEEDS_REVIEW";
+        answer.invalidation_reason = reason;
+        answer.invalidated_at = new Date().toISOString();
+      }
+      this.syncCandidateAnswered(state);
+      this.markSummaryStale(state, reason);
+    }
+
+    recordCandidateAnswer(state, relation, targets) {
+      const entry = this.currentCandidateEntry();
+      if (!entry) return;
+      const candidateUuid = entry.candidate.diagnostic_uuid;
+      const now = new Date().toISOString();
+      const prior = state.candidate_answer_records[candidateUuid];
+      state.candidate_answer_revision += 1;
+      state.candidate_answer_records[candidateUuid] = {
+        candidate_uuid: candidateUuid,
+        relation,
+        annotation_uuids: [...targets],
+        answered_against_human_truth_revision: state.human_truth_revision,
+        answered_person_question_revision: state.person_question_revision,
+        candidate_answer_revision: state.candidate_answer_revision,
+        validity: "VALID",
+        invalidation_reason: null,
+        answered_at: prior?.answered_at || now,
+        revalidated_at: prior ? now : null,
+        revalidation_event: prior ? "GUIDED_REVIEW_AFTER_INVALIDATION" : "INITIAL_REVIEW",
+      };
+      this.syncCandidateAnswered(state);
+      state.summary_validity = "NEEDS_REVIEW";
+    }
+
+    candidateAnswerEdited(candidateUuid, reason = "A machine-box answer changed outside the guided check.") {
+      const state = this.state();
+      if (!this.revisionAware()) return state;
+      const answer = state.candidate_answer_records[candidateUuid];
+      if (answer) {
+        answer.validity = "NEEDS_REVIEW";
+        answer.invalidation_reason = reason;
+        answer.invalidated_at = new Date().toISOString();
+      }
+      this.syncCandidateAnswered(state);
+      this.markSummaryStale(state, reason);
+      return state;
+    }
+
+    humanTruthChanged(reason, {targetUuids = null, invalidateAll = false, requireDoneDrawing = true} = {}) {
+      const state = this.state();
+      if (!this.revisionAware()) return state;
+      state.human_truth_revision += 1;
+      state.failure_reviewed = false;
+      if (requireDoneDrawing) state.drawing_complete = false;
+      const targets = targetUuids ? new Set(targetUuids) : null;
+      this.invalidateCandidateAnswers(
+        state,
+        reason,
+        (answer) => invalidateAll || !targets || answer.annotation_uuids.some((uuid) => targets.has(uuid)),
+      );
+      state.step = 1;
+      state.candidate_phase = "relation";
+      state.candidate_relation = null;
+      state.candidate_targets = [];
+      return state;
+    }
+
+    objectDeleted(annotationUuid) {
+      const state = this.humanTruthChanged(
+        "Some machine-box answers need checking again because a person was removed.",
+        {targetUuids: [annotationUuid]},
+      );
+      state.completed_object_uuids = state.completed_object_uuids.filter((uuid) => uuid !== annotationUuid);
+      state.footpoint_placed_uuids = state.footpoint_placed_uuids.filter((uuid) => uuid !== annotationUuid);
+      delete state.footpoint_reviews[annotationUuid];
+      delete state.person_question_completion_revisions[annotationUuid];
+      for (const answer of Object.values(state.candidate_answer_records)) {
+        answer.annotation_uuids = answer.annotation_uuids.filter((uuid) => uuid !== annotationUuid);
+      }
+      state.current_object_uuid = null;
+      state.question_index = 0;
+      return state;
+    }
+
+    allObjectsDeleted(annotationUuids) {
+      const state = this.humanTruthChanged(
+        "Start again by drawing the visible people. Earlier machine-box answers need review.",
+        {targetUuids: annotationUuids},
+      );
+      state.completed_object_uuids = [];
+      state.footpoint_placed_uuids = [];
+      state.footpoint_reviews = {};
+      state.person_question_completion_revisions = {};
+      for (const answer of Object.values(state.candidate_answer_records)) answer.annotation_uuids = [];
+      state.current_object_uuid = null;
+      state.question_index = 0;
+      return state;
+    }
+
+    objectGeometryChanged(annotationUuid) {
+      return this.humanTruthChanged(
+        "A visible-person box changed. Related machine-box answers need checking.",
+        {targetUuids: [annotationUuid]},
+      );
+    }
+
+    objectSemanticChanged(annotationUuid, {candidateRelevant = true, reopenQuestions = false} = {}) {
+      const state = this.state();
+      if (!this.revisionAware()) return state;
+      state.person_question_revision += 1;
+      delete state.person_question_completion_revisions[annotationUuid];
+      state.completed_object_uuids = state.completed_object_uuids.filter((uuid) => uuid !== annotationUuid);
+      if (candidateRelevant) {
+        this.invalidateCandidateAnswers(
+          state,
+          "A person classification changed. Related machine-box answers need checking.",
+          (answer) => answer.annotation_uuids.includes(annotationUuid),
+        );
+      } else {
+        this.markSummaryStale(state, "Person details changed; review the case summary.");
+      }
+      if (reopenQuestions) {
+        state.step = 2;
+        state.current_object_uuid = annotationUuid;
+        state.question_index = 0;
+      }
+      return state;
     }
 
     currentCandidateEntry() {
@@ -262,6 +460,31 @@
       }
       if (!["detection_gold_player_static", "detection_gold_dense_region"].includes(task)) return;
       this.mutate((state) => {
+        if (this.revisionAware()) {
+          const backgroundAnswers = Object.values(state.candidate_answer_records).filter(
+            (answer) => answer.validity === "VALID"
+              && answer.relation === "BACKGROUND"
+              && answer.annotation_uuids.length === 0
+          );
+          this.humanTruthChanged(
+            "A person was added. Existing machine-box answers need checking against the new human truth.",
+            {invalidateAll: true},
+          );
+          if (backgroundAnswers.length && window.confirm('Keep the previous "not a person" answers?')) {
+            const now = new Date().toISOString();
+            for (const prior of backgroundAnswers) {
+              const answer = state.candidate_answer_records[prior.candidate_uuid];
+              state.candidate_answer_revision += 1;
+              answer.validity = "VALID";
+              answer.invalidation_reason = null;
+              answer.answered_against_human_truth_revision = state.human_truth_revision;
+              answer.candidate_answer_revision = state.candidate_answer_revision;
+              answer.revalidated_at = now;
+              answer.revalidation_event = "EXPLICIT_BACKGROUND_RETENTION";
+            }
+            this.syncCandidateAnswered(state);
+          }
+        }
         state.step = 2;
         state.current_object_uuid = annotationUuid;
         state.question_index = 0;
@@ -320,9 +543,27 @@
     }
 
     shell(content, instruction) {
+      const state = this.state();
+      const repairControls = this.revisionAware()
+        && ["detection_gold_player_static", "detection_gold_dense_region"].includes(this.host.caseData().task_type)
+        ? (() => {
+          const progress = this.candidateProgress(state);
+          const warning = state.invalidation_notice || (progress.stale
+            ? `${progress.stale} machine-box answer(s) need checking after the human annotation changed.`
+            : "");
+          const returnControl = state.step > 1
+            ? '<button id="nwReturnDrawing" type="button">Return to drawing people</button>'
+            : "";
+          const reviewControl = state.step > 1 && state.drawing_complete
+            ? `<button id="nwReviewStale" type="button" ${progress.stale || progress.unanswered || progress.invalid ? "" : "disabled"}>Review answers that need checking</button>`
+            : "";
+          return `${warning ? `<div class="nwStaleWarning" role="alert"><strong>Answers need checking</strong><span>${escapeHtml(warning)}</span></div>` : ""}<div class="nwRepairControls">${returnControl}${reviewControl}<button id="nwRestartCase" type="button" ${this.host.isSaved?.() ? "disabled" : ""}>Restart this case</button></div>`;
+        })()
+        : "";
       return `<div class="nwWizard" data-nw-step="${this.state().step}">
         ${this.stepper()}
         <div class="nwTaskIntro"><span class="nwStepEyebrow">STEP ${this.state().step}</span><p>${instruction}</p><button id="nwCurrentHelp" type="button" class="nwHelpButton">How this works</button></div>
+        ${repairControls}
         ${content}
       </div>`;
     }
@@ -366,6 +607,11 @@
     finishObjectQuestions(annotationUuid) {
       this.mutate((state) => {
         if (!state.completed_object_uuids.includes(annotationUuid)) state.completed_object_uuids.push(annotationUuid);
+        if (this.revisionAware()) {
+          state.person_question_revision += 1;
+          state.person_question_completion_revisions[annotationUuid] = state.person_question_revision;
+          state.summary_validity = "NEEDS_REVIEW";
+        }
         state.current_object_uuid = null;
         state.question_index = 0;
         state.step = state.drawing_complete ? 3 : 1;
@@ -396,7 +642,7 @@
       if (state.step === 1) {
         const objects = dense ? annotation.visible_masks : annotation.player_instances;
         const label = dense ? "visible shapes" : "people";
-        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3><p>${dense ? "Trace only the part of each person you can actually see. Do not draw through someone in front." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle frame only. Nearby frames are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button><button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the highlighted area." : "Draw one box around each visible person in the highlighted area.");
+        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3><p>${dense ? "Trace only the part of each person you can actually see. Do not draw through someone in front." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle frame only. Nearby frames are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button>${this.revisionAware() && objects.length ? '<button id="nwDeleteAllObjects" type="button">Delete all people</button>' : ""}<button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the highlighted area." : "Draw one box around each visible person in the highlighted area.");
       }
       if (state.step === 2) {
         const label = this.host.objectIndex(state.current_object_uuid) + 1;
@@ -411,7 +657,11 @@
       const state = this.state();
       const answered = football
         ? new Set(Object.keys(state.football_candidate_answers))
-        : new Set(state.candidate_answered_uuids);
+        : (this.revisionAware()
+          ? new Set(this.candidates()
+            .filter((entry) => state.candidate_answer_records[entry.candidate.diagnostic_uuid]?.validity === "VALID")
+            .map((entry) => entry.candidate.diagnostic_uuid))
+          : new Set(state.candidate_answered_uuids));
       const entries = this.candidates();
       const index = entries.findIndex((entry) => !answered.has(entry.candidate.diagnostic_uuid));
       return index >= 0 ? index : Math.max(0, entries.length - 1);
@@ -422,10 +672,12 @@
       const entries = this.candidates();
       const entry = this.currentCandidateEntry();
       if (!entry) {
-        state.step = 4;
+        if (this.revisionAware()) this.markSummaryReady(state);
+        else state.step = 4;
         return this.renderReview(annotation);
       }
       const number = state.candidate_index + 1;
+      const progress = this.candidateProgress(state);
       const targets = this.host.objects(annotation);
       let content;
       if (state.candidate_phase === "relation") {
@@ -438,7 +690,7 @@
       } else {
         content = answerButtons("Why might the machine have struggled here?", FAILURE_CHOICES, "failure", {columns: 1, hint: "Choose I don't know if the technical reason is not clear."});
       }
-      return this.shell(`<div class="nwCandidateHeader"><span>Machine Box ${number} of ${entries.length}</span><strong>${state.candidate_answered_uuids.length}/${entries.length} checked</strong></div>${content}<div class="nwActionRow"><button id="nwPreviousCandidate" type="button" ${state.candidate_index ? "" : "disabled"}>Previous machine box</button><button id="nwNextUnansweredCandidate" type="button">Next unanswered</button><button id="nwUndo" type="button">Undo answer</button></div>`, "Now check the machine's boxes. We will show them one at a time.");
+      return this.shell(`<div class="nwCandidateHeader"><span>Machine Box ${number} of ${entries.length}</span><strong>${progress.valid}/${entries.length} valid</strong></div>${this.revisionAware() ? `<div class="nwValidityProgress"><span>${progress.valid} valid</span><span>${progress.stale} need checking</span><span>${progress.unanswered} unanswered</span><span>${progress.invalid} invalid</span></div>` : ""}${content}<div class="nwActionRow"><button id="nwPreviousCandidate" type="button" ${state.candidate_index ? "" : "disabled"}>Previous machine box</button><button id="nwNextUnansweredCandidate" type="button">Next unanswered</button><button id="nwUndo" type="button">Undo answer</button></div>`, "Now check the machine's boxes. We will show them one at a time.");
     }
 
     renderTemporal(annotation) {
@@ -531,14 +783,19 @@
       }
       const usesCandidateQueue = ["detection_gold_player_static", "detection_gold_dense_region", "detection_gold_football_burst"].includes(task);
       const candidateTotal = this.candidates().length;
-      const candidateDone = task === "detection_gold_football_burst" ? Object.keys(state.football_candidate_answers).length : state.candidate_answered_uuids.length;
+      const revisionProgress = this.candidateProgress(state);
+      const candidateDone = task === "detection_gold_football_burst"
+        ? Object.keys(state.football_candidate_answers).length
+        : (this.revisionAware() ? revisionProgress.valid : state.candidate_answered_uuids.length);
       const candidateSummary = usesCandidateQueue
-        ? `<span><strong>${candidateDone}/${candidateTotal}</strong> machine boxes checked</span>`
+        ? `<span><strong>${candidateDone}/${candidateTotal}</strong> machine boxes valid${this.revisionAware() && (revisionProgress.stale || revisionProgress.unanswered || revisionProgress.invalid) ? `; ${revisionProgress.stale} need checking, ${revisionProgress.unanswered} unanswered` : ""}</span>`
         : "";
       const candidateLinks = usesCandidateQueue && candidateTotal
         ? `<details class="nwCandidateReviewLinks"><summary>Review a machine-box answer</summary><div>${this.candidates().map((entry, index) => `<button type="button" data-nw-edit-candidate="${index}">Review Machine Box ${index + 1}</button>`).join("")}</div></details>`
         : "";
-      return this.shell(`<section class="nwReviewCard"><h3>Check your work</h3><div class="nwReviewStats"><span><strong>${task.includes("temporal") || task.includes("football") ? state.frame_answered_sequences.length : this.host.objects(annotation).length}</strong> ${task.includes("temporal") || task.includes("football") ? "frames checked" : "people marked"}</span>${candidateSummary}</div><ul class="nwReviewList">${rows || "<li><strong>No visible people marked</strong><span>This is allowed when none are visible.</span></li>"}</ul>${candidateLinks}<details class="nwNote"><summary>Add a note</summary><textarea id="nwNote" maxlength="1000" rows="3" placeholder="Optional">${escapeHtml(annotation.note || "")}</textarea></details><button id="nwSaveCase" class="nwPrimary nwSave" type="button">Save this case</button></section>`, "Check the plain-language summary, then save to the server.");
+      const saveBlocked = this.revisionAware() && ["detection_gold_player_static", "detection_gold_dense_region"].includes(task)
+        && (revisionProgress.stale || revisionProgress.unanswered || revisionProgress.invalid || state.summary_validity !== "VALID");
+      return this.shell(`<section class="nwReviewCard"><h3>Check your work</h3><div class="nwReviewStats"><span><strong>${task.includes("temporal") || task.includes("football") ? state.frame_answered_sequences.length : this.host.objects(annotation).length}</strong> ${task.includes("temporal") || task.includes("football") ? "frames checked" : "people marked"}</span>${candidateSummary}</div><ul class="nwReviewList">${rows || "<li><strong>No visible people marked</strong><span>This is allowed when none are visible.</span></li>"}</ul>${candidateLinks}<details class="nwNote"><summary>Add a note</summary><textarea id="nwNote" maxlength="1000" rows="3" placeholder="Optional">${escapeHtml(annotation.note || "")}</textarea></details><button id="nwSaveCase" class="nwPrimary nwSave" type="button" ${saveBlocked ? "disabled" : ""}>Save this case</button></section>`, "Check the plain-language summary, then save to the server.");
     }
 
     render(annotation) {
@@ -554,6 +811,12 @@
       const state = this.state();
       const selected = this.host.objects(annotation).find((row) => row.annotation_uuid === state.current_object_uuid);
       this.mutate((draftState) => {
+        if (this.revisionAware() && state.step === 2 && selected) {
+          const candidateRelevant = new Set([
+            "visibility", "occluder", "hidden_amount", "edge", "mask_quality", "mask_front", "mask_truncation",
+          ]).has(key);
+          this.objectSemanticChanged(selected.annotation_uuid, {candidateRelevant});
+        }
         if (key === "role") selected.coarse_role = rawValue;
         else if (key === "visibility") {
           selected.visibility_state = rawValue;
@@ -623,8 +886,9 @@
         } else if (key === "failure") {
           annotation.earliest_failure_stage = rawValue;
           draftState.failure_reviewed = true;
-          draftState.step = 4;
           draftState.candidate_phase = "relation";
+          if (this.revisionAware()) this.markSummaryReady(draftState);
+          else draftState.step = 4;
           return;
         } else if (key === "temporal_state") {
           this.setTemporalChoice(rawValue, draftState, annotation);
@@ -662,13 +926,20 @@
       const entry = this.currentCandidateEntry();
       if (!entry) return;
       this.host.upsertCandidateRelation(annotation, entry.candidate, relation, targets, coverage);
-      if (!state.candidate_answered_uuids.includes(entry.candidate.diagnostic_uuid)) state.candidate_answered_uuids.push(entry.candidate.diagnostic_uuid);
+      if (this.revisionAware()) this.recordCandidateAnswer(state, relation, targets);
+      else if (!state.candidate_answered_uuids.includes(entry.candidate.diagnostic_uuid)) state.candidate_answered_uuids.push(entry.candidate.diagnostic_uuid);
       this.advanceCandidate(state);
     }
 
     advanceCandidate(state, {football = false} = {}) {
       const entries = this.candidates();
-      const answered = football ? new Set(Object.keys(state.football_candidate_answers)) : new Set(state.candidate_answered_uuids);
+      const answered = football
+        ? new Set(Object.keys(state.football_candidate_answers))
+        : (this.revisionAware()
+          ? new Set(entries
+            .filter((entry) => state.candidate_answer_records[entry.candidate.diagnostic_uuid]?.validity === "VALID")
+            .map((entry) => entry.candidate.diagnostic_uuid))
+          : new Set(state.candidate_answered_uuids));
       const next = entries.findIndex((entry) => !answered.has(entry.candidate.diagnostic_uuid));
       state.candidate_relation = null;
       state.candidate_targets = [];
@@ -681,7 +952,8 @@
         state.candidate_phase = "failure";
         return;
       }
-      state.step = 4;
+      if (this.revisionAware()) this.markSummaryReady(state);
+      else state.step = 4;
     }
 
     setTemporalChoice(value, state, annotation) {
@@ -795,11 +1067,15 @@
     bind() {
       const one = (selector, handler) => document.querySelector(selector)?.addEventListener("click", handler);
       document.querySelectorAll("[data-nw-answer-key]").forEach((button) => button.addEventListener("click", () => this.handleAnswer(button.dataset.nwAnswerKey, button.dataset.nwAnswerValue)));
-      document.querySelectorAll("[data-nw-edit-object]").forEach((button) => button.addEventListener("click", () => this.mutate((state) => {
-        state.current_object_uuid = button.dataset.nwEditObject;
-        state.question_index = 0;
-        state.step = 2;
-      })));
+      document.querySelectorAll("[data-nw-edit-object]").forEach((button) => button.addEventListener("click", () => {
+        const annotationUuid = button.dataset.nwEditObject;
+        this.host.selectObject(annotationUuid);
+        this.mutate((state) => {
+          state.current_object_uuid = annotationUuid;
+          state.question_index = 0;
+          state.step = 2;
+        });
+      }));
       document.querySelectorAll("[data-nw-edit-frame]").forEach((button) => button.addEventListener("click", () => this.mutate((state) => {
         this.host.setFrameSilently(Number(button.dataset.nwEditFrame));
         state.step = 1;
@@ -814,13 +1090,39 @@
       one("#nwDrawObject", () => this.host.setTool(this.host.caseData().task_type === "detection_gold_dense_region" ? "mask" : "box"));
       one("#nwFinishOutline", this.host.finishMask);
       one("#nwDoneDrawing", () => this.mutate((state) => {
+        const unfinished = this.host.objects().find(
+          (row) => !state.completed_object_uuids.includes(row.annotation_uuid)
+        );
+        if (unfinished) {
+          state.current_object_uuid = unfinished.annotation_uuid;
+          state.question_index = 0;
+          state.step = 2;
+          return;
+        }
         state.drawing_complete = true;
-        state.step = 3;
-        state.candidate_index = this.nextUnansweredCandidateIndex();
+        if (this.candidates().length) {
+          state.step = 3;
+          state.candidate_index = this.nextUnansweredCandidateIndex();
+        } else if (this.revisionAware()) this.markSummaryReady(state);
+        else state.step = 4;
       }));
       one("#nwUndo", this.host.undo);
       one("#nwQuestionBack", () => this.mutate((state) => { state.question_index = Math.max(0, state.question_index - 1); }));
       one("#nwDeleteObject", this.host.removeSelected);
+      one("#nwDeleteAllObjects", this.host.deleteAllObjects);
+      one("#nwReturnDrawing", () => this.mutate((state) => {
+        state.step = 1;
+        state.current_object_uuid = null;
+        state.question_index = 0;
+      }, {history: false}));
+      one("#nwReviewStale", () => this.mutate((state) => {
+        state.step = 3;
+        state.candidate_index = this.nextUnansweredCandidateIndex();
+        state.candidate_phase = "relation";
+        state.candidate_relation = null;
+        state.candidate_targets = [];
+      }, {history: false}));
+      one("#nwRestartCase", this.host.restartCase);
       one("#nwPlaceFootpoint", () => this.host.setTool("footpoint"));
       one("#nwAdjustFootpoint", () => this.host.setTool("footpoint"));
       one("#nwPlaceBall", () => this.host.setTool("ball"));
@@ -902,7 +1204,18 @@
       if (["detection_gold_player_static", "detection_gold_dense_region"].includes(task)) {
         const ids = this.host.objects().map((row) => row.annotation_uuid);
         if (ids.some((uuid) => !state.completed_object_uuids.includes(uuid))) throw new Error("Finish the short questions for every marked person.");
-        if (state.candidate_answered_uuids.length !== this.candidates().length) throw new Error("Check every machine box before saving.");
+        if (this.revisionAware()) {
+          const progress = this.candidateProgress(state);
+          if (progress.stale || progress.invalid) throw new Error("Review every stale machine-box answer before saving.");
+          if (progress.unanswered || progress.valid !== progress.total) throw new Error("Check every machine box before saving.");
+          if (state.summary_validity !== "VALID") throw new Error("Review the updated case summary before saving.");
+          if (!state.drawing_complete) throw new Error("Explicitly confirm that you are done drawing people before saving.");
+          if (Object.keys(state.person_question_completion_revisions).length !== ids.length) {
+            throw new Error("Finish the current person questions before saving.");
+          }
+        } else if (state.candidate_answered_uuids.length !== this.candidates().length) {
+          throw new Error("Check every machine box before saving.");
+        }
         if (task === "detection_gold_player_static" && !state.failure_reviewed) throw new Error("Answer the final machine-difficulty question.");
         if (this.host.incrementalR3?.() === true) {
           const binding = this.host.authoritativeBinding();

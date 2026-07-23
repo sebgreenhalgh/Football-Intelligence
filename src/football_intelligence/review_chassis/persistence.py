@@ -121,6 +121,11 @@ class GenericReviewPersistence:
             **safety_payload(),
         }
 
+    def accepted_ui_config_hashes(self) -> set[str]:
+        """Return exact UI-config hashes permitted to read this decision state."""
+
+        return {self.ui_config_hash_value}
+
     @synchronized
     def ensure_state(self) -> dict[str, Any]:
         self.decisions_root.mkdir(parents=True, exist_ok=True)
@@ -132,7 +137,7 @@ class GenericReviewPersistence:
             atomic_write_json(self.state_path, state)
         if state.get("manifest_hash") != self.manifest_hash_value:
             raise ValueError("review decision state manifest hash mismatch")
-        if state.get("ui_config_hash") != self.ui_config_hash_value:
+        if state.get("ui_config_hash") not in self.accepted_ui_config_hashes():
             raise ValueError("review decision state UI-config hash mismatch")
         return state
 

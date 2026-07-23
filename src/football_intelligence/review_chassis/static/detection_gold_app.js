@@ -56,6 +56,10 @@
     wizard: null,
     lastCaseId: null,
     positionsByCase: {},
+    revisionAwareR3R1: false,
+    clientBuildId: null,
+    indexedDbNamespace: null,
+    firstLoadReconciliation: null,
   };
 
   const byId = (id) => document.getElementById(id);
@@ -102,7 +106,8 @@
 
   function openDatabase() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(`fi_detection_gold_${runtime.manifest.review_id}`, runtime.incrementalR3 ? 2 : 1);
+      const databaseName = runtime.indexedDbNamespace || `fi_detection_gold_${runtime.manifest.review_id}`;
+      const request = indexedDB.open(databaseName, runtime.incrementalR3 ? 2 : 1);
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains("outbox")) database.createObjectStore("outbox", {keyPath: "client_event_id"});
@@ -858,6 +863,7 @@
             height_pixels: box.y2 - box.y1,
           };
         }
+        runtime.wizard?.objectGeometryChanged(target.annotation_uuid);
         runtime.redrawVisibleObjectUuid = null;
         persistDraft();
         renderAnnotationForm();
@@ -1085,6 +1091,19 @@
     return row;
   }
 
+  function invalidateAdvancedPersonEdit(person, {candidateRelevant = true} = {}) {
+    if (!person || !runtime.revisionAwareR3R1) return;
+    runtime.wizard?.objectSemanticChanged(person.annotation_uuid, {
+      candidateRelevant,
+      reopenQuestions: true,
+    });
+  }
+
+  function invalidateAdvancedCandidateEdit(candidateUuid, reason) {
+    if (!candidateUuid || !runtime.revisionAwareR3R1) return;
+    runtime.wizard?.candidateAnswerEdited(candidateUuid, reason);
+  }
+
   function removeSelectedAnnotation(annotation) {
     const selected = selectedObject(annotation);
     if (!selected) return;
@@ -1111,25 +1130,20 @@
         if (mask.occluder_uuid === selected.annotation_uuid) delete mask.occluder_uuid;
       }
     }
-    annotation.candidate_relations = (annotation.candidate_relations || []).filter(
-      (row) => !row.annotation_uuids.includes(selected.annotation_uuid)
-    );
+    annotation.candidate_relations = (annotation.candidate_relations || []).map((row) => {
+      if (!row.annotation_uuids.includes(selected.annotation_uuid)) return row;
+      const updated = {...row, annotation_uuids: row.annotation_uuids.filter(
+        (uuid) => uuid !== selected.annotation_uuid
+      )};
+      if (!updated.annotation_uuids.length) delete updated.candidate_visible_mask_coverage;
+      return updated;
+    });
     const replacement = annotationObjects(annotation)[0];
     if (replacement) runtime.selectedObjectByCase[currentCase().case_id] = replacement.annotation_uuid;
     else delete runtime.selectedObjectByCase[currentCase().case_id];
     runtime.redrawVisibleObjectUuid = null;
     if (runtime.novice) {
-      const wizardState = runtime.wizard.state();
-      wizardState.completed_object_uuids = wizardState.completed_object_uuids.filter(
-        (uuid) => uuid !== selected.annotation_uuid
-      );
-      wizardState.footpoint_placed_uuids = wizardState.footpoint_placed_uuids.filter(
-        (uuid) => uuid !== selected.annotation_uuid
-      );
-      if (wizardState.footpoint_reviews) delete wizardState.footpoint_reviews[selected.annotation_uuid];
-      wizardState.current_object_uuid = null;
-      wizardState.question_index = 0;
-      wizardState.step = 1;
+      runtime.wizard.objectDeleted(selected.annotation_uuid);
     }
     persistDraft();
     if (runtime.novice) renderCase();
@@ -1137,7 +1151,67 @@
       renderAnnotationForm();
       renderOverlay();
     }
-    if (affected.length) showError(`${affected.length} candidate binding(s) were cleared. Rebind them before saving.`);
+    if (affected.length) showError("Some machine-box answers need checking again because a person was removed.");
+  }
+
+  function deleteAllAnnotations() {
+    const annotation = draft();
+    const objects = annotationObjects(annotation);
+    if (!objects.length) return;
+    if (!window.confirm(`Delete all ${objects.length} marked people from this unsaved case? Saved cases and other tranches will not change.`)) return;
+    pushHistory();
+    const deletedUuids = objects.map((row) => row.annotation_uuid);
+    if (annotation.player_instances) {
+      annotation.player_instances = [];
+      annotation.visible_person_count = 0;
+    } else {
+      annotation.visible_masks = [];
+      annotation.human_visible_person_count = 0;
+    }
+    annotation.candidate_relations = (annotation.candidate_relations || []).map((row) => {
+      if (!row.annotation_uuids.some((uuid) => deletedUuids.includes(uuid))) return row;
+      const updated = {...row, annotation_uuids: []};
+      delete updated.candidate_visible_mask_coverage;
+      return updated;
+    });
+    delete runtime.selectedObjectByCase[currentCase().case_id];
+    runtime.redrawVisibleObjectUuid = null;
+    runtime.wizard?.allObjectsDeleted(deletedUuids);
+    persistDraft();
+    renderCase();
+    showError("Start again by drawing the visible people. Earlier machine-box answers need review.");
+  }
+
+  async function restartCurrentCase() {
+    const caseData = currentCase();
+    if ((runtime.state.annotations || {})[caseData.case_id]) {
+      showError("This case is already saved on the server and cannot be restarted as an unsaved draft.");
+      return;
+    }
+    if (!window.confirm("Restart this unsaved case? Only this browser draft will be cleared. Saved cases and tranche completion will remain unchanged.")) return;
+    runtime.drafts[caseData.case_id] = defaultAnnotation(caseData);
+    runtime.geometryDrafts[caseData.case_id] = {};
+    delete runtime.positionsByCase[caseData.case_id];
+    delete runtime.selectedObjectByCase[caseData.case_id];
+    runtime.history = runtime.history.filter((row) => row.case_id !== caseData.case_id);
+    runtime.selectedCandidate = null;
+    runtime.maskPoints = [];
+    runtime.redrawVisibleObjectUuid = null;
+    runtime.frameIndex = authoritativeFrameIndex(caseData);
+    runtime.view = "focal";
+    runtime.wizard?.reset(caseData.case_id);
+    await dbDelete("drafts", caseData.case_id);
+    await dbPut("session", {
+      key: "navigation",
+      current_tranche_id: runtime.currentTrancheId,
+      case_id: caseData.case_id,
+      frame_index: runtime.frameIndex,
+      wizard_step: 1,
+      updated_at: new Date().toISOString(),
+    });
+    runtime.lastCaseId = null;
+    renderCase();
+    setSaveState("This case restarted from a clean Step 1 draft", false);
   }
 
   function renderAnnotationForm() {
@@ -1183,6 +1257,10 @@
       const ids = relation === "BACKGROUND" ? [] : (prior?.annotation_uuids || []);
       pushHistory();
       upsertSelectedCandidateRelation(annotation, relation, ids, relation === "BACKGROUND" ? null : undefined);
+      invalidateAdvancedCandidateEdit(
+        runtime.selectedCandidate.diagnostic_uuid,
+        "A machine-box relation changed in advanced details and needs guided confirmation.",
+      );
       persistDraft();
       renderAnnotationForm();
     });
@@ -1196,6 +1274,10 @@
         );
         pushHistory();
         upsertSelectedCandidateRelation(annotation, relation, ids);
+        invalidateAdvancedCandidateEdit(
+          runtime.selectedCandidate.diagnostic_uuid,
+          "Machine-box targets changed in advanced details and need guided confirmation.",
+        );
         persistDraft();
         renderAnnotationForm();
       });
@@ -1217,6 +1299,10 @@
       const value = Number(event.target.value);
       if (!Number.isFinite(value) || value < 0 || value > 1) return showError("Candidate-to-mask coverage must be between 0 and 1.");
       relation.candidate_visible_mask_coverage = value;
+      invalidateAdvancedCandidateEdit(
+        runtime.selectedCandidate.diagnostic_uuid,
+        "Machine-box mask coverage changed in advanced details and needs guided confirmation.",
+      );
       persistDraft();
     });
     byId("dgClearCandidateBinding")?.addEventListener("click", () => {
@@ -1224,6 +1310,10 @@
       pushHistory();
       annotation.candidate_relations = (annotation.candidate_relations || []).filter(
         (row) => row.candidate_uuid !== runtime.selectedCandidate.diagnostic_uuid
+      );
+      invalidateAdvancedCandidateEdit(
+        runtime.selectedCandidate.diagnostic_uuid,
+        "A machine-box binding was cleared and must be reviewed again.",
       );
       persistDraft();
       renderAnnotationForm();
@@ -1242,36 +1332,42 @@
       pushHistory();
       for (const candidateUuid of remaining) {
         annotation.candidate_relations.push({candidate_uuid: candidateUuid, relation: "BACKGROUND", annotation_uuids: []});
+        invalidateAdvancedCandidateEdit(
+          candidateUuid,
+          "A machine box was marked as background in advanced details and needs guided confirmation.",
+        );
       }
       persistDraft(); renderAnnotationForm(); renderOverlay();
     });
     byId("dgFailureStage")?.addEventListener("change", (event) => { annotation.earliest_failure_stage = event.target.value; persistDraft(); });
     byId("dgFinishMask")?.addEventListener("click", finishMask);
     byId("dgDenseIgnore")?.addEventListener("change", (event) => { annotation.uncertain_or_ignore = event.target.checked; persistDraft(); });
-    byId("dgMaskQuality")?.addEventListener("change", (event) => { const mask = selectedObject(annotation); if (mask) mask.mask_quality = event.target.value; persistDraft(); renderAnnotationForm(); renderOverlay(); });
-    byId("dgOcclusionOrder")?.addEventListener("input", (event) => { const mask = selectedObject(annotation); if (mask) mask.occlusion_order = Number(event.target.value); persistDraft(); });
-    byId("dgOccluderUuid")?.addEventListener("input", (event) => { const mask = selectedObject(annotation); if (!mask) return; if (event.target.value) mask.occluder_uuid = event.target.value; else delete mask.occluder_uuid; persistDraft(); });
+    byId("dgMaskQuality")?.addEventListener("change", (event) => { const mask = selectedObject(annotation); if (mask) { invalidateAdvancedPersonEdit(mask); mask.mask_quality = event.target.value; } persistDraft(); renderAnnotationForm(); renderOverlay(); });
+    byId("dgOcclusionOrder")?.addEventListener("input", (event) => { const mask = selectedObject(annotation); if (mask) { invalidateAdvancedPersonEdit(mask); mask.occlusion_order = Number(event.target.value); } persistDraft(); });
+    byId("dgOccluderUuid")?.addEventListener("input", (event) => { const mask = selectedObject(annotation); if (!mask) return; invalidateAdvancedPersonEdit(mask); if (event.target.value) mask.occluder_uuid = event.target.value; else delete mask.occluder_uuid; persistDraft(); });
     for (const toggle of document.querySelectorAll("[data-dg-overlap-uuid]")) {
       toggle.addEventListener("change", () => {
         const mask = selectedObject(annotation);
         if (!mask) return;
+        invalidateAdvancedPersonEdit(mask);
         const selected = new Set(mask.pairwise_overlap_annotation_uuids || []);
         if (toggle.checked) selected.add(toggle.dataset.dgOverlapUuid); else selected.delete(toggle.dataset.dgOverlapUuid);
         mask.pairwise_overlap_annotation_uuids = [...selected].sort();
         persistDraft();
       });
     }
-    byId("dgPersonVisibility")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.visibility_state = event.target.value; persistDraft(); renderAnnotationForm(); renderOverlay(); });
-    byId("dgOcclusionType")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.occlusion_type = event.target.value; persistDraft(); renderAnnotationForm(); });
-    byId("dgOcclusionFraction")?.addEventListener("input", (event) => { const person = selectedObject(annotation); if (person) person.occlusion_fraction = Number(event.target.value); persistDraft(); });
+    byId("dgPersonVisibility")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) { invalidateAdvancedPersonEdit(person); person.visibility_state = event.target.value; } persistDraft(); renderAnnotationForm(); renderOverlay(); });
+    byId("dgOcclusionType")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) { invalidateAdvancedPersonEdit(person); person.occlusion_type = event.target.value; } persistDraft(); renderAnnotationForm(); });
+    byId("dgOcclusionFraction")?.addEventListener("input", (event) => { const person = selectedObject(annotation); if (person) { invalidateAdvancedPersonEdit(person); person.occlusion_fraction = Number(event.target.value); } persistDraft(); });
     byId("dgPersonFootpointUncertainty")?.addEventListener("input", (event) => { const person = selectedObject(annotation); if (person) person.footpoint_uncertainty_pixels = Number(event.target.value); persistDraft(); });
-    byId("dgPersonPitchState")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.pitch_state = event.target.value; persistDraft(); renderAnnotationForm(); });
-    byId("dgPersonRole")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.coarse_role = event.target.value; persistDraft(); renderAnnotationForm(); });
-    byId("dgPersonAmbiguityIgnore")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) person.ambiguity_ignore = event.target.checked; persistDraft(); });
+    byId("dgPersonPitchState")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) { invalidateAdvancedPersonEdit(person, {candidateRelevant: false}); person.pitch_state = event.target.value; } persistDraft(); renderAnnotationForm(); });
+    byId("dgPersonRole")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) { invalidateAdvancedPersonEdit(person, {candidateRelevant: false}); person.coarse_role = event.target.value; } persistDraft(); renderAnnotationForm(); });
+    byId("dgPersonAmbiguityIgnore")?.addEventListener("change", (event) => { const person = selectedObject(annotation); if (person) { invalidateAdvancedPersonEdit(person); person.ambiguity_ignore = event.target.checked; } persistDraft(); });
     for (const toggle of document.querySelectorAll("[data-dg-truncation]")) {
       toggle.addEventListener("change", () => {
         const person = selectedObject(annotation);
         if (!person) return;
+        invalidateAdvancedPersonEdit(person);
         const selected = new Set(person.truncation_flags || []);
         if (toggle.checked) selected.add(toggle.dataset.dgTruncation); else selected.delete(toggle.dataset.dgTruncation);
         person.truncation_flags = [...selected].sort();
@@ -2064,6 +2160,9 @@
     runtime.uiConfig = uiConfig;
     runtime.state = state;
     runtime.api = api;
+    runtime.clientBuildId = uiConfig.question_contract.client_build_id || null;
+    runtime.revisionAwareR3R1 = uiConfig.question_contract.revision_aware_wizard_state === true;
+    runtime.indexedDbNamespace = uiConfig.question_contract.indexeddb_namespace || null;
     runtime.novice = uiConfig.question_contract.novice_guided_wizard === true;
     runtime.incrementalR3 = uiConfig.question_contract.incremental_gold_tranches === true;
     runtime.tranches = runtime.incrementalR3 ? (uiConfig.question_contract.gold_tranches || {}) : {};
@@ -2088,8 +2187,31 @@
     runtime.serverStateHash = state.server_state_hash || "";
     runtime.serverSequence = Number(state.event_sequence || 0);
     runtime.db = await openDatabase();
+    let firstRepairLoad = false;
+    let navigation = null;
     if (runtime.incrementalR3) {
-      const navigation = (await dbAll("session")).find((row) => row.key === "navigation");
+      const sessionRows = await dbAll("session");
+      const repairMarker = sessionRows.find((row) => row.key === "r3_r1_first_load_reconciled");
+      firstRepairLoad = runtime.revisionAwareR3R1 && !repairMarker;
+      if (firstRepairLoad) {
+        const initialDrafts = await dbAll("drafts");
+        const initialOutbox = await dbAll("outbox");
+        for (const row of initialDrafts) await dbDelete("drafts", row.case_id);
+        for (const row of initialOutbox) await dbDelete("outbox", row.client_event_id);
+        await dbPut("session", {
+          key: "r3_r1_first_load_reconciled",
+          client_build_id: runtime.clientBuildId,
+          reconciled_at: new Date().toISOString(),
+          stale_prior_namespace_imported: false,
+        });
+        runtime.firstLoadReconciliation = {
+          stale_prior_namespace_imported: false,
+          cleared_new_namespace_draft_count: initialDrafts.length,
+          cleared_new_namespace_outbox_count: initialOutbox.length,
+        };
+      } else {
+        navigation = sessionRows.find((row) => row.key === "navigation");
+      }
       if (navigation?.current_tranche_id && runtime.tranches[navigation.current_tranche_id]) {
         runtime.currentTrancheId = navigation.current_tranche_id;
         byId("dgTrancheSelect").value = runtime.currentTrancheId;
@@ -2103,6 +2225,7 @@
         objects: annotationObjects,
         objectIndex: (annotationUuid) => annotationObjects().findIndex((item) => item.annotation_uuid === annotationUuid),
         selectedCandidate: () => runtime.selectedCandidate,
+        selectObject,
         setSelectedCandidate: (candidate) => { runtime.selectedCandidate = candidate; },
         frameIndex: () => runtime.frameIndex,
         records,
@@ -2124,6 +2247,9 @@
         render: renderCase,
         undo,
         removeSelected: () => removeSelectedAnnotation(draft()),
+        deleteAllObjects: deleteAllAnnotations,
+        restartCase: restartCurrentCase,
+        isSaved: () => Boolean((runtime.state.annotations || {})[currentCase().case_id]),
         finishMask,
         maskPointCount: () => runtime.maskPoints.length,
         save: enqueueSave,
@@ -2133,6 +2259,7 @@
         authoritativeBinding,
         authoritativeCandidateUuids,
         currentTrancheId: () => runtime.currentTrancheId,
+        revisionAware: () => runtime.revisionAwareR3R1,
         estimateHiddenFootpoint,
       });
     }
@@ -2149,6 +2276,7 @@
     const recovery = await api("/api/review/detection-gold-recover", {
       method: "POST",
       body: JSON.stringify({
+        write_sidecar: !runtime.revisionAwareR3R1,
         pending_outbox_events: runtime.outbox.length,
         evidence_blocker_count: 0,
         unresolved_draft_count: storedDrafts.length,
@@ -2159,12 +2287,27 @@
     runtime.state.counts = recovery.completion_eligibility;
     runtime.serverStateHash = recovery.server_state_hash;
     runtime.serverSequence = recovery.server_event_sequence;
+    if (runtime.revisionAwareR3R1 && runtime.state.active_tranche_id && runtime.tranches[runtime.state.active_tranche_id]) {
+      runtime.currentTrancheId = runtime.state.active_tranche_id;
+      byId("dgTrancheSelect").value = runtime.currentTrancheId;
+    }
     const resumeId = state.resume_case_id || recovery.materialized_state.last_viewed_case_id;
-    runtime.activeIndex = Math.max(0, activeCases().findIndex((caseData) => caseData.case_id === resumeId));
+    const firstServerUnsaved = activeCases().findIndex(
+      (caseData) => !(runtime.state.annotations || {})[caseData.case_id]
+    );
+    runtime.activeIndex = firstRepairLoad
+      ? Math.max(0, firstServerUnsaved)
+      : Math.max(0, activeCases().findIndex((caseData) => caseData.case_id === resumeId));
     bind();
     updateServerState();
     await flushOutbox();
     renderCase();
+    if (firstRepairLoad) {
+      setSaveState(
+        "Six saved Tranche B cases were restored from the server. The unsaved Case 7 draft was cleared because the annotation workflow was repaired.",
+        false,
+      );
+    }
     runtime.wizard?.showTour(false);
     setInterval(activeSeconds, 10000);
   }

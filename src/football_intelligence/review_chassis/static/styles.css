@@ -1742,6 +1742,41 @@ body.detectionGoldIncremental .dgTrancheControls select { min-height: 36px; }
   gap: 8px;
   padding-top: 10px;
 }
+
+.nwRepairControls,
+.nwValidityProgress {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+}
+
+.nwRepairControls button {
+  min-height: 38px;
+  white-space: normal;
+}
+
+.nwStaleWarning {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid #d7a94f;
+  border-left-width: 4px;
+  color: #fff0bd;
+  background: #2a210f;
+}
+
+.nwStaleWarning span {
+  color: #f5dfaa;
+  line-height: 1.4;
+}
+
+.nwValidityProgress span {
+  padding: 7px 9px;
+  border: 1px solid #3d4a46;
+  color: #d9e4e0;
+  background: #141b19;
+  font-size: 12px;
+}
 body.detectionGoldNovice .dgHumanBox,
 body.detectionGoldNovice .dgHumanMask { pointer-events: none; }
 

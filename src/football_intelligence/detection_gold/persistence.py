@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.detection_gold.incremental import (
+    R3_R1_CLIENT_BUILD_ID,
     R3_WIZARD_SCHEMA,
     STATIC_TASK_TYPES,
     authoritative_candidate_binding_hash,
@@ -18,6 +19,7 @@ from football_intelligence.detection_gold.incremental import (
     r3_enabled,
     tranche_contract,
     tranche_for_case,
+    validate_revision_aware_wizard_state,
 )
 from football_intelligence.detection_gold.models import SourceBinding, validate_case_annotation
 from football_intelligence.review.schemas import safety_payload
@@ -42,6 +44,16 @@ DETECTION_EVENT_TYPES = {
 
 class DetectionGoldPilotPersistence(GenericReviewPersistence):
     """Server-authoritative materializer backed by an append-only event ledger."""
+
+    def accepted_ui_config_hashes(self) -> set[str]:
+        accepted = super().accepted_ui_config_hashes()
+        contract = self.ui_config.question_contract
+        if contract.get("client_build_id") != R3_R1_CLIENT_BUILD_ID:
+            return accepted
+        predecessors = contract.get("compatible_predecessor_ui_config_hashes", [])
+        if not isinstance(predecessors, list) or not all(isinstance(value, str) for value in predecessors):
+            raise ValueError("compatible predecessor UI-config hashes must be a string list")
+        return accepted | set(predecessors)
 
     def empty_state(self) -> dict[str, Any]:
         state = super().empty_state()
@@ -352,6 +364,9 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         case = self.case_map().get(case_id)
         if case is None:
             raise ValueError(f"unknown detection-gold case: {case_id}")
+        prior = state.setdefault("annotations", {}).get(case_id)
+        if self.ui_config.question_contract.get("client_build_id") == R3_R1_CLIENT_BUILD_ID and prior is not None:
+            raise ValueError("saved R3 cases are immutable under the wizard-state repair")
         if self._r3_enabled():
             completed_tranches = state.get("tranche_completions", {})
             if tranche_for_case(self.ui_config.question_contract, case_id) in completed_tranches:
@@ -374,13 +389,16 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             if self._r3_enabled():
                 active_tranche_id = self._validate_r3_wizard_state(case, wizard_state)
                 self._validate_r3_footpoints(case, annotation, wizard_state)
+                if self.ui_config.question_contract.get("client_build_id") == R3_R1_CLIENT_BUILD_ID:
+                    validate_revision_aware_wizard_state(case, annotation, wizard_state)
             elif wizard_state.get("schema_version") != "football_intelligence.m5_5g1a_r2.wizard_state.v1":
                 raise ValueError("unsupported novice wizard-state schema")
             state.setdefault("wizard_states", {})[case_id] = copy.deepcopy(wizard_state)
         if active_tranche_id is not None:
             state["active_tranche_id"] = active_tranche_id
         annotation_hash = stable_hash(annotation)
-        prior = state.setdefault("annotations", {}).get(case_id)
+        prior_ui_config_hash = state.get("ui_config_hash")
+        state["ui_config_hash"] = self.ui_config_hash_value
         state["annotations"][case_id] = annotation
         state.setdefault("annotation_hashes", {})[case_id] = annotation_hash
         state.setdefault("decisions", {})[case_id] = "ANNOTATED"
@@ -406,6 +424,8 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 "active_tranche_id": active_tranche_id,
                 "expected_server_state_hash": expected_hash,
                 "prior_annotation_hash": stable_hash(prior) if isinstance(prior, dict) else None,
+                "prior_ui_config_hash": prior_ui_config_hash,
+                "ui_config_hash_rebound_on_new_save": prior_ui_config_hash != self.ui_config_hash_value,
             },
         )
         persisted = self._persist(state, event)

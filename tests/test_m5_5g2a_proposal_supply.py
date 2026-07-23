@@ -26,9 +26,7 @@ R3_PACKAGE = (
 DECISIONS = R3_PACKAGE / "decisions"
 COMPLETION = DECISIONS / "completed_tranches" / "A_CORE_STATIC"
 STAGE = PART3 / "M5_5G2A_PLAYER_PROPOSAL_SUPPLY_EXPLORATORY_DIAGNOSTIC_v1"
-EXPECTED_HASHES = {
-    DECISIONS / "review_decisions.json": "02a1a1438fa3e67e4173e984b5a4fa2c38dedb2e421919edfeefbcdf0a578153",
-    DECISIONS / "review_decision_events.jsonl": "b9c8de88c7a48b8c8f8018d3ab6c818f941696dd0b8101371cb560c9efbfcd1e",
+EXPECTED_COMPLETION_HASHES = {
     COMPLETION / "completed_review.json": "326f55d1ea04ae4a2b6ff3365ba36daea4d421eff4a24e109588938fec95fbf1",
     COMPLETION / "completed_review_events.jsonl": "346cb2b24bc8f7e9a6dfee301daab794023a2ee156d03aea3845638f4b744ad2",
     COMPLETION / "completed_review_manifest.json": "54dc3947241121dc78cd67cf6f1943290a465620b364edd9de6020d6f5b11631",
@@ -45,7 +43,7 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def test_exact_completion_hashes_and_generated_ingestion_pass() -> None:
-    assert {path: sha256_file(path) for path in EXPECTED_HASHES} == EXPECTED_HASHES
+    assert {path: sha256_file(path) for path in EXPECTED_COMPLETION_HASHES} == EXPECTED_COMPLETION_HASHES
     validation = read_json(STAGE / "01_TRANCHE_A_INGESTION_AND_QA" / "tranche_a_completion_validation.json")
     assert validation["passed"] is True
     assert validation["case_count"] == 18
@@ -54,7 +52,7 @@ def test_exact_completion_hashes_and_generated_ingestion_pass() -> None:
 
 
 def test_event_replay_handles_case_029_resave_and_completion() -> None:
-    events = read_jsonl(DECISIONS / "review_decision_events.jsonl")
+    events = read_jsonl(COMPLETION / "completed_review_events.jsonl")
     case_ids = read_json(COMPLETION / "completed_review_manifest.json")["case_ids"]
     replay = replay_detection_case_events(events, case_ids)
     assert replay["passed"] is True
@@ -62,6 +60,23 @@ def test_event_replay_handles_case_029_resave_and_completion() -> None:
     assert replay["completion_event_count"] == 1
     assert replay["resave_counts"] == {"m5_5g1a_case_029": 1}
     assert replay["final_events"]["m5_5g1a_case_029"]["event_sequence"] == 19
+
+
+def test_live_tranche_progress_does_not_contaminate_completed_fixture() -> None:
+    completed_events = read_jsonl(COMPLETION / "completed_review_events.jsonl")
+    live_events = read_jsonl(DECISIONS / "review_decision_events.jsonl")
+    identity_fields = (
+        "event_sequence",
+        "event_id",
+        "event_type",
+        "case_id",
+        "annotation_hash",
+        "client_event_id",
+    )
+    completed_identities = [tuple(event.get(field) for field in identity_fields) for event in completed_events]
+    live_identities = [tuple(event.get(field) for field in identity_fields) for event in live_events]
+    assert live_identities[: len(completed_identities)] == completed_identities
+    assert len(live_events) >= len(completed_events)
 
 
 def test_stale_zero_event_recovery_is_not_a_completion_artifact() -> None:

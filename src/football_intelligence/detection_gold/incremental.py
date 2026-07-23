@@ -8,6 +8,8 @@ from typing import Any
 from football_intelligence.review_chassis.hashing import stable_hash
 
 R3_WIZARD_SCHEMA = "football_intelligence.m5_5g1a_r3.wizard_state.v1"
+R3_R1_CLIENT_BUILD_ID = "m5_5g1a_r3_r1_wizard_state_repair_v1"
+R3_R1_CANDIDATE_VALIDITY_STATES = {"VALID", "NEEDS_REVIEW", "UNANSWERED", "INVALID"}
 STATIC_TASK_TYPES = {"detection_gold_player_static", "detection_gold_dense_region"}
 
 
@@ -148,3 +150,110 @@ def validate_tranche_coverage(question_contract: Mapping[str, Any], case_ids: Se
         "tranche_count": len(tranches),
     }
     return {"passed": all(value for key, value in checks.items() if key != "tranche_count"), "checks": checks}
+
+
+def validate_revision_aware_wizard_state(
+    case: Any,
+    annotation: Mapping[str, Any],
+    wizard_state: Mapping[str, Any],
+) -> None:
+    """Reject stale or internally inconsistent R3-R1 wizard saves.
+
+    The scientific annotation schemas remain frozen. Revision and invalidation
+    metadata therefore lives in the persisted wizard sidecar and is checked
+    against the canonical annotation immediately before a save is accepted.
+    """
+
+    revision_fields = (
+        "human_truth_revision",
+        "person_question_revision",
+        "candidate_answer_revision",
+        "summary_revision",
+    )
+    for field in revision_fields:
+        value = wizard_state.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"revision-aware wizard state requires a non-negative {field}")
+
+    if case.task_type not in STATIC_TASK_TYPES:
+        return
+    if wizard_state.get("drawing_complete") is not True or wizard_state.get("step") != 4:
+        raise ValueError("revision-aware static saves require completed drawing and review steps")
+    if wizard_state.get("summary_validity") != "VALID":
+        raise ValueError("revision-aware static saves require a current valid summary")
+    if wizard_state.get("summary_human_truth_revision") != wizard_state["human_truth_revision"]:
+        raise ValueError("revision-aware summary is stale against the current human truth")
+
+    objects = annotation.get("player_instances") or annotation.get("visible_masks") or []
+    object_ids = {str(row.get("annotation_uuid") or "") for row in objects}
+    if "" in object_ids:
+        raise ValueError("revision-aware wizard state found a blank human annotation UUID")
+    completed = {str(value) for value in wizard_state.get("completed_object_uuids", [])}
+    completion_revisions = wizard_state.get("person_question_completion_revisions")
+    if completed != object_ids or not isinstance(completion_revisions, Mapping):
+        raise ValueError("person-question completion must match the current human truth")
+    if set(map(str, completion_revisions)) != object_ids or any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in completion_revisions.values()
+    ):
+        raise ValueError("person-question revision coverage must match every current person")
+
+    expected_candidates = authoritative_candidate_uuids(case)
+    records = wizard_state.get("candidate_answer_records")
+    if not isinstance(records, Mapping) or set(map(str, records)) != set(expected_candidates):
+        raise ValueError("candidate answer revision coverage mismatch")
+    relations = {str(row.get("candidate_uuid")): row for row in annotation.get("candidate_relations", [])}
+    if set(relations) != set(expected_candidates):
+        raise ValueError("candidate relation coverage mismatch")
+
+    valid_candidates: set[str] = set()
+    for candidate_uuid in expected_candidates:
+        record = records.get(candidate_uuid)
+        if not isinstance(record, Mapping):
+            raise ValueError(f"candidate answer record is missing for {candidate_uuid}")
+        validity = record.get("validity")
+        if validity not in R3_R1_CANDIDATE_VALIDITY_STATES:
+            raise ValueError(f"invalid candidate answer validity for {candidate_uuid}")
+        if validity != "VALID":
+            raise ValueError(f"candidate answer {candidate_uuid} still needs review")
+        relation = relations[candidate_uuid]
+        if record.get("candidate_uuid") != candidate_uuid or record.get("relation") != relation.get("relation"):
+            raise ValueError(f"candidate answer binding mismatch for {candidate_uuid}")
+        record_targets = [str(value) for value in record.get("annotation_uuids", [])]
+        relation_targets = [str(value) for value in relation.get("annotation_uuids", [])]
+        if record_targets != relation_targets or not set(record_targets) <= object_ids:
+            raise ValueError(f"candidate answer target mismatch for {candidate_uuid}")
+        for field in (
+            "answered_against_human_truth_revision",
+            "answered_person_question_revision",
+            "candidate_answer_revision",
+        ):
+            value = record.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"candidate answer {candidate_uuid} has invalid {field}")
+        if record["answered_against_human_truth_revision"] > wizard_state["human_truth_revision"]:
+            raise ValueError(f"candidate answer {candidate_uuid} has a future human-truth revision")
+        if record["answered_person_question_revision"] > wizard_state["person_question_revision"]:
+            raise ValueError(f"candidate answer {candidate_uuid} has a future person-question revision")
+        if record["candidate_answer_revision"] > wizard_state["candidate_answer_revision"]:
+            raise ValueError(f"candidate answer {candidate_uuid} has a future answer revision")
+        if record.get("invalidation_reason") not in (None, ""):
+            raise ValueError(f"candidate answer {candidate_uuid} retains an invalidation reason")
+        if not isinstance(record.get("answered_at"), str) or not record["answered_at"]:
+            raise ValueError(f"candidate answer {candidate_uuid} is missing its answer timestamp")
+        if record.get("revalidation_event") not in {
+            "INITIAL_REVIEW",
+            "GUIDED_REVIEW_AFTER_INVALIDATION",
+            "EXPLICIT_BACKGROUND_RETENTION",
+        }:
+            raise ValueError(f"candidate answer {candidate_uuid} has an invalid revalidation event")
+        valid_candidates.add(candidate_uuid)
+
+    answered = {str(value) for value in wizard_state.get("candidate_answered_uuids", [])}
+    if answered != valid_candidates:
+        raise ValueError("valid candidate progress does not match candidate answer records")
+    expected_answer_revision = max(
+        (int(record["candidate_answer_revision"]) for record in records.values()),
+        default=0,
+    )
+    if wizard_state["candidate_answer_revision"] != expected_answer_revision:
+        raise ValueError("candidate-answer revision does not match the latest answer record")

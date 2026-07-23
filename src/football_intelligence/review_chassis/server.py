@@ -241,7 +241,7 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 _json_response(
                     self,
                     persistence.recover_authoritative_state(
-                        write_sidecar=True,
+                        write_sidecar=bool(body.get("write_sidecar", True)),
                         pending_outbox_events=int(body.get("pending_outbox_events", 0)),
                         evidence_blocker_count=int(body.get("evidence_blocker_count", 0)),
                         unresolved_draft_count=int(body.get("unresolved_draft_count", 0)),
