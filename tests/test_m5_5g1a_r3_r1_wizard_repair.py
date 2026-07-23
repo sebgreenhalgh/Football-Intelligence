@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
-import shutil
 import uuid
 from pathlib import Path
 
@@ -32,12 +32,38 @@ PACKAGE = STAGE / "05_REPAIRED_INCREMENTAL_ANNOTATION_PACKAGE"
 REVIEWER = "m5_5g1a_detection_gold_pilot_reviewer_r3"
 CASE_HASH = "986604e34e6f831825dfb76601f854ece083e3ba9001f97bad26d6d596e6a401"
 EVIDENCE_HASH = "58c2de8da4e6e8d2160a29550e8030e7c5225845fc58be44eae7651c0b4a1ab4"
+PRECOMPLETION_SEQUENCE = 26
+PRECOMPLETION_SNAPSHOT = R3_DECISIONS / "snapshots" / "review_state_000026.json"
 
 
 def read_json(path: Path) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(value, dict)
     return value
+
+
+def precompletion_decisions_root(tmp_path: Path) -> Path:
+    """Materialize the immutable sequence-26 state without reading live head state."""
+
+    decisions = tmp_path / "decisions"
+    decisions.mkdir()
+    snapshot = read_json(PRECOMPLETION_SNAPSHOT)
+    assert snapshot["snapshot_sequence"] == PRECOMPLETION_SEQUENCE
+    state = snapshot["state"]
+    assert state["event_sequence"] == PRECOMPLETION_SEQUENCE
+    state_bytes = (json.dumps(state, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
+    (decisions / "review_decisions.json").write_bytes(state_bytes)
+
+    gate = read_json(STAGE / "01_LIVE_STATE_AND_PRESERVATION_AUDIT" / "live_state_precondition.json")
+    event_row = next(
+        row for row in gate["decisions_tree_before"]["files"] if row["path"] == "review_decision_events.jsonl"
+    )
+    live_events = (R3_DECISIONS / "review_decision_events.jsonl").read_bytes()
+    event_prefix = live_events[: event_row["size_bytes"]]
+    assert len(event_prefix) == event_row["size_bytes"]
+    assert hashlib.sha256(event_prefix).hexdigest() == event_row["sha256"]
+    (decisions / "review_decision_events.jsonl").write_bytes(event_prefix)
+    return decisions
 
 
 def case_7(package: Path = PACKAGE) -> object:
@@ -157,7 +183,7 @@ def test_repaired_package_preserves_frozen_payload_and_uses_external_decisions_r
     assert config["revision_aware_wizard_state"] is True
     assert config["prior_indexeddb_namespace_import_forbidden"] is True
     assert config["compatible_predecessor_ui_config_hashes"] == [
-        read_json(R3_DECISIONS / "review_decisions.json")["ui_config_hash"]
+        read_json(PRECOMPLETION_SNAPSHOT)["state"]["ui_config_hash"]
     ]
     assert not (PACKAGE / "decisions").exists()
 
@@ -182,8 +208,30 @@ def test_original_human_decision_files_remain_byte_identical_to_preservation_man
     assert before == after
     for row in before["files"]:
         path = R3_DECISIONS / row["path"]
-        assert path.stat().st_size == row["size_bytes"]
-        assert sha256_file(path) == row["sha256"]
+        if row["path"] == "review_decision_events.jsonl":
+            prefix = path.read_bytes()[: row["size_bytes"]]
+            assert len(prefix) == row["size_bytes"]
+            assert hashlib.sha256(prefix).hexdigest() == row["sha256"]
+        elif row["path"] == "review_decisions.json":
+            state = read_json(PRECOMPLETION_SNAPSHOT)["state"]
+            payload = (json.dumps(state, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
+            assert len(payload) == row["size_bytes"]
+            assert hashlib.sha256(payload).hexdigest() == row["sha256"]
+        else:
+            assert path.stat().st_size == row["size_bytes"]
+            assert sha256_file(path) == row["sha256"]
+
+
+def test_completed_live_ledger_does_not_contaminate_precompletion_fixture(tmp_path: Path) -> None:
+    live_before = {
+        name: sha256_file(R3_DECISIONS / name) for name in ("review_decisions.json", "review_decision_events.jsonl")
+    }
+    decisions = precompletion_decisions_root(tmp_path)
+    assert read_json(decisions / "review_decisions.json")["event_sequence"] == PRECOMPLETION_SEQUENCE
+    assert read_json(R3_DECISIONS / "review_decisions.json")["event_sequence"] > PRECOMPLETION_SEQUENCE
+    assert {
+        name: sha256_file(R3_DECISIONS / name) for name in ("review_decisions.json", "review_decision_events.jsonl")
+    } == live_before
 
 
 def test_revision_validator_accepts_current_state_and_rejects_stale_or_dangling_answers() -> None:
@@ -233,10 +281,7 @@ def test_server_rejects_stale_state_and_persists_a_fully_revalidated_case(tmp_pa
 def test_predecessor_config_read_is_nonmutating_and_rebind_occurs_only_on_new_save(
     tmp_path: Path,
 ) -> None:
-    decisions = tmp_path / "decisions"
-    decisions.mkdir()
-    for filename in ("review_decisions.json", "review_decision_events.jsonl"):
-        shutil.copy2(R3_DECISIONS / filename, decisions / filename)
+    decisions = precompletion_decisions_root(tmp_path)
     before = (decisions / "review_decisions.json").read_bytes()
     store = DetectionGoldPilotPersistence(
         manifest=load_manifest(PACKAGE / "reviewer_manifest.json"),
@@ -257,10 +302,7 @@ def test_predecessor_config_read_is_nonmutating_and_rebind_occurs_only_on_new_sa
 
 
 def test_repair_server_refuses_to_resave_an_existing_human_case(tmp_path: Path) -> None:
-    decisions = tmp_path / "decisions"
-    decisions.mkdir()
-    for filename in ("review_decisions.json", "review_decision_events.jsonl"):
-        shutil.copy2(R3_DECISIONS / filename, decisions / filename)
+    decisions = precompletion_decisions_root(tmp_path)
     store = DetectionGoldPilotPersistence(
         manifest=load_manifest(PACKAGE / "reviewer_manifest.json"),
         ui_config=load_ui_config(PACKAGE / "ui_config.json"),

@@ -25,6 +25,15 @@ RELATIONS = {
 }
 PERSON_SUPPORT_RELATIONS = RELATIONS - {"BACKGROUND"}
 STAGE_ORDER = ("RAW", "CONFIDENCE", "PRE_NMS", "POST_NMS", "FUSED")
+FULL_STAGE_ORDER = ("RAW", "CONFIDENCE_SURVIVING", "PRE_NMS", "POST_NMS", "FUSED")
+PERSON_SUPPLY_STATES = {
+    "NO_PROPOSAL_SUPPORT",
+    "PARTIAL_OR_WEAK_SUPPORT",
+    "MERGED_ONLY_SUPPORT",
+    "INDEPENDENT_SINGLE_SUPPORT",
+    "INDEPENDENT_SUPPORT_WITH_DUPLICATE_BURDEN",
+    "AMBIGUOUS_SUPPORT",
+}
 SUPPLY_STATES = {
     "ANY_PERSON_SUPPORT",
     "CLEAN_SINGLE_COVERAGE",
@@ -61,6 +70,26 @@ def bbox_height(box: Mapping[str, float]) -> float:
     return float(box["y2"]) - float(box["y1"])
 
 
+def bbox_area(box: Mapping[str, float]) -> float:
+    """Return the non-negative area of an axis-aligned box."""
+
+    return max(0.0, float(box["x2"]) - float(box["x1"])) * max(0.0, float(box["y2"]) - float(box["y1"]))
+
+
+def bbox_intersection_area(left: Mapping[str, float], right: Mapping[str, float]) -> float:
+    """Return the intersection area shared by two boxes."""
+
+    return max(0.0, min(float(left["x2"]), float(right["x2"])) - max(float(left["x1"]), float(right["x1"]))) * max(
+        0.0, min(float(left["y2"]), float(right["y2"])) - max(float(left["y1"]), float(right["y1"]))
+    )
+
+
+def box_contains_point(box: Mapping[str, float], point: tuple[float, float]) -> bool:
+    """Return whether a point lies inside a box, including its boundary."""
+
+    return float(box["x1"]) <= point[0] <= float(box["x2"]) and float(box["y1"]) <= point[1] <= float(box["y2"])
+
+
 def _centre(box: Mapping[str, float]) -> tuple[float, float]:
     return (
         (float(box["x1"]) + float(box["x2"])) / 2,
@@ -82,6 +111,207 @@ def normalized_displacements(candidate: Mapping[str, float], gold: Mapping[str, 
         "bottom_centre_displacement_visible_heights": round(math.dist(candidate_bottom, gold_bottom) / scale, 8),
         "visible_height_pixels": round(scale, 8),
         "centre_displacement_pixels": round(centre * scale, 8),
+    }
+
+
+def proposal_gold_geometry(candidate: Mapping[str, float], gold: Mapping[str, float]) -> dict[str, float | bool]:
+    """Compute the frozen G2B geometry checks for one proposal/gold pair."""
+
+    gold_centre = _centre(gold)
+    candidate_centre = _centre(candidate)
+    intersection = bbox_intersection_area(candidate, gold)
+    displacements = normalized_displacements(candidate, gold)
+    return {
+        "visible_box_iou": round(bbox_iou(candidate, gold), 8),
+        "visible_box_iou_0_30": bbox_iou(candidate, gold) >= 0.30,
+        "visible_box_iou_0_50": bbox_iou(candidate, gold) >= 0.50,
+        "candidate_contains_gold_centre": box_contains_point(candidate, gold_centre),
+        "gold_contains_candidate_centre": box_contains_point(gold, candidate_centre),
+        "gold_visible_area_coverage": round(intersection / max(1e-9, bbox_area(gold)), 8),
+        **displacements,
+    }
+
+
+def _geometry_edge(metrics: Mapping[str, float | bool], *, tiny: bool) -> tuple[str | None, float]:
+    iou = float(metrics["visible_box_iou"])
+    coverage = float(metrics["gold_visible_area_coverage"])
+    centre = float(metrics["centre_displacement_visible_heights"])
+    bottom = float(metrics["bottom_centre_displacement_visible_heights"])
+    contains = bool(metrics["candidate_contains_gold_centre"])
+    strong = iou >= 0.30 or (contains and coverage >= 0.50 and bottom <= 0.75)
+    if tiny:
+        strong = strong or (contains and centre <= 1.0 and bottom <= 1.0 and coverage >= 0.25)
+    weak = iou >= 0.10 or (contains and coverage >= 0.25) or (centre <= 1.25 and bottom <= 1.25)
+    quality = 2.0 * iou + coverage + max(0.0, 1.0 - bottom) + (0.5 if contains else 0.0)
+    return ("STRONG" if strong else "WEAK" if weak else None, round(quality, 8))
+
+
+def deterministic_one_to_one_supply(
+    gold_rows: Sequence[Mapping[str, Any]],
+    proposal_rows: Sequence[Mapping[str, Any]],
+    *,
+    tiny_height_pixels: float = 12.0,
+    ambiguity_margin: float = 0.05,
+) -> dict[str, Any]:
+    """Match frozen proposals without allowing merged or double assignments.
+
+    The routine is intentionally deterministic and abstention-first. A proposal
+    that plausibly covers more than one gold person is retained as merged
+    evidence and cannot count as independent supply for either person.
+    """
+
+    gold_by_id = {str(row["gold_person_id"]): row for row in gold_rows}
+    proposal_by_id = {str(row["proposal_id"]): row for row in proposal_rows}
+    edges: list[dict[str, Any]] = []
+    for proposal_id, proposal in sorted(proposal_by_id.items()):
+        for gold_id, gold in sorted(gold_by_id.items()):
+            metrics = proposal_gold_geometry(proposal["bbox"], gold["bbox"])
+            edge_class, quality = _geometry_edge(
+                metrics,
+                tiny=bbox_height(gold["bbox"]) < tiny_height_pixels,
+            )
+            if edge_class:
+                edges.append(
+                    {
+                        "proposal_id": proposal_id,
+                        "gold_person_id": gold_id,
+                        "edge_class": edge_class,
+                        "quality": quality,
+                        "geometry": metrics,
+                    }
+                )
+
+    by_proposal: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for edge in edges:
+        by_proposal[edge["proposal_id"]].append(edge)
+    merged_proposals: set[str] = set()
+    ambiguous_proposals: set[str] = set()
+    for proposal_id, values in by_proposal.items():
+        strong = [row for row in values if row["edge_class"] == "STRONG"]
+        covered = [
+            row
+            for row in values
+            if float(row["geometry"]["gold_visible_area_coverage"]) >= 0.35
+            or bool(row["geometry"]["candidate_contains_gold_centre"])
+        ]
+        if len({row["gold_person_id"] for row in strong or covered}) > 1:
+            merged_proposals.add(proposal_id)
+            continue
+        ranked = sorted(values, key=lambda row: (-row["quality"], row["gold_person_id"]))
+        if len(ranked) > 1 and ranked[0]["quality"] - ranked[1]["quality"] <= ambiguity_margin:
+            ambiguous_proposals.add(proposal_id)
+
+    eligible_edges = [
+        row
+        for row in edges
+        if row["proposal_id"] not in merged_proposals and row["proposal_id"] not in ambiguous_proposals
+    ]
+    eligible_edges.sort(
+        key=lambda row: (
+            0 if row["edge_class"] == "STRONG" else 1,
+            -row["quality"],
+            row["proposal_id"],
+            row["gold_person_id"],
+        )
+    )
+    assigned_proposals: set[str] = set()
+    assigned_gold: set[str] = set()
+    assignments: list[dict[str, Any]] = []
+    for edge in eligible_edges:
+        if edge["proposal_id"] in assigned_proposals or edge["gold_person_id"] in assigned_gold:
+            continue
+        assignments.append(edge)
+        assigned_proposals.add(edge["proposal_id"])
+        assigned_gold.add(edge["gold_person_id"])
+
+    assignment_by_gold = {row["gold_person_id"]: row for row in assignments}
+    person_rows: list[dict[str, Any]] = []
+    for gold_id in sorted(gold_by_id):
+        assignment = assignment_by_gold.get(gold_id)
+        touching = [row for row in edges if row["gold_person_id"] == gold_id]
+        merged = [row for row in touching if row["proposal_id"] in merged_proposals]
+        ambiguous = [row for row in touching if row["proposal_id"] in ambiguous_proposals]
+        independent_strong = {
+            row["proposal_id"]
+            for row in touching
+            if row["edge_class"] == "STRONG" and row["proposal_id"] not in merged_proposals
+        }
+        if assignment and assignment["edge_class"] == "STRONG":
+            state = (
+                "INDEPENDENT_SUPPORT_WITH_DUPLICATE_BURDEN"
+                if len(independent_strong) > 1
+                else "INDEPENDENT_SINGLE_SUPPORT"
+            )
+        elif assignment:
+            state = "PARTIAL_OR_WEAK_SUPPORT"
+        elif ambiguous:
+            state = "AMBIGUOUS_SUPPORT"
+        elif merged:
+            state = "MERGED_ONLY_SUPPORT"
+        else:
+            state = "NO_PROPOSAL_SUPPORT"
+        person_rows.append(
+            {
+                "gold_person_id": gold_id,
+                "supply_state": state,
+                "assigned_proposal_id": assignment["proposal_id"] if assignment else None,
+                "assigned_edge_class": assignment["edge_class"] if assignment else None,
+                "assigned_geometry": assignment["geometry"] if assignment else None,
+                "strong_independent_candidate_count": len(independent_strong),
+                "merged_candidate_ids": sorted({row["proposal_id"] for row in merged}),
+                "ambiguous_candidate_ids": sorted({row["proposal_id"] for row in ambiguous}),
+            }
+        )
+    return {
+        "person_rows": person_rows,
+        "assignments": assignments,
+        "pair_edges": edges,
+        "merged_proposal_ids": sorted(merged_proposals),
+        "ambiguous_proposal_ids": sorted(ambiguous_proposals),
+        "one_to_one": len({row["proposal_id"] for row in assignments}) == len(assignments)
+        and len({row["gold_person_id"] for row in assignments}) == len(assignments),
+        "merged_proposals_assigned_independently": bool(merged_proposals & assigned_proposals),
+    }
+
+
+def equal_source_group_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate person supply with one equal vote per source group."""
+
+    by_source: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if bool(row.get("eligible_for_view_family", True)):
+            by_source[str(row["source_group_id"])].append(row)
+    source_rates: list[dict[str, Any]] = []
+    for source_group_id, values in sorted(by_source.items()):
+        independent = sum(
+            row["supply_state"] in {"INDEPENDENT_SINGLE_SUPPORT", "INDEPENDENT_SUPPORT_WITH_DUPLICATE_BURDEN"}
+            for row in values
+        )
+        source_rates.append(
+            {
+                "source_group_id": source_group_id,
+                "independent_supply": exact_fraction(independent, len(values)),
+            }
+        )
+    rates = [
+        float(row["independent_supply"]["rate"])
+        for row in source_rates
+        if row["independent_supply"]["rate"] is not None
+    ]
+    pooled_denominator = sum(len(values) for values in by_source.values())
+    pooled_numerator = sum(
+        row["supply_state"] in {"INDEPENDENT_SINGLE_SUPPORT", "INDEPENDENT_SUPPORT_WITH_DUPLICATE_BURDEN"}
+        for values in by_source.values()
+        for row in values
+    )
+    return {
+        "source_group_count": len(source_rates),
+        "equal_source_group_independent_supply_rate": round(sum(rates) / len(rates), 8) if rates else None,
+        "median_source_group_independent_supply_rate": round(median(rates), 8) if rates else None,
+        "range_source_group_independent_supply_rate": [round(min(rates), 8), round(max(rates), 8)] if rates else None,
+        "pooled_canonical_person_independent_supply": exact_fraction(pooled_numerator, pooled_denominator),
+        "source_group_rows": source_rates,
+        "population_confidence_claimed": False,
     }
 
 
