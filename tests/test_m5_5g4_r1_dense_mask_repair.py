@@ -176,6 +176,11 @@ def test_generated_repair_set_is_exact_and_original_c1_is_immutable() -> None:
     assert preservation["original_c1_mutated"] is False
     assert {name: sha256_file(SOURCE_C1 / name) for name in EXPECTED_C1_HASHES} == EXPECTED_C1_HASHES
 
+    timing = _read_json(STAGE / "06_BROWSER_PERSISTENCE_AND_COMPLETION" / "truthful_repair_timing.json")
+    assert timing["modelled_minutes_per_mask"] == 1.5
+    assert timing["total_modelled_repair_minutes"] == 30.0
+    assert timing["actual_human_active_minutes"] is None
+
 
 def test_temporary_completion_is_atomic_idempotent_and_does_not_touch_live_root(tmp_path: Path) -> None:
     manifest = load_manifest(PACKAGE / "reviewer_manifest.json")
@@ -188,7 +193,11 @@ def test_temporary_completion_is_atomic_idempotent_and_does_not_touch_live_root(
         decisions_root=tmp_path,
         reviewer_session_id="m5_5g4_r1_test_reviewer",
     )
-    assert len(store.state()["server_state_hash"]) == 64
+    assert not any(tmp_path.iterdir())
+    fresh_state = store.state()
+    assert fresh_state["state_materialized"] is False
+    assert fresh_state["server_state_hash"] is None
+    assert not any(tmp_path.iterdir())
     assert store.ensure_state()["correction_schema"] == CORRECTION_SCHEMA
 
     payloads = []

@@ -14,7 +14,17 @@ from typing import Any
 import requests
 
 import capture_m5_5g1a_browser_acceptance as base
-from build_m5_5g4_r1_dense_mask_repair import PACKAGE, REPO, REVIEWER, STAGE, SAFETY, read_json, write_json
+from build_m5_5g4_r1_dense_mask_repair import (
+    MODELLED_MINUTES_PER_MASK,
+    PACKAGE,
+    REPO,
+    REVIEWER,
+    SAFETY,
+    STAGE,
+    TOTAL_MODELLED_REPAIR_MINUTES,
+    read_json,
+    write_json,
+)
 from football_intelligence.review_chassis.completion import validate_completion_bundle
 from football_intelligence.review_chassis.hashing import stable_hash
 
@@ -431,6 +441,9 @@ def main() -> None:
             {
                 "schema_version": "football_intelligence.m5_5g4_r1.truthful_repair_timing.v1",
                 "repair_item_count": 20,
+                "modelled_minutes_per_mask": MODELLED_MINUTES_PER_MASK,
+                "total_modelled_repair_minutes": TOTAL_MODELLED_REPAIR_MINUTES,
+                "model_basis": "90 seconds per mask for redraw, geometry-dependent checks, save and navigation",
                 "actual_human_active_minutes": None,
                 "automated_browser_active_seconds": completed_state.get("elapsed_active_seconds"),
                 "automated_browser_time_reported_as_human_time": False,

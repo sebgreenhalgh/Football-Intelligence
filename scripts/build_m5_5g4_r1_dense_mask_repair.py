@@ -58,6 +58,8 @@ REVIEWER = "m5_5g4_r1_dense_mask_correction_reviewer"
 PORT = 8808
 PASS_CLASSIFICATION = "PASS_DENSE_MASK_REPAIR_UI_AND_TIMING_PROVENANCE_READY"
 PRIMARY_FAMILIES = {"FULL_PANORAMA_1280", "OVERLAPPING_HIGH_RESOLUTION_TILES"}
+MODELLED_MINUTES_PER_MASK = 1.5
+TOTAL_MODELLED_REPAIR_MINUTES = 30.0
 EXPECTED_C1_HASHES = {
     "completed_review.json": "5e4f4d6a7a95aa3ab720c18d92c660d5ee8dafbc4605fe7475cabfccd0f9f102",
     "completed_review_events.jsonl": "cf0db2db75fe37d409156844e1cf8e9ae6d3a6f6fe2d69bdf5c96312290d3d89",
@@ -1301,6 +1303,9 @@ def make_review_pack(*, finalized: bool) -> dict[str, Any]:
                 "completion": read_json(
                     STAGE / "06_BROWSER_PERSISTENCE_AND_COMPLETION" / "c1r_completion_contract.json"
                 ),
+                "human_workload": read_json(
+                    STAGE / "06_BROWSER_PERSISTENCE_AND_COMPLETION" / "truthful_repair_timing.json"
+                ),
                 "v2": read_json(STAGE / "07_REPAIRED_DENSE_GOLD_EXPORT" / "corrected_dense_gold_v2_manifest.json"),
             },
         ),
@@ -1431,6 +1436,9 @@ def build() -> dict[str, Any]:
         {
             "schema_version": "football_intelligence.m5_5g4_r1.truthful_repair_timing.v1",
             "repair_item_count": 20,
+            "modelled_minutes_per_mask": MODELLED_MINUTES_PER_MASK,
+            "total_modelled_repair_minutes": TOTAL_MODELLED_REPAIR_MINUTES,
+            "model_basis": "90 seconds per mask for redraw, geometry-dependent checks, save and navigation",
             "actual_human_active_minutes": None,
             "automated_browser_time_reported_as_human_time": False,
             **SAFETY,

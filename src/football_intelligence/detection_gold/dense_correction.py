@@ -287,7 +287,13 @@ class DenseMaskCorrectionPersistence(GenericReviewPersistence):
     def state(self) -> dict[str, Any]:
         """Return the authoritative state with its optimistic-concurrency token."""
 
-        return self._response(self.ensure_state())
+        materialized = self.state_path.exists()
+        state = self.ensure_state() if materialized else self.empty_state()
+        response = self._response(state)
+        response["state_materialized"] = materialized
+        if not materialized:
+            response["server_state_hash"] = None
+        return response
 
     def empty_state(self) -> dict[str, Any]:
         state = super().empty_state()
