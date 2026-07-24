@@ -1191,7 +1191,7 @@ Human active time is measured only from real interaction.
 
 def source_diff(finalized: bool) -> str:
     if finalized:
-        return run(["git", "show", "--format=", "--binary", "HEAD"]).stdout
+        return run(["git", "diff", "--binary", f"{BASELINE}..HEAD"]).stdout
     parts = [run(["git", "diff", "--binary", BASELINE]).stdout]
     for row in run(["git", "status", "--porcelain"]).stdout.splitlines():
         if not row.startswith("?? "):
@@ -1209,9 +1209,15 @@ def sanitize_review_pack_value(value: Any) -> Any:
     if isinstance(value, list):
         return [sanitize_review_pack_value(item) for item in value]
     if isinstance(value, str):
-        normalized_root = str(ROOT)
-        normalized_home = str(Path.home())
-        return value.replace(normalized_root, "<FOOTBALL_INTELLIGENCE_ROOT>").replace(normalized_home, "<USER_HOME>")
+        replacements = (
+            (str(ROOT), "<FOOTBALL_INTELLIGENCE_ROOT>"),
+            (ROOT.as_posix(), "<FOOTBALL_INTELLIGENCE_ROOT>"),
+            (str(Path.home()), "<USER_HOME>"),
+            (Path.home().as_posix(), "<USER_HOME>"),
+        )
+        for source, replacement in replacements:
+            value = value.replace(source, replacement)
+        return value
     return value
 
 
