@@ -525,12 +525,18 @@
         </div>
         <div class="dcViewerCard">
           <div class="dcToolbar" aria-label="Image controls">
-            <div>
+            <div class="dcToolbarGroup">
               <button id="dcZoomOut" class="iconButton" type="button" title="Zoom out" aria-label="Zoom out">&#8722;</button>
               <button id="dcZoomIn" class="iconButton" type="button" title="Zoom in" aria-label="Zoom in">&#43;</button>
               <button id="dcFit" type="button">Fit image</button>
+              <button id="dcFocusPerson" type="button">Focus selected person</button>
+              <button id="dcFocusTogether" type="button">Focus person + machine box</button>
             </div>
-            <label class="toggleChip"><input id="dcCompareOriginal" type="checkbox" checked><span>Compare with original</span></label>
+            <div class="dcToolbarGroup dcLayerToggles">
+              <label class="toggleChip"><input id="dcShowMachineBox" type="checkbox" checked><span>Show machine box</span></label>
+              <label class="toggleChip"><input id="dcCompareOriginal" type="checkbox" checked><span>Compare with original</span></label>
+              <label class="toggleChip"><input id="dcShowContextLabels" type="checkbox" checked><span>Show other labels</span></label>
+            </div>
           </div>
           <div id="dcViewport" class="dcViewport" tabindex="0">
             <div id="dcStage" class="dcStage">
@@ -541,6 +547,7 @@
           </div>
           <div class="dcLegend" aria-label="Overlay legend">
             <span><i class="dcSwatch original"></i>Original flagged outline</span>
+            <span><i class="dcSwatch machine"></i>Active machine box</span>
             <span><i class="dcSwatch correction"></i>Your corrected outline</span>
             <span><i class="dcSwatch context"></i>Other reviewed people</span>
             <span><i class="dcSwatch crossing"></i>Crossing segment</span>
@@ -557,20 +564,38 @@
         </div>
         <section class="dcPanel">
           <span class="eyebrow">DRAW</span>
-          <p>Click around the visible edge of the highlighted person. A crossing segment turns red and is not added.</p>
+          <p class="dcTraceGuidance">Trace clockwise or anticlockwise around the visible pixels. Use fewer points. Do not reverse direction or draw through another person.</p>
+          <div class="dcDrawingStatus" aria-live="polite">
+            <span id="dcVertexCount">0 vertices</span>
+            <span id="dcGeometryReason">Select Redraw this outline to begin.</span>
+          </div>
           <div class="dcCommandGrid">
             <button id="dcRedraw" class="primaryCommand" type="button">Redraw this outline</button>
             <button id="dcFinish" type="button" disabled>Finish outline</button>
-            <button id="dcUndo" type="button">Undo</button>
-            <button id="dcRestart" type="button">Start this outline again</button>
+            <button id="dcUndo" type="button">Remove last point</button>
+            <button id="dcClear" type="button">Clear current outline</button>
           </div>
           <label class="dcField">Outline quality
             <select id="dcQuality"><option value="PRECISE">Precise</option><option value="COARSE">Coarse</option></select>
           </label>
+          <div id="dcValidationSummary" class="dcValidationSummary" aria-live="polite"></div>
         </section>
         <section id="dcCoveragePanel" class="dcPanel">
           <span class="eyebrow">MACHINE BOX CHECK</span>
+          <p>Estimate how much of the corrected visible-person mask lies inside the blue machine box.</p>
+          <div id="dcCandidateNavigator" class="dcCandidateNavigator">
+            <button id="dcPreviousCandidate" class="iconButton" type="button" title="Previous machine box" aria-label="Previous machine box">&#8592;</button>
+            <strong id="dcCandidateLabel">Machine box</strong>
+            <button id="dcNextCandidate" class="iconButton" type="button" title="Next machine box" aria-label="Next machine box">&#8594;</button>
+          </div>
+          <p id="dcCandidateRelation" class="dcCandidateRelation"></p>
           <div id="dcCoverageRows"></div>
+          <p id="dcMachineStatus" class="dcMachineStatus" aria-live="polite"></p>
+          <details class="dcAdvancedDetails">
+            <summary>Advanced details</summary>
+            <dl id="dcCandidateAdvanced"></dl>
+            <pre id="dcTransformInspector"></pre>
+          </details>
         </section>
         <section id="dcOcclusionPanel" class="dcPanel isHidden">
           <span class="eyebrow">OVERLAP CHECK</span>
@@ -588,8 +613,25 @@
         </section>
         <p id="dcError" class="formError isHidden" role="alert"></p>
         <button id="dcSave" class="saveNext" type="button" disabled>Save corrected outline</button>
+        <p id="dcSaveReason" class="dcSaveReason" aria-live="polite">Save is disabled until the outline and required checks are valid.</p>
+        <button id="dcShortcutHelp" class="dcHelpButton" type="button">Keyboard shortcuts</button>
       </aside>
     </main>
+    <dialog id="dcHelpDialog" class="dcHelpDialog">
+      <form method="dialog">
+        <header><h2>Keyboard shortcuts</h2><button type="submit" class="iconButton" aria-label="Close help">&#215;</button></header>
+        <dl>
+          <div><dt><kbd>?</kbd></dt><dd>Open this help</dd></div>
+          <div><dt><kbd>Backspace</kbd></dt><dd>Remove the last point</dd></div>
+          <div><dt><kbd>C</kbd></dt><dd>Clear the current outline</dd></div>
+          <div><dt><kbd>F</kbd></dt><dd>Focus the selected person</dd></div>
+          <div><dt><kbd>Shift</kbd> + <kbd>F</kbd></dt><dd>Focus person and machine box</dd></div>
+          <div><dt><kbd>M</kbd></dt><dd>Show or hide the machine box</dd></div>
+          <div><dt><kbd>L</kbd></dt><dd>Show or hide other labels</dd></div>
+          <div><dt><kbd>[</kbd> / <kbd>]</kbd></dt><dd>Previous or next machine box</dd></div>
+        </dl>
+      </form>
+    </dialog>
   </div>
 
   <script src="/annotation_canvas.js"></script>

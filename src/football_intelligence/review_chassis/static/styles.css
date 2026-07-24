@@ -1093,15 +1093,27 @@ body[data-presentation="development_error_atlas"] { display: block; min-height: 
 /* M5.5G.4-R1 targeted dense-mask correction */
 body.denseCorrectionPresentation {
   margin: 0;
+  display: block;
+  grid-template-columns: none;
+  width: 100vw;
+  min-width: 0;
+  height: 100vh;
   overflow: hidden;
   background: #0b100f;
   color: #edf5f1;
 }
 
-.denseCorrectionShell {
+body.denseCorrectionPresentation > #legacyShell { display: none; }
+
+body.denseCorrectionPresentation .denseCorrectionShell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  min-width: 0;
   height: 100vh;
   display: grid;
-  grid-template-rows: 76px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
   background: #0b100f;
 }
 
@@ -1110,7 +1122,10 @@ body.denseCorrectionPresentation {
   grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px) minmax(300px, 1fr);
   align-items: center;
   gap: 18px;
-  padding: 10px 18px;
+  min-width: 0;
+  min-height: 74px;
+  box-sizing: border-box;
+  padding: 10px clamp(12px, 1.4vw, 24px);
   border-bottom: 1px solid #2b3836;
   background: #131a18;
 }
@@ -1139,10 +1154,13 @@ body.denseCorrectionPresentation {
   min-width: 0;
 }
 
-.dcMain {
+body.denseCorrectionPresentation .dcMain {
+  width: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 350px;
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 440px);
+  padding: 0;
+  overflow: hidden;
 }
 
 .dcEvidenceColumn {
@@ -1150,8 +1168,9 @@ body.denseCorrectionPresentation {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
-  padding: 14px 16px 16px;
+  gap: 8px;
+  padding: clamp(10px, 1vw, 16px);
+  overflow: hidden;
 }
 
 .dcViewerHeader {
@@ -1188,11 +1207,13 @@ body.denseCorrectionPresentation {
   background: #111816;
 }
 
-.dcToolbar > div { display: flex; gap: 6px; }
+.dcToolbarGroup { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dcLayerToggles { justify-content: flex-end; }
 
 .dcViewport {
   position: relative;
-  min-height: 360px;
+  min-width: 0;
+  min-height: 300px;
   overflow: hidden;
   cursor: crosshair;
   touch-action: none;
@@ -1220,66 +1241,105 @@ body.denseCorrectionPresentation {
   z-index: 2;
   overflow: visible;
   touch-action: none;
+  pointer-events: none;
 }
 
 .dcOriginalMask {
-  fill: rgba(244, 198, 93, 0.08);
+  fill: rgba(244, 198, 93, 0.045);
   stroke: #f4c65d;
-  stroke-width: 2.5;
-  stroke-dasharray: 8 5;
+  stroke-width: 1.5;
+  stroke-dasharray: 7 5;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .dcContextMask {
-  fill: rgba(218, 224, 213, 0.04);
+  fill: rgba(218, 224, 213, 0.025);
   stroke: #d9e0d6;
-  stroke-width: 1.25;
-  opacity: 0.42;
+  stroke-width: 1;
+  opacity: 0.46;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.dcMachineBox {
+  fill: rgba(48, 201, 230, 0.045);
+  stroke: #30c9e6;
+  stroke-width: 1.75;
+  stroke-dasharray: 7 5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .dcCorrectionMask {
-  fill: rgba(56, 207, 194, 0.15);
+  fill: rgba(56, 207, 194, 0.085);
   stroke: #38cfc2;
-  stroke-width: 3;
+  stroke-width: 2;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .dcDraftLine {
   fill: none;
   stroke: #38cfc2;
-  stroke-width: 3;
+  stroke-width: 2;
   stroke-linejoin: round;
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .dcInvalidSegment {
   stroke: #ff526f;
-  stroke-width: 4;
+  stroke-width: 2.5;
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .dcIntersectionSegment {
   stroke: #ff526f;
-  stroke-width: 5;
+  stroke-width: 2.5;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .dcVertex {
   fill: #f5fbf8;
   stroke: #10201d;
-  stroke-width: 1.5;
+  stroke-width: 1;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
-.dcMaskNumber {
+.dcCrossingMarker {
+  fill: rgba(255, 82, 111, 0.24);
+  stroke: #ff526f;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.dcOverlayChip,
+.dcOverlayLeader { pointer-events: none; }
+.dcOverlayChip rect {
+  fill: rgba(8, 14, 13, 0.9);
+  stroke: #60706b;
+  stroke-width: 1;
+  rx: 3;
+}
+.dcOverlayChip text {
   fill: #f5fbf8;
-  font-size: 12px;
-  font-weight: 800;
-  paint-order: stroke;
-  stroke: #080b0a;
-  stroke-width: 3px;
+  font-size: 10px;
+  font-weight: 750;
   letter-spacing: 0;
+}
+.dcOverlayChip.machine rect { stroke: #30c9e6; }
+.dcOverlayChip.machine text { fill: #8eeeff; }
+.dcOverlayLeader {
+  stroke: #8b9a95;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 .dcLegend {
@@ -1295,6 +1355,7 @@ body.denseCorrectionPresentation {
 .dcLegend span { display: inline-flex; align-items: center; gap: 5px; }
 .dcSwatch { width: 16px; height: 3px; display: inline-block; }
 .dcSwatch.original { background: #f4c65d; }
+.dcSwatch.machine { height: 0; border-top: 2px dashed #30c9e6; }
 .dcSwatch.correction { background: #38cfc2; }
 .dcSwatch.context { background: #d9e0d6; }
 .dcSwatch.crossing { background: #ff526f; }
@@ -1307,9 +1368,11 @@ body.denseCorrectionPresentation {
   font-size: 11px;
 }
 
-.dcReviewColumn {
+body.denseCorrectionPresentation .dcReviewColumn {
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
   border-left: 1px solid #2b3836;
   background: #111715;
@@ -1332,6 +1395,10 @@ body.denseCorrectionPresentation {
 }
 
 .dcPanel p { margin: 6px 0 10px; color: #aabbb6; font-size: 12px; }
+.dcTraceGuidance { line-height: 1.45; }
+.dcDrawingStatus { display: grid; gap: 3px; min-height: 38px; margin: 8px 0; padding: 7px 8px; color: #b7c8c2; background: #0b1210; border: 1px solid #2b3935; border-radius: 5px; font-size: 11px; }
+.dcDrawingStatus span:first-child { color: #edf6f2; font-weight: 750; }
+.dcDrawingStatus .isInvalid { color: #ff9aaa; }
 
 .dcCommandGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .dcCommandGrid .primaryCommand { grid-column: 1 / -1; }
@@ -1359,18 +1426,66 @@ body.denseCorrectionPresentation {
 .dcCoverageRow small,
 .dcOcclusionRow small { color: #8fa19c; }
 
+.dcCandidateNavigator {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+}
+.dcCandidateNavigator strong { text-align: center; font-size: 12px; }
+.dcCandidateRelation,
+.dcMachineStatus,
+.dcSaveReason { color: #9caea8 !important; font-size: 11px !important; line-height: 1.4; }
+.dcMachineStatus.isBlocked,
+.dcSaveReason.isBlocked { color: #f0b16e !important; }
+.dcValidationSummary { display: grid; gap: 3px; margin-top: 10px; padding: 7px 8px; color: #aebfba; background: #0b1210; border: 1px solid #2b3935; border-radius: 5px; font-size: 11px; }
+.dcValidationSummary strong { color: #e9f4ef; }
+.dcValidationSummary .pass { color: #72dda4; }
+.dcValidationSummary .fail { color: #f0b16e; }
+.dcAdvancedDetails { margin-top: 10px; color: #aebfba; font-size: 11px; }
+.dcAdvancedDetails summary { cursor: pointer; color: #cbd8d4; font-weight: 700; }
+.dcAdvancedDetails dl { display: grid; gap: 4px; margin: 8px 0; }
+.dcAdvancedDetails dl div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px; }
+.dcAdvancedDetails dt { color: #859790; }
+.dcAdvancedDetails dd { margin: 0; overflow-wrap: anywhere; }
+.dcAdvancedDetails pre { max-height: 180px; margin: 8px 0 0; padding: 7px; overflow: auto; color: #b8dcd2; background: #070c0a; border: 1px solid #27342f; border-radius: 4px; font: 10px/1.4 Consolas, monospace; white-space: pre-wrap; }
+
 .dcUnreliablePanel { display: grid; gap: 9px; }
 .dcUnreliablePanel label { display: flex; align-items: flex-start; gap: 8px; }
 .dcReviewColumn > .saveNext { width: 100%; margin-top: 12px; }
+.dcHelpButton { width: 100%; margin-top: 4px; }
+.dcHelpDialog { width: min(480px, calc(100vw - 32px)); color: #eef6f2; background: #111816; border: 1px solid #40504b; border-radius: 7px; }
+.dcHelpDialog::backdrop { background: rgba(0, 0, 0, 0.72); }
+.dcHelpDialog form { display: grid; gap: 12px; }
+.dcHelpDialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dcHelpDialog h2 { margin: 0; font-size: 16px; }
+.dcHelpDialog dl { display: grid; gap: 8px; margin: 0; }
+.dcHelpDialog dl div { display: grid; grid-template-columns: 120px 1fr; gap: 10px; }
+.dcHelpDialog dt, .dcHelpDialog dd { margin: 0; }
+.dcHelpDialog kbd { padding: 2px 5px; color: #dce9e5; background: #090e0c; border: 1px solid #53635d; border-radius: 3px; }
 
-@media (max-width: 1050px) {
+body.denseCorrectionPresentation .denseCorrectionShell button:focus-visible,
+body.denseCorrectionPresentation .denseCorrectionShell input:focus-visible,
+body.denseCorrectionPresentation .denseCorrectionShell select:focus-visible,
+body.denseCorrectionPresentation .denseCorrectionShell summary:focus-visible,
+body.denseCorrectionPresentation .dcViewport:focus-visible { outline: 3px solid rgba(48, 201, 230, 0.68); outline-offset: 2px; }
+
+@media (max-width: 900px) {
   body.denseCorrectionPresentation { overflow: auto; }
-  .denseCorrectionShell { height: auto; min-height: 100vh; }
+  body.denseCorrectionPresentation .denseCorrectionShell { position: relative; height: auto; min-height: 100vh; overflow: visible; }
   .dcHeader { grid-template-columns: 1fr; }
   .dcHeaderActions { justify-content: flex-start; flex-wrap: wrap; }
-  .dcMain { grid-template-columns: 1fr; }
-  .dcEvidenceColumn { min-height: 680px; }
-  .dcReviewColumn { border-left: 0; border-top: 1px solid #2b3836; }
+  body.denseCorrectionPresentation .dcMain { grid-template-columns: 1fr; overflow: visible; }
+  .dcEvidenceColumn { min-height: 650px; }
+  body.denseCorrectionPresentation .dcReviewColumn { overflow: visible; border-left: 0; border-top: 1px solid #2b3836; }
+  .dcToolbar { align-items: flex-start; flex-direction: column; }
+  .dcLayerToggles { justify-content: flex-start; }
+}
+
+@media (min-width: 1800px) {
+  body.denseCorrectionPresentation .dcMain { grid-template-columns: minmax(0, 1fr) 440px; }
+  .dcEvidenceColumn { padding: 16px 20px 18px; }
 }
 
 .goldShell { min-height: 100vh; color: #f4f6f5; background: #111513; }

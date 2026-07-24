@@ -29,13 +29,14 @@ ALLOWED_COVERAGE = (0.0, 0.25, 0.5, 0.75, 1.0)
 ALLOWED_QUALITY = {"PRECISE", "COARSE"}
 ALLOWED_UNRELIABLE_QUALITY = {"UNCERTAIN", "IGNORE"}
 ALLOWED_OCCLUSION_STATUS = {"ORDER_PRESERVED", "ORDER_CHANGED", "UNRESOLVED"}
+GEOMETRY_EPSILON = 1e-6
 
 
 def _point(value: Mapping[str, Any]) -> dict[str, float]:
     return {"x": float(value["x"]), "y": float(value["y"])}
 
 
-def _same_point(left: Mapping[str, Any], right: Mapping[str, Any], *, epsilon: float = 1e-9) -> bool:
+def _same_point(left: Mapping[str, Any], right: Mapping[str, Any], *, epsilon: float = GEOMETRY_EPSILON) -> bool:
     return abs(float(left["x"]) - float(right["x"])) <= epsilon and abs(float(left["y"]) - float(right["y"])) <= epsilon
 
 
@@ -46,7 +47,7 @@ def _orientation(a: Mapping[str, Any], b: Mapping[str, Any], c: Mapping[str, Any
 
 
 def _on_segment(a: Mapping[str, Any], b: Mapping[str, Any], c: Mapping[str, Any]) -> bool:
-    epsilon = 1e-9
+    epsilon = GEOMETRY_EPSILON
     return (
         min(float(a["x"]), float(b["x"])) - epsilon <= float(c["x"]) <= max(float(a["x"]), float(b["x"])) + epsilon
         and min(float(a["y"]), float(b["y"])) - epsilon <= float(c["y"]) <= max(float(a["y"]), float(b["y"])) + epsilon
@@ -62,7 +63,7 @@ def segments_intersect(
 ) -> bool:
     """Return true for proper crossings, endpoint touches, and collinear overlap."""
 
-    epsilon = 1e-9
+    epsilon = GEOMETRY_EPSILON
     orientations = (_orientation(a, b, c), _orientation(a, b, d), _orientation(c, d, a), _orientation(c, d, b))
     if (
         (orientations[0] > epsilon and orientations[1] < -epsilon)
@@ -87,6 +88,46 @@ def segments_intersect(
     )
 
 
+def segment_intersection_kind(
+    a: Mapping[str, Any],
+    b: Mapping[str, Any],
+    c: Mapping[str, Any],
+    d: Mapping[str, Any],
+) -> str:
+    """Classify source-pixel segment contact without using display stroke width."""
+
+    if _same_point(a, b) or _same_point(c, d):
+        return "ZERO_LENGTH"
+    orientations = (_orientation(a, b, c), _orientation(a, b, d), _orientation(c, d, a), _orientation(c, d, b))
+
+    def opposite(left: float, right: float) -> bool:
+        return (left > GEOMETRY_EPSILON and right < -GEOMETRY_EPSILON) or (
+            left < -GEOMETRY_EPSILON and right > GEOMETRY_EPSILON
+        )
+
+    if opposite(orientations[0], orientations[1]) and opposite(orientations[2], orientations[3]):
+        return "PROPER_CROSSING"
+    if all(abs(value) <= GEOMETRY_EPSILON for value in orientations):
+        use_x = abs(float(b["x"]) - float(a["x"])) >= abs(float(b["y"]) - float(a["y"]))
+        axis = "x" if use_x else "y"
+        overlap_low = max(min(float(a[axis]), float(b[axis])), min(float(c[axis]), float(d[axis])))
+        overlap_high = min(max(float(a[axis]), float(b[axis])), max(float(c[axis]), float(d[axis])))
+        if overlap_high < overlap_low - GEOMETRY_EPSILON:
+            return "NONE"
+        return "COLLINEAR_OVERLAP" if overlap_high - overlap_low > GEOMETRY_EPSILON else "TOUCH"
+    if any(
+        abs(orientation) <= GEOMETRY_EPSILON and _on_segment(left, right, point)
+        for orientation, left, right, point in (
+            (orientations[0], a, b, c),
+            (orientations[1], a, b, d),
+            (orientations[2], c, d, a),
+            (orientations[3], c, d, b),
+        )
+    ):
+        return "TOUCH"
+    return "NONE"
+
+
 def polygon_area(points: Sequence[Mapping[str, Any]]) -> float:
     if len(points) < 3:
         return 0.0
@@ -105,15 +146,17 @@ def polygon_area(points: Sequence[Mapping[str, Any]]) -> float:
 def polygon_self_intersection_pairs(points: Sequence[Mapping[str, Any]]) -> list[tuple[int, int]]:
     count = len(points)
     pairs: list[tuple[int, int]] = []
-    if count < 4:
+    if count < 3:
         return pairs
     for left in range(count):
         left_next = (left + 1) % count
         for right in range(left + 1, count):
             right_next = (right + 1) % count
-            if left == right or left_next == right or right_next == left:
+            if left == right:
                 continue
-            if segments_intersect(points[left], points[left_next], points[right], points[right_next]):
+            kind = segment_intersection_kind(points[left], points[left_next], points[right], points[right_next])
+            adjacent = left_next == right or right_next == left
+            if kind != "NONE" and not (adjacent and kind == "TOUCH"):
                 pairs.append((left, right))
     return pairs
 
@@ -128,16 +171,14 @@ def candidate_segment_crossings(
 
     if not points:
         return []
-    start = points[-1] if not close_polygon else points[-1]
+    start = points[-1]
     end = points[0] if close_polygon else candidate
     maximum = len(points) - 1
     crossings = []
     for index in range(maximum):
-        if index == maximum - 1:
-            continue
-        if close_polygon and index == 0:
-            continue
-        if segments_intersect(start, end, points[index], points[index + 1]):
+        kind = segment_intersection_kind(start, end, points[index], points[index + 1])
+        adjacent = index == maximum - 1 or (close_polygon and index == 0)
+        if kind != "NONE" and not (adjacent and kind == "TOUCH"):
             crossings.append(index)
     return crossings
 
