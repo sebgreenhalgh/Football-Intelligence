@@ -493,9 +493,109 @@
     </div>
   </div>
 
+  <div id="denseCorrectionShell" class="denseCorrectionShell isHidden" aria-hidden="true">
+    <header class="dcHeader">
+      <div>
+        <span class="eyebrow">FOOTBALL INTELLIGENCE</span>
+        <h1 id="dcTitle">Dense outline repair</h1>
+      </div>
+      <div class="dcProgress" aria-live="polite">
+        <strong id="dcCaseProgress">Case 1 of 7</strong>
+        <span id="dcMaskProgress">Outline 1 of 20</span>
+        <div class="progressTrack"><span id="dcProgressBar"></span></div>
+      </div>
+      <div class="dcHeaderActions">
+        <span id="dcSaveState" class="saveState">Saved to server | pending 0</span>
+        <button id="dcComplete" type="button" disabled>Complete repair</button>
+      </div>
+    </header>
+
+    <main class="dcMain">
+      <section class="dcEvidenceColumn">
+        <div class="dcViewerHeader">
+          <div>
+            <span class="eyebrow">ONE FLAGGED OUTLINE</span>
+            <h2 id="dcCaseTitle">Dense case</h2>
+            <p id="dcInstruction">Redraw this one outline so it follows the visible person without crossing over itself.</p>
+          </div>
+          <div class="viewSwitch" role="group" aria-label="Evidence view">
+            <button id="dcFocalView" type="button" class="active">Focal</button>
+            <button id="dcPanoramaView" type="button">Panorama</button>
+          </div>
+        </div>
+        <div class="dcViewerCard">
+          <div class="dcToolbar" aria-label="Image controls">
+            <div>
+              <button id="dcZoomOut" class="iconButton" type="button" title="Zoom out" aria-label="Zoom out">&#8722;</button>
+              <button id="dcZoomIn" class="iconButton" type="button" title="Zoom in" aria-label="Zoom in">&#43;</button>
+              <button id="dcFit" type="button">Fit image</button>
+            </div>
+            <label class="toggleChip"><input id="dcCompareOriginal" type="checkbox" checked><span>Compare with original</span></label>
+          </div>
+          <div id="dcViewport" class="dcViewport" tabindex="0">
+            <div id="dcStage" class="dcStage">
+              <img id="dcBaseImage" alt="Exact dense-region review evidence">
+              <svg id="dcOverlay" aria-label="Dense outline correction canvas"></svg>
+              <div id="dcEvidenceBlocker" class="evidenceBlocker isHidden" role="alert">Evidence unavailable. Saving is disabled.</div>
+            </div>
+          </div>
+          <div class="dcLegend" aria-label="Overlay legend">
+            <span><i class="dcSwatch original"></i>Original flagged outline</span>
+            <span><i class="dcSwatch correction"></i>Your corrected outline</span>
+            <span><i class="dcSwatch context"></i>Other reviewed people</span>
+            <span><i class="dcSwatch crossing"></i>Crossing segment</span>
+          </div>
+          <p id="dcEvidenceStatus" class="dcEvidenceStatus">Verifying exact image binding</p>
+        </div>
+      </section>
+
+      <aside class="dcReviewColumn">
+        <div class="dcMaskNavigator">
+          <button id="dcPreviousMask" class="iconButton" type="button" title="Previous outline" aria-label="Previous outline">&#8592;</button>
+          <strong id="dcMaskLabel">Outline 1</strong>
+          <button id="dcNextMask" class="iconButton" type="button" title="Next outline" aria-label="Next outline">&#8594;</button>
+        </div>
+        <section class="dcPanel">
+          <span class="eyebrow">DRAW</span>
+          <p>Click around the visible edge of the highlighted person. A crossing segment turns red and is not added.</p>
+          <div class="dcCommandGrid">
+            <button id="dcRedraw" class="primaryCommand" type="button">Redraw this outline</button>
+            <button id="dcFinish" type="button" disabled>Finish outline</button>
+            <button id="dcUndo" type="button">Undo</button>
+            <button id="dcRestart" type="button">Start this outline again</button>
+          </div>
+          <label class="dcField">Outline quality
+            <select id="dcQuality"><option value="PRECISE">Precise</option><option value="COARSE">Coarse</option></select>
+          </label>
+        </section>
+        <section id="dcCoveragePanel" class="dcPanel">
+          <span class="eyebrow">MACHINE BOX CHECK</span>
+          <div id="dcCoverageRows"></div>
+        </section>
+        <section id="dcOcclusionPanel" class="dcPanel isHidden">
+          <span class="eyebrow">OVERLAP CHECK</span>
+          <div id="dcOcclusionRows"></div>
+        </section>
+        <section class="dcPanel dcUnreliablePanel">
+          <label><input id="dcUnreliable" type="checkbox"> This person cannot be outlined reliably</label>
+          <select id="dcUnreliableReason" disabled>
+            <option value="">Select a reason</option>
+            <option value="VISIBLE_BOUNDARY_UNRESOLVED">Visible boundary is unresolved</option>
+            <option value="OCCLUSION_TOO_SEVERE">Occlusion is too severe</option>
+            <option value="EVIDENCE_TOO_BLURRED">Evidence is too blurred</option>
+            <option value="OTHER_VISUAL_UNCERTAINTY">Other visual uncertainty</option>
+          </select>
+        </section>
+        <p id="dcError" class="formError isHidden" role="alert"></p>
+        <button id="dcSave" class="saveNext" type="button" disabled>Save corrected outline</button>
+      </aside>
+    </main>
+  </div>
+
   <script src="/annotation_canvas.js"></script>
   <script src="/detection_gold_wizard.js"></script>
   <script src="/detection_gold_app.js"></script>
+  <script src="/dense_mask_correction.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

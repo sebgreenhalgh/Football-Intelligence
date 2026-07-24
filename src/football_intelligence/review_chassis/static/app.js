@@ -2790,6 +2790,18 @@ async function load() {
   manifest = await api("/api/review/manifest");
   uiConfig = await api("/api/review/ui-config");
   state = await api("/api/review/state");
+  if (uiConfig.presentation_mode === "dense_mask_correction") {
+    document.body.dataset.presentation = uiConfig.presentation_mode;
+    document.body.classList.add("denseCorrectionPresentation");
+    $("legacyShell").classList.add("isHidden");
+    $("premiumShell").classList.add("isHidden");
+    $("goldShell").classList.add("isHidden");
+    $("detectionGoldShell").classList.add("isHidden");
+    $("denseCorrectionShell").classList.remove("isHidden");
+    $("denseCorrectionShell").setAttribute("aria-hidden", "false");
+    await window.DenseMaskCorrection.mount({manifest, uiConfig, state, api});
+    return;
+  }
   if (uiConfig.presentation_mode === "detection_gold_pilot") {
     document.body.dataset.presentation = uiConfig.presentation_mode;
     document.body.classList.add("detectionGoldPresentation");

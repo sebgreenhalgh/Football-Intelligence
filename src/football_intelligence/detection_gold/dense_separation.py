@@ -487,7 +487,10 @@ def validate_occlusion_graph(visible_masks: Sequence[Mapping[str, Any]]) -> dict
 
 
 def _g3_split_reasons(
-    members: Sequence[Mapping[str, Any]], all_nodes: Sequence[Mapping[str, Any]]
+    members: Sequence[Mapping[str, Any]],
+    all_nodes: Sequence[Mapping[str, Any]],
+    *,
+    maximum_reasons: int | None = None,
 ) -> list[dict[str, Any]]:
     reasons = []
     for container in members:
@@ -516,10 +519,14 @@ def _g3_split_reasons(
                             "centre_separation_containing_height": round(separation, 8),
                         }
                     )
+                    if maximum_reasons is not None and len(reasons) >= maximum_reasons:
+                        return reasons
     return reasons
 
 
-def _g3_multi_mode_reasons(members: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _g3_multi_mode_reasons(
+    members: Sequence[Mapping[str, Any]], *, maximum_reasons: int | None = None
+) -> list[dict[str, Any]]:
     if len(members) < 2:
         return []
     heights = sorted(float(_box(member)["y2"]) - float(_box(member)["y1"]) for member in members)
@@ -538,11 +545,16 @@ def _g3_multi_mode_reasons(members: Sequence[Mapping[str, Any]]) -> list[dict[st
                         "bottom_centre_separation_median_height": round(separation, 8),
                     }
                 )
+                if maximum_reasons is not None and len(reasons) >= maximum_reasons:
+                    return reasons
     return reasons
 
 
 def _containment_disagreement_reasons(
-    members: Sequence[Mapping[str, Any]], all_nodes: Sequence[Mapping[str, Any]]
+    members: Sequence[Mapping[str, Any]],
+    all_nodes: Sequence[Mapping[str, Any]],
+    *,
+    maximum_reasons: int | None = None,
 ) -> list[dict[str, Any]]:
     spec = eligibility_variant_specification()["containment_disagreement_thresholds"]
     reasons = []
@@ -585,6 +597,8 @@ def _containment_disagreement_reasons(
                         "centre_separation_containing_height": round(separation, 8),
                     }
                 )
+                if maximum_reasons is not None and len(reasons) >= maximum_reasons:
+                    return reasons
     return reasons
 
 
@@ -623,6 +637,81 @@ def evaluate_eligibility_variants(
     assert_no_gold_runtime_leakage(
         {
             "variant_routes": result["variant_routes"],
+            "evidence": result["evidence"],
+            "runtime_input_hash": result["runtime_input_hash"],
+        }
+    )
+    return result
+
+
+def evaluate_eligibility_variant(
+    variant: str,
+    members: Sequence[Mapping[str, Any]],
+    all_nodes: Sequence[Mapping[str, Any]],
+    *,
+    maximum_reasons_per_family: int | None = None,
+    prevalidated_runtime_input_hash: str | None = None,
+    compute_determinism_hash: bool = True,
+) -> dict[str, Any]:
+    """Evaluate exactly one frozen eligibility variant for isolated timing."""
+
+    if variant not in ELIGIBILITY_VARIANTS:
+        raise ValueError(f"unknown eligibility variant: {variant}")
+    runtime_payload = {"members": list(members), "all_nodes": list(all_nodes)}
+    if prevalidated_runtime_input_hash is None:
+        assert_no_gold_runtime_leakage(runtime_payload)
+        runtime_input_hash = stable_hash(runtime_payload)
+    else:
+        if len(prevalidated_runtime_input_hash) != 64:
+            raise ValueError("prevalidated runtime input hash must be a SHA-256 digest")
+        runtime_input_hash = prevalidated_runtime_input_hash
+    needs_e1 = variant in {"E0", "E1", "E4", "E5"}
+    needs_e2 = variant in {"E0", "E2", "E4", "E5"}
+    needs_e3 = variant in {"E3", "E4", "E5"}
+    evidence = {
+        "E1": (_g3_split_reasons(members, all_nodes, maximum_reasons=maximum_reasons_per_family) if needs_e1 else []),
+        "E2": (_g3_multi_mode_reasons(members, maximum_reasons=maximum_reasons_per_family) if needs_e2 else []),
+        "E3": (
+            _containment_disagreement_reasons(
+                members,
+                all_nodes,
+                maximum_reasons=maximum_reasons_per_family,
+            )
+            if needs_e3
+            else []
+        ),
+    }
+    fired = {key: bool(value) for key, value in evidence.items()}
+    route = {
+        "E0": fired["E1"] or fired["E2"],
+        "E1": fired["E1"],
+        "E2": fired["E2"],
+        "E3": fired["E3"],
+        "E4": any(fired.values()),
+        "E5": sum(fired.values()) >= 2,
+    }[variant]
+    result = {
+        "variant": variant,
+        "route": route,
+        "output_state": "ROUTE_HUMAN_DENSE_REVIEW" if route else "ACCEPT_VISIBLE_INSTANCE",
+        "evidence": evidence,
+        "runtime_input_hash": runtime_input_hash,
+        "determinism_hash": (
+            stable_hash({"variant": variant, "route": route, "evidence": evidence})
+            if compute_determinism_hash
+            else None
+        ),
+        "gold_runtime_leakage": False,
+        "single_variant_evaluation": True,
+        "maximum_reasons_per_family": maximum_reasons_per_family,
+        "runtime_input_prevalidated": prevalidated_runtime_input_hash is not None,
+        "determinism_hash_computed": compute_determinism_hash,
+    }
+    assert_no_gold_runtime_leakage(
+        {
+            "variant": result["variant"],
+            "route": result["route"],
+            "output_state": result["output_state"],
             "evidence": result["evidence"],
             "runtime_input_hash": result["runtime_input_hash"],
         }

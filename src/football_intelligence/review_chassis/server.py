@@ -13,6 +13,7 @@ from football_intelligence.detection_gold.persistence import (
     DetectionGoldCompletionError,
     DetectionGoldPilotPersistence,
 )
+from football_intelligence.detection_gold.dense_correction import DenseMaskCorrectionPersistence
 from football_intelligence.review.server import _parse_byte_range
 from football_intelligence.review_chassis.config import load_ui_config
 from football_intelligence.review_chassis.manifest import load_manifest, manifest_hash
@@ -83,6 +84,8 @@ class ReviewChassisHTTPServer(ThreadingHTTPServer):
         persistence_mode = self.ui_config.question_contract.get("persistence_mode")
         if persistence_mode == "detection_gold_pilot_v1":
             persistence_class = DetectionGoldPilotPersistence
+        elif persistence_mode == "dense_mask_correction_v1":
+            persistence_class = DenseMaskCorrectionPersistence
         elif self.ui_config.question_contract.get("durable_server_persistence") is True:
             persistence_class = CrashSafeGoldPersistence
         else:
@@ -182,6 +185,7 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 "/app.js",
                 "/detection_gold_app.js",
                 "/detection_gold_wizard.js",
+                "/dense_mask_correction.js",
                 "/styles.css",
             }:
                 self._serve_file(STATIC_ROOT / path.lstrip("/"))
@@ -321,6 +325,14 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 if not isinstance(persistence, DetectionGoldPilotPersistence):
                     raise ValueError("detection-gold persistence is not enabled")
                 _json_response(self, persistence.complete_tranche(body))
+            elif path == "/api/review/dense-correction-event":
+                if not isinstance(persistence, DenseMaskCorrectionPersistence):
+                    raise ValueError("dense-mask correction persistence is not enabled")
+                _json_response(self, persistence.save_correction(body))
+            elif path == "/api/review/dense-correction-complete":
+                if not isinstance(persistence, DenseMaskCorrectionPersistence):
+                    raise ValueError("dense-mask correction persistence is not enabled")
+                _json_response(self, persistence.complete_corrections(body))
             else:
                 _text_response(self, "not found", status=404)
         except DetectionGoldCompletionError as exc:

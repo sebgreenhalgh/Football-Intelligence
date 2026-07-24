@@ -1090,6 +1090,289 @@ body[data-presentation="development_error_atlas"] { display: block; min-height: 
   .premiumShell *, .premiumShell *::before, .premiumShell *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
 
+/* M5.5G.4-R1 targeted dense-mask correction */
+body.denseCorrectionPresentation {
+  margin: 0;
+  overflow: hidden;
+  background: #0b100f;
+  color: #edf5f1;
+}
+
+.denseCorrectionShell {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 76px minmax(0, 1fr);
+  background: #0b100f;
+}
+
+.dcHeader {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px) minmax(300px, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #2b3836;
+  background: #131a18;
+}
+
+.dcHeader h1,
+.dcViewerHeader h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.dcProgress {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.dcProgress span { color: #a9b9b5; }
+
+.dcHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dcMain {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 350px;
+}
+
+.dcEvidenceColumn {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.dcViewerHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dcViewerHeader p {
+  max-width: 760px;
+  margin: 5px 0 0;
+  color: #b8c5c1;
+}
+
+.dcViewerCard {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  border: 1px solid #293633;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #070b0a;
+}
+
+.dcToolbar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 9px;
+  border-bottom: 1px solid #27322f;
+  background: #111816;
+}
+
+.dcToolbar > div { display: flex; gap: 6px; }
+
+.dcViewport {
+  position: relative;
+  min-height: 360px;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  background: #030504;
+}
+
+.dcViewport.isPanning { cursor: grabbing; }
+
+.dcStage {
+  position: absolute;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.dcStage > img,
+.dcStage > svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.dcStage > svg {
+  z-index: 2;
+  overflow: visible;
+  touch-action: none;
+}
+
+.dcOriginalMask {
+  fill: rgba(244, 198, 93, 0.08);
+  stroke: #f4c65d;
+  stroke-width: 2.5;
+  stroke-dasharray: 8 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcContextMask {
+  fill: rgba(218, 224, 213, 0.04);
+  stroke: #d9e0d6;
+  stroke-width: 1.25;
+  opacity: 0.42;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcCorrectionMask {
+  fill: rgba(56, 207, 194, 0.15);
+  stroke: #38cfc2;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcDraftLine {
+  fill: none;
+  stroke: #38cfc2;
+  stroke-width: 3;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcInvalidSegment {
+  stroke: #ff526f;
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcIntersectionSegment {
+  stroke: #ff526f;
+  stroke-width: 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcVertex {
+  fill: #f5fbf8;
+  stroke: #10201d;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.dcMaskNumber {
+  fill: #f5fbf8;
+  font-size: 12px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: #080b0a;
+  stroke-width: 3px;
+  letter-spacing: 0;
+}
+
+.dcLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 7px 10px;
+  border-top: 1px solid #27322f;
+  color: #aabbb6;
+  font-size: 11px;
+}
+
+.dcLegend span { display: inline-flex; align-items: center; gap: 5px; }
+.dcSwatch { width: 16px; height: 3px; display: inline-block; }
+.dcSwatch.original { background: #f4c65d; }
+.dcSwatch.correction { background: #38cfc2; }
+.dcSwatch.context { background: #d9e0d6; }
+.dcSwatch.crossing { background: #ff526f; }
+
+.dcEvidenceStatus {
+  margin: 0;
+  padding: 6px 10px;
+  color: #78d7a7;
+  background: #0d1412;
+  font-size: 11px;
+}
+
+.dcReviewColumn {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 12px;
+  border-left: 1px solid #2b3836;
+  background: #111715;
+}
+
+.dcMaskNavigator {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #2c3936;
+}
+
+.dcMaskNavigator strong { text-align: center; overflow-wrap: anywhere; }
+
+.dcPanel {
+  padding: 12px 0;
+  border-bottom: 1px solid #2c3936;
+}
+
+.dcPanel p { margin: 6px 0 10px; color: #aabbb6; font-size: 12px; }
+
+.dcCommandGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.dcCommandGrid .primaryCommand { grid-column: 1 / -1; }
+
+.dcField,
+.dcCoverageRow,
+.dcOcclusionRow {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  color: #b8c8c3;
+  font-size: 11px;
+}
+
+.dcField select,
+.dcCoverageRow select,
+.dcOcclusionRow select,
+.dcUnreliablePanel select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dcCoverageRow strong,
+.dcOcclusionRow strong { color: #eef6f2; font-size: 12px; }
+.dcCoverageRow small,
+.dcOcclusionRow small { color: #8fa19c; }
+
+.dcUnreliablePanel { display: grid; gap: 9px; }
+.dcUnreliablePanel label { display: flex; align-items: flex-start; gap: 8px; }
+.dcReviewColumn > .saveNext { width: 100%; margin-top: 12px; }
+
+@media (max-width: 1050px) {
+  body.denseCorrectionPresentation { overflow: auto; }
+  .denseCorrectionShell { height: auto; min-height: 100vh; }
+  .dcHeader { grid-template-columns: 1fr; }
+  .dcHeaderActions { justify-content: flex-start; flex-wrap: wrap; }
+  .dcMain { grid-template-columns: 1fr; }
+  .dcEvidenceColumn { min-height: 680px; }
+  .dcReviewColumn { border-left: 0; border-top: 1px solid #2b3836; }
+}
+
 .goldShell { min-height: 100vh; color: #f4f6f5; background: #111513; }
 .goldShell:not(.isHidden) { display: block; }
 .goldShell button, .goldShell input, .goldShell textarea { font: inherit; letter-spacing: 0; }
