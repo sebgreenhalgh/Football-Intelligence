@@ -5,6 +5,10 @@
   const SVG_NS = "http://www.w3.org/2000/svg";
   const GEOMETRY_EPSILON = 1e-6;
   const MINIMUM_POLYGON_AREA = 4;
+  const MARKER_SCREEN_RADIUS_CSS = Object.freeze({
+    vertex: 3.5,
+    crossing: 4,
+  });
   const COVERAGE = [
     ["", "Choose coverage"],
     ["0", "Almost none"],
@@ -115,6 +119,18 @@
 
   function finitePoint(point) {
     return point && finiteNumber(point.x) && finiteNumber(point.y);
+  }
+
+  function screenConstantMarkerRadius(cssRadius, scale = runtime.transform.scale) {
+    const desiredRadius = Number(cssRadius);
+    const currentScale = Number(scale);
+    if (!Number.isFinite(desiredRadius) || desiredRadius <= 0) {
+      throw new RangeError("marker CSS radius must be finite and positive");
+    }
+    if (!Number.isFinite(currentScale) || currentScale <= 0) {
+      throw new RangeError("marker scale must be finite and positive");
+    }
+    return desiredRadius / currentScale;
   }
 
   function samePoint(left, right, epsilon = GEOMETRY_EPSILON) {
@@ -595,7 +611,7 @@
         drawingLayer.append(svgElement("circle", {
           cx: local.x,
           cy: local.y,
-          r: Math.max(1.8, 3 / runtime.transform.scale),
+          r: screenConstantMarkerRadius(MARKER_SCREEN_RADIUS_CSS.vertex),
           class: "dcVertex",
           "vector-effect": "non-scaling-stroke",
         }));
@@ -607,7 +623,7 @@
           errorLayer.append(svgElement("circle", {
             cx: marker.x,
             cy: marker.y,
-            r: Math.max(3, 5 / runtime.transform.scale),
+            r: screenConstantMarkerRadius(MARKER_SCREEN_RADIUS_CSS.crossing),
             class: "dcCrossingMarker",
             "vector-effect": "non-scaling-stroke",
           }));
@@ -626,7 +642,7 @@
           errorLayer.append(svgElement("circle", {
             cx: marker.x,
             cy: marker.y,
-            r: Math.max(3, 5 / runtime.transform.scale),
+            r: screenConstantMarkerRadius(MARKER_SCREEN_RADIUS_CSS.crossing),
             class: "dcCrossingMarker",
             "vector-effect": "non-scaling-stroke",
           }));
@@ -1440,8 +1456,10 @@
     mount,
     debug: {
       GEOMETRY_EPSILON,
+      MARKER_SCREEN_RADIUS_CSS,
       classifySegmentIntersection,
       candidateCrosses,
+      screenConstantMarkerRadius: (cssRadius, scale) => screenConstantMarkerRadius(cssRadius, scale),
       validateOpenSegment,
       validateClosingSegment,
       validateSimplePolygon,
@@ -1453,6 +1471,14 @@
       focusPerson: () => focusPerson(),
       focusPersonAndCandidate: () => focusPersonAndCandidate(),
       fitImage: () => fitImage(),
+      setZoomScaleForTest: (scale) => {
+        const requestedScale = Number(scale);
+        if (!Number.isFinite(requestedScale) || requestedScale <= 0) {
+          throw new RangeError("test zoom scale must be finite and positive");
+        }
+        zoomAt(requestedScale / runtime.transform.scale);
+        return runtime.transform.scale;
+      },
       snapshot: () => ({
         index: runtime.index,
         candidateIndex: runtime.candidateIndex,
