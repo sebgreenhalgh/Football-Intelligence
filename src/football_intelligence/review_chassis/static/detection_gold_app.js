@@ -69,6 +69,21 @@
     const caseIds = new Set(runtime.tranches[runtime.currentTrancheId]?.case_ids || []);
     return runtime.manifest.cases.filter((caseData) => caseIds.has(caseData.case_id));
   };
+  function refreshTrancheOptions() {
+    if (!runtime.incrementalR3) return;
+    const select = byId("dgTrancheSelect");
+    select.replaceChildren();
+    for (const trancheId of runtime.trancheOrder) {
+      const tranche = runtime.tranches[trancheId];
+      const reviewed = tranche.case_ids.filter((caseId) => runtime.state.annotations?.[caseId]).length;
+      const completed = Boolean(runtime.state.tranche_completions?.[trancheId]);
+      const option = document.createElement("option");
+      option.value = trancheId;
+      option.textContent = `${tranche.label} - ${completed ? "completed" : `${reviewed}/${tranche.case_ids.length} saved`}`;
+      option.selected = trancheId === runtime.currentTrancheId;
+      select.appendChild(option);
+    }
+  }
   const currentCase = () => activeCases()[runtime.activeIndex];
   const records = () => currentCase()?.visible_metadata?.frame_records || [];
   const currentRecord = () => records()[runtime.frameIndex] || records()[0];
@@ -350,6 +365,7 @@
 
   function updateServerState() {
     byId("dgServerState").textContent = `server ${runtime.serverSequence} | pending ${runtime.outbox.length}`;
+    refreshTrancheOptions();
   }
 
   function activeSeconds() {
@@ -2173,17 +2189,7 @@
     document.body.classList.toggle("detectionGoldNovice", runtime.novice);
     document.body.classList.toggle("detectionGoldIncremental", runtime.incrementalR3);
     byId("dgTrancheControls").classList.toggle("isHidden", !runtime.incrementalR3);
-    if (runtime.incrementalR3) {
-      const select = byId("dgTrancheSelect");
-      select.replaceChildren();
-      for (const trancheId of runtime.trancheOrder) {
-        const option = document.createElement("option");
-        option.value = trancheId;
-        option.textContent = runtime.tranches[trancheId].label;
-        option.selected = trancheId === runtime.currentTrancheId;
-        select.appendChild(option);
-      }
-    }
+    if (runtime.incrementalR3) refreshTrancheOptions();
     runtime.serverStateHash = state.server_state_hash || "";
     runtime.serverSequence = Number(state.event_sequence || 0);
     runtime.db = await openDatabase();
@@ -2191,15 +2197,18 @@
     let navigation = null;
     if (runtime.incrementalR3) {
       const sessionRows = await dbAll("session");
-      const repairMarker = sessionRows.find((row) => row.key === "r3_r1_first_load_reconciled");
-      firstRepairLoad = runtime.revisionAwareR3R1 && !repairMarker;
+      const reconciliationKey = `${runtime.clientBuildId || "r3"}_first_load_reconciled`;
+      const repairMarker = sessionRows.find((row) => row.key === reconciliationKey);
+      firstRepairLoad = runtime.revisionAwareR3R1
+        && uiConfig.question_contract.first_load_server_reconciliation === true
+        && !repairMarker;
       if (firstRepairLoad) {
         const initialDrafts = await dbAll("drafts");
         const initialOutbox = await dbAll("outbox");
         for (const row of initialDrafts) await dbDelete("drafts", row.case_id);
         for (const row of initialOutbox) await dbDelete("outbox", row.client_event_id);
         await dbPut("session", {
-          key: "r3_r1_first_load_reconciled",
+          key: reconciliationKey,
           client_build_id: runtime.clientBuildId,
           reconciled_at: new Date().toISOString(),
           stale_prior_namespace_imported: false,
@@ -2209,6 +2218,12 @@
           cleared_new_namespace_draft_count: initialDrafts.length,
           cleared_new_namespace_outbox_count: initialOutbox.length,
         };
+        const forcedTranche = uiConfig.question_contract.first_load_forced_tranche_id
+          || uiConfig.question_contract.default_tranche_id;
+        if (runtime.tranches[forcedTranche]) {
+          runtime.currentTrancheId = forcedTranche;
+          byId("dgTrancheSelect").value = forcedTranche;
+        }
       } else {
         navigation = sessionRows.find((row) => row.key === "navigation");
       }
@@ -2287,7 +2302,7 @@
     runtime.state.counts = recovery.completion_eligibility;
     runtime.serverStateHash = recovery.server_state_hash;
     runtime.serverSequence = recovery.server_event_sequence;
-    if (runtime.revisionAwareR3R1 && runtime.state.active_tranche_id && runtime.tranches[runtime.state.active_tranche_id]) {
+    if (!firstRepairLoad && runtime.revisionAwareR3R1 && runtime.state.active_tranche_id && runtime.tranches[runtime.state.active_tranche_id]) {
       runtime.currentTrancheId = runtime.state.active_tranche_id;
       byId("dgTrancheSelect").value = runtime.currentTrancheId;
     }
@@ -2304,7 +2319,8 @@
     renderCase();
     if (firstRepairLoad) {
       setSaveState(
-        "Six saved Tranche B cases were restored from the server. The unsaved Case 7 draft was cleared because the annotation workflow was repaired.",
+        uiConfig.question_contract.first_load_notice
+          || "Six saved Tranche B cases were restored from the server. The unsaved Case 7 draft was cleared because the annotation workflow was repaired.",
         false,
       );
     }

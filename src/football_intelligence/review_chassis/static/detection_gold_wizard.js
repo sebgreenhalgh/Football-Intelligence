@@ -7,6 +7,12 @@
     "Check the machine boxes",
     "Review and save",
   ];
+  const DENSE_STEPS = [
+    "Trace each visible person",
+    "Answer short overlap questions",
+    "Check the machine boxes",
+    "Review and save",
+  ];
 
   const ROLE_CHOICES = [
     ["Player", "PLAYER"],
@@ -139,6 +145,7 @@
         candidate_targets: [],
         candidate_answered_uuids: [],
         candidate_answer_records: {},
+        mask_front_answers: {},
         human_truth_revision: 0,
         person_question_revision: 0,
         candidate_answer_revision: 0,
@@ -188,6 +195,7 @@
 
     ensureRevisionState(state) {
       state.candidate_answer_records ||= {};
+      state.mask_front_answers ||= {};
       state.person_question_completion_revisions ||= {};
       state.human_truth_revision = Number.isInteger(state.human_truth_revision) ? state.human_truth_revision : 0;
       state.person_question_revision = Number.isInteger(state.person_question_revision) ? state.person_question_revision : 0;
@@ -283,14 +291,14 @@
       this.markSummaryStale(state, reason);
     }
 
-    recordCandidateAnswer(state, relation, targets) {
+    recordCandidateAnswer(state, relation, targets, coverage) {
       const entry = this.currentCandidateEntry();
       if (!entry) return;
       const candidateUuid = entry.candidate.diagnostic_uuid;
       const now = new Date().toISOString();
       const prior = state.candidate_answer_records[candidateUuid];
       state.candidate_answer_revision += 1;
-      state.candidate_answer_records[candidateUuid] = {
+      const answer = {
         candidate_uuid: candidateUuid,
         relation,
         annotation_uuids: [...targets],
@@ -303,6 +311,8 @@
         revalidated_at: prior ? now : null,
         revalidation_event: prior ? "GUIDED_REVIEW_AFTER_INVALIDATION" : "INITIAL_REVIEW",
       };
+      if (coverage !== undefined && coverage !== null) answer.candidate_visible_mask_coverage = Number(coverage);
+      state.candidate_answer_records[candidateUuid] = answer;
       this.syncCandidateAnswered(state);
       state.summary_validity = "NEEDS_REVIEW";
     }
@@ -348,6 +358,7 @@
       state.completed_object_uuids = state.completed_object_uuids.filter((uuid) => uuid !== annotationUuid);
       state.footpoint_placed_uuids = state.footpoint_placed_uuids.filter((uuid) => uuid !== annotationUuid);
       delete state.footpoint_reviews[annotationUuid];
+      delete state.mask_front_answers[annotationUuid];
       delete state.person_question_completion_revisions[annotationUuid];
       for (const answer of Object.values(state.candidate_answer_records)) {
         answer.annotation_uuids = answer.annotation_uuids.filter((uuid) => uuid !== annotationUuid);
@@ -365,6 +376,7 @@
       state.completed_object_uuids = [];
       state.footpoint_placed_uuids = [];
       state.footpoint_reviews = {};
+      state.mask_front_answers = {};
       state.person_question_completion_revisions = {};
       for (const answer of Object.values(state.candidate_answer_records)) answer.annotation_uuids = [];
       state.current_object_uuid = null;
@@ -535,7 +547,8 @@
 
     stepper() {
       const active = this.state().step;
-      return `<ol class="nwStepper" aria-label="Case steps">${GLOBAL_STEPS.map((label, index) => {
+      const steps = this.host.caseData().task_type === "detection_gold_dense_region" ? DENSE_STEPS : GLOBAL_STEPS;
+      return `<ol class="nwStepper" aria-label="Case steps">${steps.map((label, index) => {
         const step = index + 1;
         const className = step === active ? "active" : step < active ? "done" : "";
         return `<li class="${className}"><span>${step}</span><strong>${label}</strong></li>`;
@@ -622,16 +635,20 @@
     denseQuestion(annotation, state) {
       const mask = (annotation.visible_masks || []).find((row) => row.annotation_uuid === state.current_object_uuid);
       if (!mask) return "";
-      const questions = ["mask_quality", "mask_front", "mask_truncation"];
+      const frontAnswer = state.mask_front_answers[mask.annotation_uuid];
+      const questions = ["mask_quality", "mask_front", ...(frontAnswer === "YES" ? ["mask_front_person"] : []), "mask_truncation"];
       if (state.question_index >= questions.length) {
         queueMicrotask(() => this.finishObjectQuestions(mask.annotation_uuid));
         return `<div class="nwWaiting">Person ${this.host.objectIndex(mask.annotation_uuid) + 1} is ready.</div>`;
       }
       const key = questions[state.question_index];
-      if (key === "mask_quality") return answerButtons("How clear is the outline you traced?", [["Clear", "PRECISE"], ["Approximate", "COARSE"], ["Too uncertain", "UNCERTAIN"], ["Ignore this outline", "IGNORE"]], key, {columns: 2});
+      if (key === "mask_quality") return answerButtons("How clear is this outline?", [["Clear", "PRECISE"], ["Approximate", "COARSE"], ["Too uncertain", "UNCERTAIN"], ["Ignore this outline", "IGNORE"]], key, {columns: 2});
       if (key === "mask_front") {
+        return answerButtons("Is another person in front of this person?", [["Yes", "YES"], ["No", "NONE"], ["I can't tell", "UNSURE"]], key, {columns: 1});
+      }
+      if (key === "mask_front_person") {
         const others = (annotation.visible_masks || []).filter((row) => row.annotation_uuid !== mask.annotation_uuid);
-        return `<section class="nwQuestionCard" data-nw-question="mask_front"><span class="nwQuestionLabel">ONE SHORT QUESTION</span><h3>Is another marked person in front of this one?</h3><div class="nwChoices nwColumns1"><button type="button" data-nw-answer-key="mask_front" data-nw-answer-value="NONE">No</button>${others.map((row) => `<button type="button" data-nw-answer-key="mask_front" data-nw-answer-value="${row.annotation_uuid}">Person ${this.host.objectIndex(row.annotation_uuid) + 1} is in front</button>`).join("")}<button type="button" data-nw-answer-key="mask_front" data-nw-answer-value="UNSURE">I can't tell${others.length ? "" : " yet"}</button></div></section>`;
+        return `<section class="nwQuestionCard" data-nw-question="mask_front_person"><span class="nwQuestionLabel">ONE SHORT QUESTION</span><h3>Which person is in front?</h3><div class="nwChoices nwColumns1">${others.map((row) => `<button type="button" data-nw-answer-key="mask_front_person" data-nw-answer-value="${row.annotation_uuid}">Person ${this.host.objectIndex(row.annotation_uuid) + 1}</button>`).join("")}<button type="button" data-nw-answer-key="mask_front_person" data-nw-answer-value="UNSURE">I can't tell${others.length ? "" : " yet"}</button></div></section>`;
       }
       return answerButtons("Is the visible shape cut off by an image edge?", [["No", "NONE"], ["Left edge", "LEFT"], ["Top edge", "TOP"], ["Right edge", "RIGHT"], ["Bottom edge", "BOTTOM"], ["I can't tell", "UNSURE"]], key, {columns: 2});
     }
@@ -642,7 +659,7 @@
       if (state.step === 1) {
         const objects = dense ? annotation.visible_masks : annotation.player_instances;
         const label = dense ? "visible shapes" : "people";
-        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3><p>${dense ? "Trace only the part of each person you can actually see. Do not draw through someone in front." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle frame only. Nearby frames are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button>${this.revisionAware() && objects.length ? '<button id="nwDeleteAllObjects" type="button">Delete all people</button>' : ""}<button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the highlighted area." : "Draw one box around each visible person in the highlighted area.");
+        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3><p>${dense ? "Trace only the part of the person you can actually see. Do not draw through another person and do not guess hidden body pixels." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle Current frame only. Previous and Next are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button>${this.revisionAware() && objects.length ? '<button id="nwDeleteAllObjects" type="button">Delete all people</button>' : ""}<button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the focal area." : "Draw one box around each visible person in the highlighted area.");
       }
       if (state.step === 2) {
         const label = this.host.objectIndex(state.current_object_uuid) + 1;
@@ -686,7 +703,7 @@
         const merged = state.candidate_relation === "MERGED_MULTIPLE_INSTANCES";
         content = `<section class="nwQuestionCard" data-nw-question="candidate_targets"><span class="nwQuestionLabel">CHOOSE THE ${merged ? "PEOPLE" : "PERSON"}</span><h3>${merged ? "Which people are inside this machine box?" : "Which person does this machine box belong to?"}</h3><div class="nwPersonCards">${targets.map((row, index) => `<button type="button" data-nw-target="${row.annotation_uuid}" class="${state.candidate_targets.includes(row.annotation_uuid) ? "selected" : ""}"><span>Person ${index + 1}</span><strong>${state.candidate_targets.includes(row.annotation_uuid) ? "Selected" : "Choose"}</strong></button>`).join("") || "<p>No people have been marked.</p>"}</div>${merged ? `<button id="nwConfirmTargets" class="nwPrimary" type="button" ${state.candidate_targets.length >= 2 ? "" : "disabled"}>Use these ${state.candidate_targets.length} people</button>` : ""}</section>`;
       } else if (state.candidate_phase === "coverage") {
-        content = answerButtons("How much of the person's visible shape is inside this machine box?", [["Almost none", 0], ["About one quarter", 0.25], ["About half", 0.5], ["About three quarters", 0.75], ["Almost all", 1]], "candidate_coverage", {columns: 1});
+        content = answerButtons("How much of the visible person is covered by this machine box?", [["Almost none", 0], ["About one quarter", 0.25], ["About half", 0.5], ["About three quarters", 0.75], ["Almost all", 1]], "candidate_coverage", {columns: 1});
       } else {
         content = answerButtons("Why might the machine have struggled here?", FAILURE_CHOICES, "failure", {columns: 1, hint: "Choose I don't know if the technical reason is not clear."});
       }
@@ -864,11 +881,37 @@
           if (rawValue === "UNSURE") selected.ambiguity_ignore = true;
         } else if (key === "mask_quality") selected.mask_quality = rawValue;
         else if (key === "mask_front") {
-          if (rawValue === "NONE") delete selected.occluder_uuid;
-          else if (rawValue === "UNSURE") selected.mask_quality = "UNCERTAIN";
-          else {
+          draftState.mask_front_answers[selected.annotation_uuid] = rawValue;
+          if (rawValue !== "YES") {
+            const priorOccluder = selected.occluder_uuid;
+            delete selected.occluder_uuid;
+            selected.occlusion_order = 0;
+            if (priorOccluder) {
+              selected.pairwise_overlap_annotation_uuids = (selected.pairwise_overlap_annotation_uuids || []).filter(
+                (uuid) => uuid !== priorOccluder
+              );
+              const prior = (annotation.visible_masks || []).find((row) => row.annotation_uuid === priorOccluder);
+              if (prior) prior.pairwise_overlap_annotation_uuids = (prior.pairwise_overlap_annotation_uuids || []).filter(
+                (uuid) => uuid !== selected.annotation_uuid
+              );
+            }
+            if (rawValue === "UNSURE") selected.mask_quality = "UNCERTAIN";
+          }
+        } else if (key === "mask_front_person") {
+          if (rawValue === "UNSURE") {
+            selected.mask_quality = "UNCERTAIN";
+            delete selected.occluder_uuid;
+          } else {
+            const occluder = (annotation.visible_masks || []).find((row) => row.annotation_uuid === rawValue);
+            if (!occluder) throw new Error("Select a currently marked person as the occluder.");
             selected.occluder_uuid = rawValue;
-            selected.occlusion_order = Math.max(selected.occlusion_order, 1);
+            selected.pairwise_overlap_annotation_uuids = [...new Set([
+              ...(selected.pairwise_overlap_annotation_uuids || []), rawValue,
+            ])].sort();
+            occluder.pairwise_overlap_annotation_uuids = [...new Set([
+              ...(occluder.pairwise_overlap_annotation_uuids || []), selected.annotation_uuid,
+            ])].sort();
+            selected.occlusion_order = Math.max(selected.occlusion_order, occluder.occlusion_order + 1);
           }
         } else if (key === "mask_truncation") selected.truncation_flags = ["LEFT", "TOP", "RIGHT", "BOTTOM"].includes(rawValue) ? [rawValue] : [];
         else if (key === "candidate_relation") {
@@ -926,7 +969,7 @@
       const entry = this.currentCandidateEntry();
       if (!entry) return;
       this.host.upsertCandidateRelation(annotation, entry.candidate, relation, targets, coverage);
-      if (this.revisionAware()) this.recordCandidateAnswer(state, relation, targets);
+      if (this.revisionAware()) this.recordCandidateAnswer(state, relation, targets, coverage);
       else if (!state.candidate_answered_uuids.includes(entry.candidate.diagnostic_uuid)) state.candidate_answered_uuids.push(entry.candidate.diagnostic_uuid);
       this.advanceCandidate(state);
     }
@@ -1227,6 +1270,20 @@
           if (task === "detection_gold_player_static"
             && ids.some((uuid) => !state.footpoint_reviews?.[uuid])) {
             throw new Error("Confirm or correct the proposed footpoint for every marked person.");
+          }
+          if (task === "detection_gold_dense_region") {
+            const masks = new Map(this.host.objects().map((row) => [row.annotation_uuid, row]));
+            for (const mask of masks.values()) {
+              if (!mask.occluder_uuid) continue;
+              const occluder = masks.get(mask.occluder_uuid);
+              if (!occluder || occluder.occlusion_order >= mask.occlusion_order) {
+                throw new Error("Review which person is in front and the front-to-back order before saving.");
+              }
+            }
+            const missingCoverage = this.host.annotation().candidate_relations.some(
+              (row) => row.annotation_uuids.length && !Number.isFinite(row.candidate_visible_mask_coverage)
+            );
+            if (missingCoverage) throw new Error("Record machine-box coverage for every bound visible mask.");
           }
         }
       }

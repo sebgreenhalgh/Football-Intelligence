@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.detection_gold.incremental import (
-    R3_R1_CLIENT_BUILD_ID,
     R3_WIZARD_SCHEMA,
     STATIC_TASK_TYPES,
     authoritative_candidate_binding_hash,
     authoritative_candidate_uuids,
     authoritative_frame_record,
     r3_enabled,
+    revision_aware_client,
     tranche_contract,
     tranche_for_case,
     validate_revision_aware_wizard_state,
@@ -48,7 +48,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
     def accepted_ui_config_hashes(self) -> set[str]:
         accepted = super().accepted_ui_config_hashes()
         contract = self.ui_config.question_contract
-        if contract.get("client_build_id") != R3_R1_CLIENT_BUILD_ID:
+        if not revision_aware_client(contract):
             return accepted
         predecessors = contract.get("compatible_predecessor_ui_config_hashes", [])
         if not isinstance(predecessors, list) or not all(isinstance(value, str) for value in predecessors):
@@ -365,7 +365,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         if case is None:
             raise ValueError(f"unknown detection-gold case: {case_id}")
         prior = state.setdefault("annotations", {}).get(case_id)
-        if self.ui_config.question_contract.get("client_build_id") == R3_R1_CLIENT_BUILD_ID and prior is not None:
+        if revision_aware_client(self.ui_config.question_contract) and prior is not None:
             raise ValueError("saved R3 cases are immutable under the wizard-state repair")
         if self._r3_enabled():
             completed_tranches = state.get("tranche_completions", {})
@@ -389,7 +389,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             if self._r3_enabled():
                 active_tranche_id = self._validate_r3_wizard_state(case, wizard_state)
                 self._validate_r3_footpoints(case, annotation, wizard_state)
-                if self.ui_config.question_contract.get("client_build_id") == R3_R1_CLIENT_BUILD_ID:
+                if revision_aware_client(self.ui_config.question_contract):
                     validate_revision_aware_wizard_state(case, annotation, wizard_state)
             elif wizard_state.get("schema_version") != "football_intelligence.m5_5g1a_r2.wizard_state.v1":
                 raise ValueError("unsupported novice wizard-state schema")

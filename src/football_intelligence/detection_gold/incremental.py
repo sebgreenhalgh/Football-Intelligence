@@ -9,6 +9,8 @@ from football_intelligence.review_chassis.hashing import stable_hash
 
 R3_WIZARD_SCHEMA = "football_intelligence.m5_5g1a_r3.wizard_state.v1"
 R3_R1_CLIENT_BUILD_ID = "m5_5g1a_r3_r1_wizard_state_repair_v1"
+R3_R2_CLIENT_BUILD_ID = "m5_5g1a_r3_r2_dense_first_split_v1"
+REVISION_AWARE_CLIENT_BUILD_IDS = {R3_R1_CLIENT_BUILD_ID, R3_R2_CLIENT_BUILD_ID}
 R3_R1_CANDIDATE_VALIDITY_STATES = {"VALID", "NEEDS_REVIEW", "UNANSWERED", "INVALID"}
 STATIC_TASK_TYPES = {"detection_gold_player_static", "detection_gold_dense_region"}
 
@@ -17,6 +19,12 @@ def r3_enabled(question_contract: Mapping[str, Any]) -> bool:
     """Return whether the incremental R3 policy is active for a package."""
 
     return question_contract.get("incremental_gold_tranches") is True
+
+
+def revision_aware_client(question_contract: Mapping[str, Any]) -> bool:
+    """Return whether the package uses the immutable revision-aware R3 policy."""
+
+    return question_contract.get("client_build_id") in REVISION_AWARE_CLIENT_BUILD_IDS
 
 
 def authoritative_frame_record(case: Any) -> dict[str, Any]:
@@ -197,6 +205,25 @@ def validate_revision_aware_wizard_state(
     ):
         raise ValueError("person-question revision coverage must match every current person")
 
+    if case.task_type == "detection_gold_dense_region":
+        masks = {str(row["annotation_uuid"]): row for row in objects}
+        for mask_uuid, mask in masks.items():
+            overlaps = [str(value) for value in mask.get("pairwise_overlap_annotation_uuids", [])]
+            if len(overlaps) != len(set(overlaps)) or mask_uuid in overlaps or not set(overlaps) <= object_ids:
+                raise ValueError(f"dense mask {mask_uuid} has invalid overlap references")
+            occluder_uuid = mask.get("occluder_uuid")
+            if occluder_uuid in (None, ""):
+                continue
+            occluder_uuid = str(occluder_uuid)
+            if occluder_uuid not in masks or occluder_uuid == mask_uuid:
+                raise ValueError(f"dense mask {mask_uuid} has an invalid occluder")
+            if occluder_uuid not in overlaps or mask_uuid not in {
+                str(value) for value in masks[occluder_uuid].get("pairwise_overlap_annotation_uuids", [])
+            }:
+                raise ValueError(f"dense mask {mask_uuid} occluder is missing reciprocal overlap evidence")
+            if int(masks[occluder_uuid].get("occlusion_order", 0)) >= int(mask.get("occlusion_order", 0)):
+                raise ValueError(f"dense mask {mask_uuid} occlusion order does not place its occluder in front")
+
     expected_candidates = authoritative_candidate_uuids(case)
     records = wizard_state.get("candidate_answer_records")
     if not isinstance(records, Mapping) or set(map(str, records)) != set(expected_candidates):
@@ -222,6 +249,17 @@ def validate_revision_aware_wizard_state(
         relation_targets = [str(value) for value in relation.get("annotation_uuids", [])]
         if record_targets != relation_targets or not set(record_targets) <= object_ids:
             raise ValueError(f"candidate answer target mismatch for {candidate_uuid}")
+        relation_coverage = relation.get("candidate_visible_mask_coverage")
+        record_coverage = record.get("candidate_visible_mask_coverage")
+        if case.task_type == "detection_gold_dense_region" and relation_targets:
+            if (
+                not isinstance(relation_coverage, (int, float))
+                or isinstance(relation_coverage, bool)
+                or not 0 <= float(relation_coverage) <= 1
+            ):
+                raise ValueError(f"dense candidate {candidate_uuid} is missing visible-mask coverage")
+        if record_coverage != relation_coverage:
+            raise ValueError(f"candidate answer coverage mismatch for {candidate_uuid}")
         for field in (
             "answered_against_human_truth_revision",
             "answered_person_question_revision",
