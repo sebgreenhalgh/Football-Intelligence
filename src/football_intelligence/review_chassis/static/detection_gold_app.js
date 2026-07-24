@@ -60,6 +60,8 @@
     clientBuildId: null,
     indexedDbNamespace: null,
     firstLoadReconciliation: null,
+    completionReplayActive: false,
+    completionReplayTimer: null,
   };
 
   const byId = (id) => document.getElementById(id);
@@ -147,6 +149,7 @@
 
   const dbPut = (store, value) => dbRequest(store, "readwrite", (target) => target.put(value));
   const dbDelete = (store, key) => dbRequest(store, "readwrite", (target) => target.delete(key));
+  const dbGet = (store, key) => dbRequest(store, "readonly", (target) => target.get(key));
   const dbAll = (store) => dbRequest(store, "readonly", (target) => target.getAll());
 
   function sourceBinding(caseData) {
@@ -2073,32 +2076,107 @@
     } catch (error) { showError(error.message); }
   }
 
+  function completionFailureMessage(error) {
+    const status = error.httpStatus ? `HTTP ${error.httpStatus}` : "local preflight";
+    const code = error.errorCode || "COMPLETION_BLOCKED";
+    const preservation = error.savedAnnotationsUnchanged ? " Saved cases remain unchanged." : "";
+    const guidance = error.retryGuidance ? ` ${error.retryGuidance}` : "";
+    return `Completion failed (${status}, ${code}): ${error.message}.${preservation}${guidance}`;
+  }
+
+  async function completionRequestPayload() {
+    runtime.outbox = await dbAll("outbox");
+    if (runtime.outbox.length) {
+      throw new Error("Completion is blocked while case-save events are pending; save or recover them first.");
+    }
+    const caseIds = new Set(runtime.tranches[runtime.currentTrancheId].case_ids);
+    const savedAnnotations = runtime.state.annotations || {};
+    const unresolvedDrafts = (await dbAll("drafts")).filter(
+      (row) => caseIds.has(row.case_id) && !savedAnnotations[row.case_id]
+    );
+    return {
+      review_id: runtime.manifest.review_id,
+      reviewer_session_id: runtime.uiConfig.question_contract.reviewer_session_id,
+      tranche_id: runtime.currentTrancheId,
+      client_event_id: `${runtime.manifest.review_id}:complete-tranche:${runtime.currentTrancheId}`,
+      idempotency_key: `${runtime.manifest.review_id}:complete-tranche:${runtime.currentTrancheId}`,
+      expected_server_state_hash: runtime.serverStateHash,
+      pending_outbox_events: runtime.outbox.length,
+      evidence_blocker_count: runtime.evidenceBlocked ? 1 : 0,
+      unresolved_draft_count: unresolvedDrafts.length,
+      unresolved_divergence: false,
+      elapsed_active_seconds: activeSeconds(),
+    };
+  }
+
+  async function applyCompletionRequest(payload) {
+    const response = await runtime.api("/api/review/detection-gold-tranche-complete", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    runtime.state = response;
+    runtime.serverStateHash = response.ack.server_state_hash;
+    runtime.serverSequence = response.ack.server_event_sequence;
+    if (!response.completion_ack?.bundle_valid) throw new Error("Server completion bundle acknowledgement is invalid.");
+    await dbDelete("session", "pending_tranche_completion");
+    clearInterval(runtime.completionReplayTimer);
+    runtime.completionReplayTimer = null;
+    setSaveState(
+      `${runtime.tranches[payload.tranche_id].label} completed | Saved to server | pending 0`,
+      false
+    );
+    renderProgress();
+    return response;
+  }
+
+  async function replayQueuedTrancheCompletion() {
+    if (runtime.completionReplayActive || runtime.state.tranche_completions?.[runtime.currentTrancheId]) return;
+    const queued = await dbGet("session", "pending_tranche_completion");
+    if (!queued?.payload || queued.payload.tranche_id !== runtime.currentTrancheId) return;
+    runtime.completionReplayActive = true;
+    try {
+      setSaveState("Replaying queued completion from saved server state...", false);
+      await applyCompletionRequest(queued.payload);
+    } catch (error) {
+      if (error.httpStatus) {
+        const message = completionFailureMessage(error);
+        setSaveState(message, true);
+        showError(message);
+      } else {
+        setSaveState("Completion queued offline | saved cases unchanged | pending completion 1", false);
+      }
+    } finally {
+      runtime.completionReplayActive = false;
+    }
+  }
+
   async function completeCurrentTranche() {
     clearError();
+    const button = byId("dgCompleteTranche");
+    button.disabled = true;
+    setSaveState("Completing tranche from saved server state...", false);
+    let payload = null;
     try {
-      await flushOutbox();
-      const caseIds = new Set(runtime.tranches[runtime.currentTrancheId].case_ids);
-      const unresolvedDrafts = (await dbAll("drafts")).filter((row) => caseIds.has(row.case_id));
-      const response = await runtime.api("/api/review/detection-gold-tranche-complete", {
-        method: "POST",
-        body: JSON.stringify({
-          tranche_id: runtime.currentTrancheId,
-          client_event_id: uid("complete-tranche"),
-          idempotency_key: `${runtime.manifest.review_id}:complete-tranche:${runtime.currentTrancheId}`,
-          expected_server_state_hash: runtime.serverStateHash,
-          pending_outbox_events: runtime.outbox.length,
-          evidence_blocker_count: runtime.evidenceBlocked ? 1 : 0,
-          unresolved_draft_count: unresolvedDrafts.length,
-          unresolved_divergence: false,
-          elapsed_active_seconds: activeSeconds(),
-        }),
-      });
-      runtime.state = response;
-      runtime.serverStateHash = response.ack.server_state_hash;
-      runtime.serverSequence = response.ack.server_event_sequence;
-      setSaveState(`${runtime.tranches[runtime.currentTrancheId].label} completed`, false);
-      renderProgress();
-    } catch (error) { showError(error.message); }
+      const queued = await dbGet("session", "pending_tranche_completion");
+      payload = queued?.payload || await completionRequestPayload();
+      await applyCompletionRequest(payload);
+    } catch (error) {
+      if (!error.httpStatus && payload) {
+        await dbPut("session", {
+          key: "pending_tranche_completion",
+          payload,
+          queued_at: new Date().toISOString(),
+          contains_case_save_payload: false,
+        });
+        setSaveState("Completion queued offline | saved cases unchanged | pending completion 1", false);
+      } else {
+        const message = completionFailureMessage(error);
+        setSaveState(message, true);
+        showError(message);
+      }
+    } finally {
+      button.disabled = Boolean(runtime.state.tranche_completions?.[runtime.currentTrancheId]);
+    }
   }
 
   function bind() {
@@ -2169,6 +2247,7 @@
     });
     document.addEventListener("visibilitychange", activeSeconds);
     window.addEventListener("resize", clampViewTransform);
+    window.addEventListener("online", replayQueuedTrancheCompletion);
   }
 
   async function mount({manifest, uiConfig, state, api}) {
@@ -2325,6 +2404,10 @@
       );
     }
     runtime.wizard?.showTour(false);
+    await replayQueuedTrancheCompletion();
+    if (!runtime.state.tranche_completions?.[runtime.currentTrancheId]) {
+      runtime.completionReplayTimer = setInterval(replayQueuedTrancheCompletion, 2000);
+    }
     setInterval(activeSeconds, 10000);
   }
 

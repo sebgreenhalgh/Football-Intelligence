@@ -57,7 +57,19 @@ async function api(path, options = {}) {
     headers: {"Content-Type": "application/json"},
     ...options,
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json()
+      : {message: await response.text()};
+    const error = new Error(payload.message || `Request failed with HTTP ${response.status}`);
+    error.httpStatus = response.status;
+    error.errorCode = payload.error_code || "HTTP_REQUEST_FAILED";
+    error.failedChecks = payload.failed_checks || [];
+    error.savedAnnotationsUnchanged = payload.saved_annotations_unchanged === true;
+    error.retryGuidance = payload.retry_guidance || "Reload server state before retrying.";
+    throw error;
+  }
   return response.json();
 }
 

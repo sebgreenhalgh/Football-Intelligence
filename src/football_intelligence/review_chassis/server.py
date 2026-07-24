@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from football_intelligence.detection_gold.persistence import DetectionGoldPilotPersistence
+from football_intelligence.detection_gold.persistence import (
+    DetectionGoldCompletionError,
+    DetectionGoldPilotPersistence,
+)
 from football_intelligence.review.server import _parse_byte_range
 from football_intelligence.review_chassis.config import load_ui_config
 from football_intelligence.review_chassis.manifest import load_manifest, manifest_hash
@@ -320,6 +323,8 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 _json_response(self, persistence.complete_tranche(body))
             else:
                 _text_response(self, "not found", status=404)
+        except DetectionGoldCompletionError as exc:
+            _json_response(self, exc.response_payload(), status=exc.http_status)
         except Exception as exc:
             _text_response(self, str(exc), status=400)
 

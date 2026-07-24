@@ -10,7 +10,12 @@ from football_intelligence.review_chassis.hashing import stable_hash
 R3_WIZARD_SCHEMA = "football_intelligence.m5_5g1a_r3.wizard_state.v1"
 R3_R1_CLIENT_BUILD_ID = "m5_5g1a_r3_r1_wizard_state_repair_v1"
 R3_R2_CLIENT_BUILD_ID = "m5_5g1a_r3_r2_dense_first_split_v1"
-REVISION_AWARE_CLIENT_BUILD_IDS = {R3_R1_CLIENT_BUILD_ID, R3_R2_CLIENT_BUILD_ID}
+R3_R2_R1_C1_CLIENT_BUILD_ID = "m5_5g1a_r3_r2_r1_c1_completion_repair_v1"
+REVISION_AWARE_CLIENT_BUILD_IDS = {
+    R3_R1_CLIENT_BUILD_ID,
+    R3_R2_CLIENT_BUILD_ID,
+    R3_R2_R1_C1_CLIENT_BUILD_ID,
+}
 R3_R1_CANDIDATE_VALIDITY_STATES = {"VALID", "NEEDS_REVIEW", "UNANSWERED", "INVALID"}
 STATIC_TASK_TYPES = {"detection_gold_player_static", "detection_gold_dense_region"}
 

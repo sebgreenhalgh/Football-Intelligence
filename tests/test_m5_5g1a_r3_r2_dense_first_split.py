@@ -20,6 +20,7 @@ from football_intelligence.review_chassis.completion import validate_completion_
 from football_intelligence.review_chassis.config import load_ui_config
 from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
 from football_intelligence.review_chassis.manifest import load_manifest
+from football_intelligence.review_chassis.persistence import atomic_write_json
 
 ROOT = Path(__file__).resolve().parents[2]
 REPO = Path(__file__).resolve().parents[1]
@@ -39,6 +40,30 @@ def read_json(path: Path) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(value, dict)
     return value
+
+
+def isolate_pre_c1_fixture(decisions_root: Path) -> None:
+    """Materialize the historical event-35 boundary in a temporary test root."""
+
+    store = DetectionGoldPilotPersistence(
+        manifest=load_manifest(PACKAGE / "reviewer_manifest.json"),
+        ui_config=load_ui_config(PACKAGE / "ui_config.json"),
+        decisions_root=decisions_root,
+        reviewer_session_id=REVIEWER,
+    )
+    events = []
+    for line in store.events_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if int(event["event_sequence"]) <= 35:
+            events.append(event)
+    atomic_write_json(store.state_path, store._materialize_events(events))
+    store.events_path.write_text(
+        "".join(json.dumps(event, sort_keys=True, ensure_ascii=True) + "\n" for event in events),
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def wizard_state(case: object, annotation: dict) -> dict:
@@ -247,6 +272,7 @@ def test_dense_candidate_revision_record_binds_visible_mask_coverage() -> None:
 def test_c1_completes_atomically_without_c2_or_full_pilot(tmp_path: Path) -> None:
     copied = tmp_path / "decisions"
     shutil.copytree(LIVE_DECISIONS, copied)
+    isolate_pre_c1_fixture(copied)
     store = DetectionGoldPilotPersistence(
         manifest=load_manifest(PACKAGE / "reviewer_manifest.json"),
         ui_config=load_ui_config(PACKAGE / "ui_config.json"),

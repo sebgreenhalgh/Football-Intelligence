@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
-import uuid
+import os
+import shutil
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from football_intelligence.detection_gold.incremental import (
+    R3_R2_R1_C1_CLIENT_BUILD_ID,
     R3_WIZARD_SCHEMA,
     STATIC_TASK_TYPES,
     authoritative_candidate_binding_hash,
@@ -24,7 +26,7 @@ from football_intelligence.detection_gold.incremental import (
 from football_intelligence.detection_gold.models import SourceBinding, validate_case_annotation
 from football_intelligence.review.schemas import safety_payload
 from football_intelligence.review_chassis.completion import validate_completion_bundle, write_completion_transaction
-from football_intelligence.review_chassis.hashing import stable_hash
+from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
 from football_intelligence.review_chassis.persistence import (
     GenericReviewPersistence,
     atomic_write_json,
@@ -40,6 +42,44 @@ DETECTION_EVENT_TYPES = {
     "DETECTION_TRANCHE_COMPLETED",
     "REVIEW_COMPLETED",
 }
+
+
+class DetectionGoldCompletionError(ValueError):
+    """Structured completion failure that leaves existing annotations untouched."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str,
+        http_status: int = 409,
+        failed_checks: list[str] | None = None,
+        server_event_sequence: int | None = None,
+        retryable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.http_status = http_status
+        self.failed_checks = failed_checks or []
+        self.server_event_sequence = server_event_sequence
+        self.retryable = retryable
+
+    def response_payload(self) -> dict[str, Any]:
+        return {
+            "error": True,
+            "error_code": self.error_code,
+            "message": str(self),
+            "failed_checks": self.failed_checks,
+            "http_status": self.http_status,
+            "saved_annotations_unchanged": True,
+            "server_event_sequence": self.server_event_sequence,
+            "retryable": self.retryable,
+            "retry_guidance": (
+                "Reload server state and retry completion; do not resave completed cases."
+                if self.retryable
+                else "Resolve the reported contract failure before retrying completion."
+            ),
+        }
 
 
 class DetectionGoldPilotPersistence(GenericReviewPersistence):
@@ -627,14 +667,15 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             raise ValueError(f"unknown detection-gold tranche: {tranche_id}")
         case_ids = tranches[tranche_id]["case_ids"]
         annotations = state.get("annotations", {}) if isinstance(state.get("annotations"), dict) else {}
+        validation = self._validate_saved_tranche_cases(state, tranche_id)
         checks = {
             "exact_tranche_case_set": all(case_id in annotations for case_id in case_ids),
-            "all_tranche_schemas_valid": all(
-                validate_case_annotation(self.case_map()[case_id].task_type, annotations[case_id]) is not None
-                for case_id in case_ids
-                if case_id in annotations
-            )
-            and all(case_id in annotations for case_id in case_ids),
+            "all_tranche_schemas_valid": validation["annotations_valid"],
+            "all_tranche_source_bindings_valid": validation["source_bindings_valid"],
+            "all_tranche_candidate_bindings_valid": validation["candidate_bindings_valid"],
+            "all_tranche_wizard_states_valid": validation["wizard_states_valid"],
+            "all_tranche_annotation_hashes_match": validation["annotation_hashes_match"],
+            "all_tranche_state_mirrors_match": validation["state_mirrors_match"],
             "pending_outbox_empty": int(pending_outbox_events) == 0,
             "evidence_blockers_clear": int(evidence_blocker_count) == 0,
             "unsaved_drafts_clear": int(unresolved_draft_count) == 0,
@@ -649,7 +690,68 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             "reviewed": sum(case_id in annotations for case_id in case_ids),
             "total": len(case_ids),
             "checks": checks,
+            "validation_errors": validation["errors"],
         }
+
+    def _validate_saved_tranche_cases(self, state: dict[str, Any], tranche_id: str) -> dict[str, Any]:
+        case_ids = self._tranches()[tranche_id]["case_ids"]
+        annotations = state.get("annotations", {})
+        annotation_hashes = state.get("annotation_hashes", {})
+        structured_reviews = state.get("structured_reviews", {})
+        decisions = state.get("decisions", {})
+        wizard_states = state.get("wizard_states", {})
+        checks = {
+            "annotations_valid": True,
+            "source_bindings_valid": True,
+            "candidate_bindings_valid": True,
+            "wizard_states_valid": True,
+            "annotation_hashes_match": True,
+            "state_mirrors_match": True,
+        }
+        errors: list[dict[str, str]] = []
+        for case_id in case_ids:
+            case = self.case_map()[case_id]
+            raw_annotation = annotations.get(case_id)
+            if not isinstance(raw_annotation, dict):
+                checks["annotations_valid"] = False
+                errors.append({"case_id": case_id, "check": "annotation_missing"})
+                continue
+            try:
+                annotation = validate_case_annotation(case.task_type, raw_annotation)
+                self._validate_original_pixel_geometry(annotation)
+                self._validate_full_strip_gates(case, annotation)
+            except (KeyError, TypeError, ValueError):
+                checks["annotations_valid"] = False
+                errors.append({"case_id": case_id, "check": "annotation_schema"})
+                continue
+            try:
+                self._validate_source_binding(case, annotation)
+            except (KeyError, TypeError, ValueError):
+                checks["source_bindings_valid"] = False
+                errors.append({"case_id": case_id, "check": "source_binding"})
+            try:
+                self._validate_candidate_bindings(case, annotation)
+            except (KeyError, TypeError, ValueError):
+                checks["candidate_bindings_valid"] = False
+                errors.append({"case_id": case_id, "check": "candidate_binding"})
+            wizard_state = wizard_states.get(case_id)
+            try:
+                if not isinstance(wizard_state, dict):
+                    raise ValueError("wizard state missing")
+                self._validate_r3_wizard_state(case, wizard_state)
+                self._validate_r3_footpoints(case, annotation, wizard_state)
+                if revision_aware_client(self.ui_config.question_contract):
+                    validate_revision_aware_wizard_state(case, annotation, wizard_state)
+            except (KeyError, TypeError, ValueError):
+                checks["wizard_states_valid"] = False
+                errors.append({"case_id": case_id, "check": "wizard_state"})
+            if annotation_hashes.get(case_id) != stable_hash(annotation):
+                checks["annotation_hashes_match"] = False
+                errors.append({"case_id": case_id, "check": "annotation_hash"})
+            if structured_reviews.get(case_id) != annotation or decisions.get(case_id) != "ANNOTATED":
+                checks["state_mirrors_match"] = False
+                errors.append({"case_id": case_id, "check": "state_mirror"})
+        return {**checks, "errors": errors}
 
     def _tranche_event_bytes(self, tranche_id: str, completion_event: dict[str, Any]) -> bytes:
         case_ids = set(self._tranches()[tranche_id]["case_ids"])
@@ -666,6 +768,93 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         return b"".join(
             (json.dumps(event, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8") for event in events
         )
+
+    def _persist_tranche_completion(
+        self,
+        state: dict[str, Any],
+        event: dict[str, Any],
+        *,
+        fail_after_replace: int | None = None,
+    ) -> dict[str, Any]:
+        """Replace the root ledger and state together, restoring both on failure."""
+
+        transaction_id = str(event["tranche_completion"]["completion_transaction_id"])
+        staging = self.decisions_root / f".root-completion-transaction-{transaction_id}"
+        backup = staging / "backup"
+        staged = staging / "staged"
+        if staging.exists():
+            shutil.rmtree(staging)
+        backup.mkdir(parents=True)
+        staged.mkdir(parents=True)
+
+        persisted = copy.deepcopy(state)
+        persisted["event_sequence"] = int(event["event_sequence"])
+        persisted["updated_at"] = event["timestamp"]
+        snapshot_payload = {
+            "schema_version": "football_intelligence.review_chassis.snapshot.v1",
+            "created_at": event["timestamp"],
+            "snapshot_sequence": int(event["event_sequence"]),
+            "state_hash": stable_hash(persisted),
+            "state": persisted,
+        }
+        snapshot_name = f"review_state_{int(event['event_sequence']):06d}.json"
+        snapshot_path = self.snapshots_root / snapshot_name
+        snapshot_hash_path = snapshot_path.with_suffix(snapshot_path.suffix + ".sha256")
+        targets = {
+            "review_decision_events.jsonl": self.events_path,
+            "review_decisions.json": self.state_path,
+            snapshot_name: snapshot_path,
+            f"{snapshot_name}.sha256": snapshot_hash_path,
+        }
+        existing_events = self.events_path.read_bytes() if self.events_path.exists() else b""
+        event_bytes = (json.dumps(event, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8")
+        payloads = {
+            "review_decision_events.jsonl": existing_events + event_bytes,
+            "review_decisions.json": (json.dumps(persisted, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode(
+                "utf-8"
+            ),
+            snapshot_name: (json.dumps(snapshot_payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode(
+                "utf-8"
+            ),
+        }
+        for name, data in payloads.items():
+            path = staged / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        payloads[f"{snapshot_name}.sha256"] = f"{sha256_file(staged / snapshot_name)}  {snapshot_name}\n".encode()
+        (staged / f"{snapshot_name}.sha256").write_bytes(payloads[f"{snapshot_name}.sha256"])
+
+        existed = {name: target.exists() for name, target in targets.items()}
+        for name, target in targets.items():
+            if target.exists():
+                shutil.copy2(target, backup / name)
+        replaced: list[str] = []
+        try:
+            for name, target in targets.items():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staged / name, target)
+                replaced.append(name)
+                if fail_after_replace is not None and len(replaced) >= fail_after_replace:
+                    raise OSError("injected interrupted root completion transaction")
+        except Exception:
+            for name in reversed(replaced):
+                target = targets[name]
+                if target.exists():
+                    target.unlink()
+                saved = backup / name
+                if existed[name] and saved.exists():
+                    os.replace(saved, target)
+            raise
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+        persisted["last_snapshot_path"] = str(snapshot_path)
+        persisted["counts"] = self.counts(persisted)
+        return persisted
 
     def _write_tranche_completion_bundle(
         self,
@@ -746,20 +935,72 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
     @synchronized
     def complete_tranche(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self._r3_enabled():
-            raise ValueError("incremental tranche completion is not configured")
+            raise DetectionGoldCompletionError(
+                "incremental tranche completion is not configured",
+                error_code="INCREMENTAL_COMPLETION_NOT_CONFIGURED",
+                http_status=400,
+                retryable=False,
+            )
+        strict_request_binding = self.ui_config.question_contract.get("client_build_id") == R3_R2_R1_C1_CLIENT_BUILD_ID
+        supplied_review_id = payload.get("review_id")
+        if supplied_review_id not in (None, self.manifest.review_id) or (
+            strict_request_binding and not supplied_review_id
+        ):
+            raise DetectionGoldCompletionError(
+                "review ID mismatch",
+                error_code="REVIEW_ID_MISMATCH",
+                http_status=400,
+                retryable=False,
+            )
+        supplied_session_id = payload.get("reviewer_session_id")
+        if supplied_session_id not in (None, self.reviewer_session_id) or (
+            strict_request_binding and not supplied_session_id
+        ):
+            raise DetectionGoldCompletionError(
+                "reviewer session mismatch",
+                error_code="REVIEWER_SESSION_MISMATCH",
+                http_status=400,
+                retryable=False,
+            )
         tranche_id = str(payload.get("tranche_id") or "")
         if tranche_id not in self._tranches():
-            raise ValueError(f"unknown detection-gold tranche: {tranche_id}")
+            raise DetectionGoldCompletionError(
+                f"unknown detection-gold tranche: {tranche_id}",
+                error_code="UNKNOWN_TRANCHE",
+                http_status=400,
+                retryable=False,
+            )
         state = self.ensure_state()
         if tranche_id in state.get("tranche_completions", {}):
             bundle = self.decisions_root / "completed_tranches" / tranche_id
             validation = validate_completion_bundle(bundle)
             if not validation.get("passed"):
-                raise ValueError("completed tranche bundle is missing or invalid")
-            return self._response(state, duplicate=True)
+                raise DetectionGoldCompletionError(
+                    "completed tranche bundle is missing or invalid",
+                    error_code="COMPLETED_BUNDLE_INVALID",
+                    failed_checks=list(validation.get("errors", [])),
+                    server_event_sequence=int(state.get("event_sequence", 0)),
+                    retryable=False,
+                )
+            response = self._response(state, duplicate=True)
+            response["completion_ack"] = {
+                "tranche_id": tranche_id,
+                "completion_transaction_id": state["tranche_completions"][tranche_id]["completion_transaction_id"],
+                "bundle_valid": True,
+                "idempotent_retry": True,
+                "event_sequence": int(state.get("event_sequence", 0)),
+                "saved_annotations_unchanged": True,
+                "next_tranche_completed": False,
+                "full_pilot_completed": bool(state.get("completed")),
+            }
+            return response
         expected_hash = payload.get("expected_server_state_hash")
         if expected_hash not in (None, "", self._server_state_hash(state)):
-            raise ValueError("server state divergence; recover before tranche completion")
+            raise DetectionGoldCompletionError(
+                "server state divergence; recover before tranche completion",
+                error_code="SERVER_STATE_DIVERGENCE",
+                server_event_sequence=int(state.get("event_sequence", 0)),
+            )
         eligibility = self.tranche_completion_eligibility(
             state,
             tranche_id,
@@ -770,20 +1011,56 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         )
         if not eligibility["eligible"]:
             failed = [name for name, passed in eligibility["checks"].items() if not passed]
-            raise ValueError(f"detection-gold tranche completion is blocked: {failed}")
+            raise DetectionGoldCompletionError(
+                f"detection-gold tranche completion is blocked: {failed}",
+                error_code="TRANCHE_COMPLETION_BLOCKED",
+                failed_checks=failed,
+                server_event_sequence=int(state.get("event_sequence", 0)),
+                retryable=failed == ["unsaved_drafts_clear"],
+            )
         client_event_id = str(payload.get("client_event_id") or "")
         idempotency_key = str(payload.get("idempotency_key") or "")
         if not client_event_id or not idempotency_key:
-            raise ValueError("client_event_id and idempotency_key are required")
+            raise DetectionGoldCompletionError(
+                "client_event_id and idempotency_key are required",
+                error_code="COMPLETION_IDEMPOTENCY_REQUIRED",
+                http_status=400,
+                server_event_sequence=int(state.get("event_sequence", 0)),
+                retryable=False,
+            )
         timestamp = utc_now()
-        transaction_id = f"tranche_{tranche_id}_{uuid.uuid4().hex}"
+        case_ids = self._tranches()[tranche_id]["case_ids"]
+        source_events = [
+            event
+            for event in self._detection_events()
+            if event.get("case_id") in set(case_ids)
+            and event.get("event_type") in {"DETECTION_CASE_SAVED", "DETECTION_CASE_REOPENED"}
+        ]
+        source_event_sequences = [int(event["event_sequence"]) for event in source_events]
+        transaction_hash = stable_hash(
+            {
+                "review_id": self.manifest.review_id,
+                "tranche_id": tranche_id,
+                "case_ids": case_ids,
+                "annotation_hashes": {case_id: state["annotation_hashes"][case_id] for case_id in case_ids},
+                "wizard_state_hashes": {case_id: stable_hash(state["wizard_states"][case_id]) for case_id in case_ids},
+                "source_event_sequences": source_event_sequences,
+                "source_server_state_hash": self._server_state_hash(state),
+            }
+        )
+        transaction_id = f"tranche_{tranche_id}_{transaction_hash[:32]}"
         marker = {
             "tranche_id": tranche_id,
             "completed_at": timestamp,
-            "case_ids": self._tranches()[tranche_id]["case_ids"],
-            "case_set_hash": stable_hash(self._tranches()[tranche_id]["case_ids"]),
+            "case_ids": case_ids,
+            "case_set_hash": stable_hash(case_ids),
             "completion_transaction_id": transaction_id,
             "bundle_relative_path": f"completed_tranches/{tranche_id}",
+            "source_root_event_sequence_start": min(source_event_sequences),
+            "source_root_event_sequence_end": max(source_event_sequences),
+            "completion_root_event_sequence": int(state.get("event_sequence", 0)) + 1,
+            "next_tranche_completed": False,
+            "full_pilot_completed": False,
         }
         state.setdefault("tranche_completions", {})[tranche_id] = marker
         state["active_tranche_id"] = tranche_id
@@ -794,7 +1071,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             new_decision=None,
             notes=None,
             state=state,
-            input_source="detection_gold_ui",
+            input_source=str(payload.get("input_source", "detection_gold_ui")),
             extra={
                 "detection_gold_event": True,
                 "client_event_id": client_event_id,
@@ -811,9 +1088,36 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             transaction_id=transaction_id,
         )
         if not bundle.get("passed"):
-            raise RuntimeError(f"tranche completion bundle failed validation: {bundle}")
-        persisted = self._persist(state, event)
-        return self._response(persisted)
+            raise DetectionGoldCompletionError(
+                f"tranche completion bundle failed validation: {bundle}",
+                error_code="COMPLETION_BUNDLE_VALIDATION_FAILED",
+                failed_checks=list(bundle.get("errors", [])),
+                server_event_sequence=int(state.get("event_sequence", 0)),
+                retryable=False,
+            )
+        bundle_root = self.decisions_root / "completed_tranches" / tranche_id
+        try:
+            persisted = self._persist_tranche_completion(state, event)
+        except Exception as exc:
+            if bundle_root.exists():
+                shutil.rmtree(bundle_root)
+            raise DetectionGoldCompletionError(
+                "atomic tranche completion failed and was rolled back",
+                error_code="COMPLETION_TRANSACTION_ROLLED_BACK",
+                server_event_sequence=int(state.get("event_sequence", 0)),
+            ) from exc
+        response = self._response(persisted)
+        response["completion_ack"] = {
+            "tranche_id": tranche_id,
+            "completion_transaction_id": transaction_id,
+            "bundle_valid": validate_completion_bundle(bundle_root)["passed"],
+            "idempotent_retry": False,
+            "event_sequence": int(persisted.get("event_sequence", 0)),
+            "saved_annotations_unchanged": True,
+            "next_tranche_completed": False,
+            "full_pilot_completed": False,
+        }
+        return response
 
     @synchronized
     def complete_detection(self, payload: dict[str, Any]) -> dict[str, Any]:
