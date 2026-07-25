@@ -54,6 +54,25 @@ def _read_json(path: Path) -> dict[str, object]:
     return payload
 
 
+def _tree_hashes(root: Path) -> dict[str, str]:
+    return {path.relative_to(root).as_posix(): sha256_file(path) for path in root.rglob("*") if path.is_file()}
+
+
+def _assert_live_repair_progress_is_preserved() -> None:
+    decisions_root = PACKAGE / "decisions"
+    state = _read_json(decisions_root / "review_decisions.json")
+    completion_names = {
+        "completed_review.json",
+        "completed_review_events.jsonl",
+        "completed_review_manifest.json",
+        "completed_review_summary.json",
+    }
+    assert len(state["corrections"]) == 13
+    assert state["event_sequence"] == 13
+    assert state["completed"] is False
+    assert not completion_names.intersection(path.name for path in decisions_root.iterdir())
+
+
 def _node(identifier: str, box: tuple[float, float, float, float]) -> dict[str, object]:
     return {
         "proposal_uuid": identifier,
@@ -172,7 +191,7 @@ def test_generated_repair_set_is_exact_and_original_c1_is_immutable() -> None:
     assert [len(case.visible_metadata["repair_items"]) for case in manifest.cases] == [1, 1, 3, 6, 4, 2, 3]
     assert all(case.task_type == "dense_mask_geometry_correction" for case in manifest.cases)
     assert all(not case.hidden_metadata and not case.reveal_metadata for case in manifest.cases)
-    assert not any((PACKAGE / "decisions").iterdir())
+    _assert_live_repair_progress_is_preserved()
     assert preservation["original_c1_mutated"] is False
     assert {name: sha256_file(SOURCE_C1 / name) for name in EXPECTED_C1_HASHES} == EXPECTED_C1_HASHES
 
@@ -186,7 +205,7 @@ def test_temporary_completion_is_atomic_idempotent_and_does_not_touch_live_root(
     manifest = load_manifest(PACKAGE / "reviewer_manifest.json")
     ui_config = load_ui_config(PACKAGE / "ui_config.json")
     source_hashes_before = {name: sha256_file(SOURCE_C1 / name) for name in EXPECTED_C1_HASHES}
-    live_root_files_before = list((PACKAGE / "decisions").iterdir())
+    live_root_hashes_before = _tree_hashes(PACKAGE / "decisions")
     store = DenseMaskCorrectionPersistence(
         manifest=manifest,
         ui_config=ui_config,
@@ -230,7 +249,8 @@ def test_temporary_completion_is_atomic_idempotent_and_does_not_touch_live_root(
     assert (
         store.complete_corrections({"client_event_id": "again", "idempotency_key": "again"})["duplicate_event"] is True
     )
-    assert list((PACKAGE / "decisions").iterdir()) == live_root_files_before == []
+    assert _tree_hashes(PACKAGE / "decisions") == live_root_hashes_before
+    _assert_live_repair_progress_is_preserved()
     assert {name: sha256_file(SOURCE_C1 / name) for name in EXPECTED_C1_HASHES} == source_hashes_before
 
 

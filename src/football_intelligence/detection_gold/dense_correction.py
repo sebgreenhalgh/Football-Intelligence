@@ -29,7 +29,49 @@ ALLOWED_COVERAGE = (0.0, 0.25, 0.5, 0.75, 1.0)
 ALLOWED_QUALITY = {"PRECISE", "COARSE"}
 ALLOWED_UNRELIABLE_QUALITY = {"UNCERTAIN", "IGNORE"}
 ALLOWED_OCCLUSION_STATUS = {"ORDER_PRESERVED", "ORDER_CHANGED", "UNRESOLVED"}
+ALLOWED_PAIR_CHOICES = {
+    "PERSON_A_IN_FRONT",
+    "PERSON_B_IN_FRONT",
+    "NO_MEANINGFUL_OVERLAP",
+    "UNRESOLVED",
+}
 GEOMETRY_EPSILON = 1e-6
+DEPENDENCY_HANDSHAKE_VERSION = "m5_5g4_r1_r3_server_authoritative_v1"
+DEPENDENCY_ALGORITHM_VERSION = "m5_5g4_r1_r3_material_polygon_overlap_v1"
+RECOVERY_CLIENT_BUILD_ID = "m5_5g4_r1_r3_pending_dependency_repair_v1"
+DEPENDENCY_ALGORITHM_SPEC = {
+    "coordinate_space": "canonical_panorama_pixels",
+    "geometry_epsilon": GEOMETRY_EPSILON,
+    "polygon_normalization_decimals": 6,
+    "material_when_original_and_corrected_overlap_differ": True,
+    "material_when_original_graph_inconsistent": True,
+    "candidate_coverage_changes_occlusion_dependencies": False,
+    "unreliable_masks_require_all_declared_dependencies": True,
+}
+DEPENDENCY_ALGORITHM_VERSION_HASH = stable_hash(
+    {"version": DEPENDENCY_ALGORITHM_VERSION, "specification": DEPENDENCY_ALGORITHM_SPEC}
+)
+
+
+class DenseCorrectionDependencyError(ValueError):
+    """Structured conflict raised when the final dependency handshake is stale."""
+
+    def __init__(self, code: str, message: str, details: Mapping[str, Any], *, http_status: int = 409):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = dict(details)
+        self.http_status = http_status
+
+    def response_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": "football_intelligence.m5_5g4_r1_r3.dependency_error.v1",
+            "error_code": self.code,
+            "message": self.message,
+            "http_status": self.http_status,
+            **self.details,
+            "server_saved_corrections_safe": True,
+        }
 
 
 def _point(value: Mapping[str, Any]) -> dict[str, float]:
@@ -316,6 +358,37 @@ def material_occlusion_dependencies(
     return rows
 
 
+def occlusion_dependency_id(original_mask_uuid: str, other_mask_uuid: str) -> str:
+    pair = sorted((str(original_mask_uuid), str(other_mask_uuid)))
+    return f"occlusion_pair_{stable_hash({'mask_pair': pair})[:24]}"
+
+
+def _context_mask_map(case: Any) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(row["original_mask_uuid"]): row
+        for row in case.visible_metadata.get("context_masks", [])
+        if isinstance(row, Mapping) and row.get("original_mask_uuid")
+    }
+
+
+def _original_front_choice(item: Mapping[str, Any], dependency: Mapping[str, Any]) -> str | None:
+    original_mask_uuid = str(item["original_mask_uuid"])
+    other_mask_uuid = str(dependency["other_mask_uuid"])
+    if dependency.get("other_target_occluder_uuid") == original_mask_uuid:
+        return "PERSON_A_IN_FRONT"
+    if dependency.get("original_target_occluder_uuid") == other_mask_uuid:
+        return "PERSON_B_IN_FRONT"
+    return None
+
+
+def _status_for_pair_choice(choice: str, original_front_choice: str | None) -> str:
+    if choice == "UNRESOLVED":
+        return "UNRESOLVED"
+    if choice == "NO_MEANINGFUL_OVERLAP":
+        return "ORDER_CHANGED"
+    return "ORDER_PRESERVED" if choice == original_front_choice else "ORDER_CHANGED"
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -324,6 +397,15 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 class DenseMaskCorrectionPersistence(GenericReviewPersistence):
     """Append-only persistence for the isolated C1 dense-mask correction overlay."""
+
+    def accepted_ui_config_hashes(self) -> set[str]:
+        """Permit only explicitly declared, byte-hashed predecessor clients."""
+
+        accepted = super().accepted_ui_config_hashes()
+        predecessors = self.ui_config.question_contract.get("compatible_predecessor_ui_config_hashes", [])
+        if not isinstance(predecessors, list) or not all(isinstance(value, str) for value in predecessors):
+            raise ValueError("compatible predecessor UI-config hashes must be a string list")
+        return accepted | set(predecessors)
 
     def state(self) -> dict[str, Any]:
         """Return the authoritative state with its optimistic-concurrency token."""
@@ -370,6 +452,288 @@ class DenseMaskCorrectionPersistence(GenericReviewPersistence):
             (event for event in _read_jsonl(self.events_path) if event.get("idempotency_key") == idempotency_key),
             None,
         )
+
+    def _preflight_geometry(
+        self, payload: Mapping[str, Any]
+    ) -> tuple[Any, dict[str, Any], bool, list[dict[str, float]], dict[str, Any]]:
+        case_id = str(payload.get("case_id") or "")
+        mask_uuid = str(payload.get("original_mask_uuid") or "")
+        case, item = self._item(case_id, mask_uuid)
+        binding = case.visible_metadata["source_binding"]
+        for key, expected in (
+            ("source_frame_sha256", binding["source_frame_sha256"]),
+            ("focal_transform_hash", binding["focal_transform_hash"]),
+            ("original_polygon_hash", item["original_polygon_hash"]),
+        ):
+            if payload.get(key) != expected:
+                raise DenseCorrectionDependencyError(
+                    "CORRECTION_BINDING_MISMATCH",
+                    f"Correction evidence binding does not match: {key}",
+                    {
+                        "correction_uuid": f"correction_{stable_hash([self.manifest.review_id, mask_uuid])[:24]}",
+                        "original_mask_uuid": mask_uuid,
+                        "binding_field": key,
+                        "plain_language_next_action": "Reload the verified review package before continuing.",
+                    },
+                    http_status=422,
+                )
+        decision = str(payload.get("decision") or CORRECTED_DECISION)
+        if decision not in {CORRECTED_DECISION, UNRELIABLE_DECISION}:
+            raise DenseCorrectionDependencyError(
+                "INVALID_CORRECTION_DECISION",
+                "The correction decision is not supported.",
+                {
+                    "original_mask_uuid": mask_uuid,
+                    "plain_language_next_action": "Choose a corrected outline or mark the outline unresolved.",
+                },
+                http_status=422,
+            )
+        unreliable = decision == UNRELIABLE_DECISION
+        if unreliable:
+            polygon: list[dict[str, float]] = []
+            validation = {
+                "valid": True,
+                "errors": [],
+                "review_state": "UNRELIABLE_EXCLUDED_FROM_MASK_IOU",
+                "polygon_hash": stable_hash(
+                    {"coordinate_space": "canonical_panorama_pixels", "unreliable_mask_uuid": mask_uuid}
+                ),
+                "canonical_polygon_original_pixels": [],
+                "silent_geometry_repair_performed": False,
+            }
+        else:
+            raw_polygon = payload.get("corrected_polygon_original_pixels")
+            if not isinstance(raw_polygon, list):
+                raise DenseCorrectionDependencyError(
+                    "CORRECTED_POLYGON_REQUIRED",
+                    "A corrected polygon is required for geometry preflight.",
+                    {
+                        "original_mask_uuid": mask_uuid,
+                        "plain_language_next_action": "Restore the preserved polygon or finish the current outline.",
+                    },
+                    http_status=422,
+                )
+            validation = validate_polygon_safe(
+                raw_polygon,
+                focal_roi=binding["focal_roi_original_pixels"],
+                image_width=int(binding["image_width"]),
+                image_height=int(binding["image_height"]),
+            )
+            if not validation["valid"]:
+                raise DenseCorrectionDependencyError(
+                    "INVALID_CORRECTED_POLYGON",
+                    "The preserved polygon did not pass source-coordinate validation.",
+                    {
+                        "original_mask_uuid": mask_uuid,
+                        "polygon_hash": validation.get("polygon_hash"),
+                        "geometry_errors": validation["errors"],
+                        "plain_language_next_action": (
+                            "Review the highlighted geometry issue; the saved server corrections are unchanged."
+                        ),
+                    },
+                    http_status=422,
+                )
+            polygon = validation["canonical_polygon_original_pixels"]
+        return case, item, unreliable, polygon, validation
+
+    @staticmethod
+    def _required_occlusion_rows(
+        case: Any,
+        item: Mapping[str, Any],
+        corrected_polygon: Sequence[Mapping[str, Any]],
+        *,
+        unreliable: bool,
+    ) -> list[dict[str, Any]]:
+        declared = {str(row["other_mask_uuid"]): row for row in item.get("occlusion_dependencies", [])}
+        material = (
+            material_occlusion_dependencies(item, corrected_polygon)
+            if not unreliable
+            else [
+                {
+                    "other_mask_uuid": row["other_mask_uuid"],
+                    "anonymous_label": row["anonymous_label"],
+                    "original_overlap": None,
+                    "corrected_overlap": None,
+                    "original_graph_inconsistent": bool(row.get("original_graph_inconsistent")),
+                }
+                for row in declared.values()
+            ]
+        )
+        context = _context_mask_map(case)
+        original_mask_uuid = str(item["original_mask_uuid"])
+        active = context.get(original_mask_uuid, {})
+        rows = []
+        for evidence in material:
+            other_mask_uuid = str(evidence["other_mask_uuid"])
+            dependency = declared[other_mask_uuid]
+            other = context.get(other_mask_uuid, {})
+            original_front = _original_front_choice(item, dependency)
+            rows.append(
+                {
+                    "dependency_id": occlusion_dependency_id(original_mask_uuid, other_mask_uuid),
+                    "person_a_mask_uuid": original_mask_uuid,
+                    "person_a_label": str(active.get("anonymous_label") or "Person A"),
+                    "person_b_mask_uuid": other_mask_uuid,
+                    "person_b_label": str(other.get("anonymous_label") or evidence["anonymous_label"]),
+                    "material_overlap_evidence": {
+                        "original_overlap": evidence["original_overlap"],
+                        "corrected_overlap": evidence["corrected_overlap"],
+                        "overlap_changed": evidence["original_overlap"] != evidence["corrected_overlap"],
+                        "original_graph_inconsistent": evidence["original_graph_inconsistent"],
+                    },
+                    "existing_original_relation": original_front,
+                    "original_occlusion_order": {
+                        "person_a": active.get("occlusion_order"),
+                        "person_b": other.get("occlusion_order"),
+                    },
+                }
+            )
+        return sorted(rows, key=lambda row: row["dependency_id"])
+
+    def dependency_preflight(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the exact answer set for one polygon without writing review state."""
+
+        case, item, unreliable, polygon, validation = self._preflight_geometry(payload)
+        mask_uuid = str(item["original_mask_uuid"])
+        required_coverage = sorted(str(row["candidate_uuid"]) for row in item.get("affected_candidates", []))
+        required_occlusion = self._required_occlusion_rows(
+            case,
+            item,
+            polygon,
+            unreliable=unreliable,
+        )
+        required_pair_ids = [row["dependency_id"] for row in required_occlusion]
+        pair_by_other = {row["person_b_mask_uuid"]: row["dependency_id"] for row in required_occlusion}
+
+        supplied_coverage_rows = payload.get("candidate_coverage_reviews", [])
+        supplied_coverage = {
+            str(row.get("candidate_uuid")): row
+            for row in supplied_coverage_rows
+            if isinstance(row, Mapping) and row.get("candidate_uuid")
+        }
+        valid_coverage_ids = {
+            candidate_uuid
+            for candidate_uuid, row in supplied_coverage.items()
+            if (
+                unreliable
+                and row.get("review_status") == "EVIDENCE_UNRESOLVED"
+                or not unreliable
+                and row.get("candidate_visible_mask_coverage") is not None
+                and float(row["candidate_visible_mask_coverage"]) in ALLOWED_COVERAGE
+            )
+        }
+
+        supplied_occlusion_rows = payload.get("occlusion_reviews", [])
+        supplied_pairs: dict[str, Mapping[str, Any]] = {}
+        unknown_pair_ids: set[str] = set()
+        for row in supplied_occlusion_rows if isinstance(supplied_occlusion_rows, list) else []:
+            if not isinstance(row, Mapping):
+                continue
+            dependency_id = str(row.get("dependency_id") or "")
+            if not dependency_id and row.get("other_mask_uuid"):
+                dependency_id = pair_by_other.get(str(row["other_mask_uuid"]), "")
+            if dependency_id:
+                supplied_pairs[dependency_id] = row
+            elif row.get("other_mask_uuid"):
+                unknown_pair_ids.add(f"unknown_occlusion:{row['other_mask_uuid']}")
+        valid_pair_ids = {
+            dependency_id
+            for dependency_id, row in supplied_pairs.items()
+            if str(row.get("pair_choice") or "") in ALLOWED_PAIR_CHOICES
+        }
+
+        required_ids = set(required_coverage) | set(required_pair_ids)
+        valid_ids = valid_coverage_ids | valid_pair_ids
+        submitted_ids = set(supplied_coverage) | set(supplied_pairs) | unknown_pair_ids
+        missing_ids = sorted(required_ids - valid_ids)
+        extra_ids = sorted(submitted_ids - required_ids)
+        normalized_polygon_hash = str(validation["polygon_hash"])
+        dependency_set = {
+            "schema_version": "football_intelligence.m5_5g4_r1_r3.dependency_set.v1",
+            "original_mask_uuid": mask_uuid,
+            "normalized_polygon_hash": normalized_polygon_hash,
+            "required_candidate_coverage_review_ids": required_coverage,
+            "required_occlusion_pair_review_ids": required_pair_ids,
+            "material_overlap_evidence": [row["material_overlap_evidence"] for row in required_occlusion],
+            "dependency_algorithm_version_hash": DEPENDENCY_ALGORITHM_VERSION_HASH,
+        }
+        dependency_set_hash = stable_hash(dependency_set)
+        idempotency_key = str(payload.get("idempotency_key") or "")
+        existing = self._existing_event(idempotency_key) if idempotency_key else None
+        return {
+            "schema_version": "football_intelligence.m5_5g4_r1_r3.dependency_preflight.v1",
+            "handshake_version": DEPENDENCY_HANDSHAKE_VERSION,
+            "correction_uuid": f"correction_{stable_hash([self.manifest.review_id, mask_uuid])[:24]}",
+            "case_id": case.case_id,
+            "original_mask_uuid": mask_uuid,
+            "normalized_polygon_hash": normalized_polygon_hash,
+            "required_candidate_coverage_review_ids": required_coverage,
+            "required_occlusion_pair_review_ids": required_pair_ids,
+            "occlusion_pairs": required_occlusion,
+            "material_overlap_evidence": [row["material_overlap_evidence"] for row in required_occlusion],
+            "dependency_set_hash": dependency_set_hash,
+            "dependency_algorithm_version": DEPENDENCY_ALGORITHM_VERSION,
+            "dependency_algorithm_version_hash": DEPENDENCY_ALGORITHM_VERSION_HASH,
+            "dependency_algorithm_specification": DEPENDENCY_ALGORITHM_SPEC,
+            "missing_answer_ids": missing_ids,
+            "extra_answer_ids": extra_ids,
+            "accepted_existing_answer_ids": sorted(required_ids & valid_ids),
+            "submitted_answer_ids": sorted(submitted_ids),
+            "otherwise_saveable": True,
+            "saveable": not missing_ids and not extra_ids,
+            "already_acknowledged": existing is not None,
+            "acknowledged_event_sequence": existing.get("event_sequence") if existing else None,
+            "preflight_wrote_server_state": False,
+            "plain_language_next_action": (
+                "This event is already safely stored on the server."
+                if existing
+                else "Answer the listed overlap questions before saving."
+                if missing_ids
+                else "The exact dependency answers are ready for server acknowledgement."
+            ),
+            "server_saved_corrections_safe": True,
+        }
+
+    def _validate_dependency_handshake(self, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+        strict = (
+            payload.get("dependency_handshake_version") is not None
+            or payload.get("client_build_id") == RECOVERY_CLIENT_BUILD_ID
+        )
+        if not strict:
+            return None
+        preflight = self.dependency_preflight(payload)
+        mismatches: list[str] = []
+        if payload.get("dependency_handshake_version") != DEPENDENCY_HANDSHAKE_VERSION:
+            mismatches.append("dependency_handshake_version")
+        if payload.get("normalized_polygon_hash") != preflight["normalized_polygon_hash"]:
+            mismatches.append("normalized_polygon_hash")
+        if payload.get("dependency_set_hash") != preflight["dependency_set_hash"]:
+            mismatches.append("dependency_set_hash")
+        if payload.get("dependency_algorithm_version_hash") != DEPENDENCY_ALGORITHM_VERSION_HASH:
+            mismatches.append("dependency_algorithm_version_hash")
+        if preflight["missing_answer_ids"]:
+            mismatches.append("missing_answer_ids")
+        if preflight["extra_answer_ids"]:
+            mismatches.append("extra_answer_ids")
+        if mismatches:
+            raise DenseCorrectionDependencyError(
+                "DEPENDENCY_HANDSHAKE_MISMATCH",
+                "The overlap questions changed or are incomplete; no server correction was written.",
+                {
+                    "correction_uuid": preflight["correction_uuid"],
+                    "original_mask_uuid": preflight["original_mask_uuid"],
+                    "polygon_hash": preflight["normalized_polygon_hash"],
+                    "dependency_set_hash": preflight["dependency_set_hash"],
+                    "dependency_algorithm_version_hash": DEPENDENCY_ALGORITHM_VERSION_HASH,
+                    "mismatched_fields": mismatches,
+                    "missing_dependency_ids": preflight["missing_answer_ids"],
+                    "extra_dependency_ids": preflight["extra_answer_ids"],
+                    "required_candidate_coverage_review_ids": preflight["required_candidate_coverage_review_ids"],
+                    "required_occlusion_pair_review_ids": preflight["required_occlusion_pair_review_ids"],
+                    "plain_language_next_action": "Review only the listed overlap questions, then save again.",
+                },
+            )
+        return preflight
 
     @staticmethod
     def _coverage_reviews(
@@ -433,16 +797,50 @@ class DenseMaskCorrectionPersistence(GenericReviewPersistence):
         supplied_rows = payload.get("occlusion_reviews", [])
         if not isinstance(supplied_rows, list):
             raise ValueError("occlusion reviews must be a list")
-        supplied = {str(row.get("other_mask_uuid")): row for row in supplied_rows if isinstance(row, dict)}
+        dependency_by_id = {
+            occlusion_dependency_id(str(item["original_mask_uuid"]), str(row["other_mask_uuid"])): str(
+                row["other_mask_uuid"]
+            )
+            for row in required
+        }
+        supplied: dict[str, Mapping[str, Any]] = {}
+        for row in supplied_rows:
+            if not isinstance(row, Mapping):
+                continue
+            other_mask_uuid = str(row.get("other_mask_uuid") or "")
+            if not other_mask_uuid and row.get("dependency_id"):
+                other_mask_uuid = dependency_by_id.get(str(row["dependency_id"]), "")
+            if other_mask_uuid:
+                supplied[other_mask_uuid] = row
         if set(supplied) != {str(row["other_mask_uuid"]) for row in required}:
             raise ValueError("occlusion review set does not match material geometry dependencies")
         results = []
         for dependency in required:
-            review = supplied[str(dependency["other_mask_uuid"])]
-            status = "UNRESOLVED" if unreliable else str(review.get("status"))
+            other_mask_uuid = str(dependency["other_mask_uuid"])
+            review = supplied[other_mask_uuid]
+            pair_choice = "UNRESOLVED" if unreliable else str(review.get("pair_choice") or "")
+            if pair_choice:
+                if pair_choice not in ALLOWED_PAIR_CHOICES:
+                    raise ValueError("invalid explicit occlusion-pair choice")
+                declared = next(
+                    row
+                    for row in item.get("occlusion_dependencies", [])
+                    if str(row["other_mask_uuid"]) == other_mask_uuid
+                )
+                status = _status_for_pair_choice(pair_choice, _original_front_choice(item, declared))
+            else:
+                status = "UNRESOLVED" if unreliable else str(review.get("status"))
             if status not in ALLOWED_OCCLUSION_STATUS:
                 raise ValueError("invalid occlusion revalidation status")
-            results.append({**dependency, "status": status, "reviewed_only_because_material": not unreliable})
+            results.append(
+                {
+                    **dependency,
+                    "dependency_id": occlusion_dependency_id(str(item["original_mask_uuid"]), other_mask_uuid),
+                    "pair_choice": pair_choice or None,
+                    "status": status,
+                    "reviewed_only_because_material": not unreliable,
+                }
+            )
         return results
 
     def _validate_correction(self, payload: Mapping[str, Any]) -> tuple[Any, dict[str, Any], dict[str, Any]]:
@@ -557,8 +955,40 @@ class DenseMaskCorrectionPersistence(GenericReviewPersistence):
         expected_hash = payload.get("expected_server_state_hash")
         current_hash = stable_hash(canonical_decision_state(state))
         if expected_hash not in (None, "", current_hash):
+            if payload.get("client_build_id") == RECOVERY_CLIENT_BUILD_ID:
+                raise DenseCorrectionDependencyError(
+                    "SERVER_STATE_DIVERGENCE",
+                    "The server advanced after this item was queued; no correction was written.",
+                    {
+                        "correction_uuid": (
+                            "correction_"
+                            f"{stable_hash([self.manifest.review_id, payload.get('original_mask_uuid')])[:24]}"
+                        ),
+                        "original_mask_uuid": payload.get("original_mask_uuid"),
+                        "polygon_hash": payload.get("normalized_polygon_hash"),
+                        "dependency_set_hash": payload.get("dependency_set_hash"),
+                        "missing_dependency_ids": [],
+                        "extra_dependency_ids": [],
+                        "plain_language_next_action": "Refresh server state and rerun the read-only preflight.",
+                    },
+                )
             raise ValueError("server state divergence; recover before saving")
+        preflight = self._validate_dependency_handshake(payload)
         case, item, record = self._validate_correction(payload)
+        if preflight is not None:
+            record.update(
+                {
+                    "dependency_handshake_version": DEPENDENCY_HANDSHAKE_VERSION,
+                    "normalized_polygon_hash": preflight["normalized_polygon_hash"],
+                    "dependency_set_hash": preflight["dependency_set_hash"],
+                    "dependency_algorithm_version": DEPENDENCY_ALGORITHM_VERSION,
+                    "dependency_algorithm_version_hash": DEPENDENCY_ALGORITHM_VERSION_HASH,
+                    "dependency_answer_revision_id": payload.get("dependency_answer_revision_id"),
+                    "pending_recovery_provenance": copy.deepcopy(payload.get("pending_recovery_provenance")),
+                }
+            )
+        prior_ui_config_hash = state.get("ui_config_hash")
+        state["ui_config_hash"] = self.ui_config_hash_value
         mask_uuid = item["original_mask_uuid"]
         prior = state.setdefault("corrections", {}).get(mask_uuid)
         state["corrections"][mask_uuid] = record
@@ -587,6 +1017,10 @@ class DenseMaskCorrectionPersistence(GenericReviewPersistence):
                 "original_mask_uuid": mask_uuid,
                 "correction": record,
                 "original_c1_mutated": False,
+                "dependency_answer_revision_id": payload.get("dependency_answer_revision_id"),
+                "pending_recovery_provenance": copy.deepcopy(payload.get("pending_recovery_provenance")),
+                "prior_ui_config_hash": prior_ui_config_hash,
+                "ui_config_hash_rebound_on_new_save": prior_ui_config_hash != self.ui_config_hash_value,
             },
         )
         record["event_sequence"] = event["event_sequence"]

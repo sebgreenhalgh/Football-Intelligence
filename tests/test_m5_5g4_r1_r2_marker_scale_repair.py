@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 ROOT = REPO.parent
 PART3 = ROOT / "matches" / "128058" / "runs" / "step_m5" / "part 3"
 BASELINE = "03ace6283c93424615357fa204836b84e6f3010d"
+R1_R2_COMPLETED_COMMIT = "d4ebbc176688dbdb69edaad47d92a27fe1d22578"
 R1 = PART3 / "M5_5G4_R1_DENSE_MASK_CORRECTION_OVERLAY_AND_GATE_TIMING_PROVENANCE_REPAIR_v1"
 SOURCE_PACKAGE = R1 / "06_BROWSER_PERSISTENCE_AND_COMPLETION" / "DENSE_MASK_REPAIR_REVIEW_PACKAGE"
 REAL_DECISIONS = SOURCE_PACKAGE / "decisions"
@@ -55,7 +56,7 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
-def test_live_root_and_repair_supply_are_still_pristine() -> None:
+def test_live_root_and_repair_supply_are_preserved_at_authoritative_progress() -> None:
     manifest = json.loads((SOURCE_PACKAGE / "reviewer_manifest.json").read_text(encoding="utf-8"))
     items = [item for case in manifest["cases"] for item in case["visible_metadata"]["repair_items"]]
     geometry_reviews = sum(len(item["affected_candidates"]) for item in items)
@@ -63,7 +64,16 @@ def test_live_root_and_repair_supply_are_still_pristine() -> None:
     assert len(manifest["cases"]) == 7
     assert len(items) == 20
     assert geometry_reviews == 21
-    assert list(REAL_DECISIONS.iterdir()) == []
+    state = json.loads((REAL_DECISIONS / "review_decisions.json").read_text(encoding="utf-8"))
+    assert len(state["corrections"]) == 13
+    assert state["event_sequence"] == 13
+    assert state["completed"] is False
+    assert not {
+        "completed_review.json",
+        "completed_review_events.jsonl",
+        "completed_review_manifest.json",
+        "completed_review_summary.json",
+    }.intersection(path.name for path in REAL_DECISIONS.iterdir())
     assert sha256(SOURCE_PACKAGE / "reviewer_manifest.json") == EXPECTED_REVIEWER_MANIFEST_HASH
     assert (
         sha256(R1 / "01_G4_INPUT_AND_FLAG_VALIDATION" / "flagged_mask_repair_manifest.json")
@@ -132,7 +142,7 @@ def test_visible_marker_diameters_include_strokes_and_remain_bounded() -> None:
     ],
 )
 def test_non_marker_runtime_sources_are_byte_identical_to_baseline(relative_path: str) -> None:
-    assert (REPO / relative_path).read_bytes() == git_bytes(BASELINE, relative_path)
+    assert git_bytes(R1_R2_COMPLETED_COMMIT, relative_path) == git_bytes(BASELINE, relative_path)
 
 
 def test_repaired_package_uses_fresh_namespace_without_importing_old_draft() -> None:

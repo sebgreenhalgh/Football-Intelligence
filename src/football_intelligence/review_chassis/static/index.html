@@ -562,6 +562,23 @@
           <strong id="dcMaskLabel">Outline 1</strong>
           <button id="dcNextMask" class="iconButton" type="button" title="Next outline" aria-label="Next outline">&#8594;</button>
         </div>
+        <section id="dcRecoveryPanel" class="dcPanel dcRecoveryPanel isHidden" aria-live="polite">
+          <span class="eyebrow">SAFE RECOVERY</span>
+          <h3>Locally saved work</h3>
+          <p id="dcRecoverySummary">Checking the preserved queue.</p>
+          <div class="dcRecoveryCounts">
+            <span><strong id="dcAcknowledgedCount">0</strong> saved to server</span>
+            <span><strong id="dcPendingCount">0</strong> locally pending</span>
+            <span><strong id="dcQuestionCount">0</strong> need overlap answers</span>
+          </div>
+          <p id="dcRecoveryCurrent" class="dcRecoveryCurrent"></p>
+          <p id="dcDraftRecoveryState" class="dcDraftRecoveryState"></p>
+          <button id="dcExportRecovery" type="button">Export preserved recovery data</button>
+          <details class="dcAdvancedDetails">
+            <summary>Migration details</summary>
+            <pre id="dcMigrationDetails"></pre>
+          </details>
+        </section>
         <section class="dcPanel">
           <span class="eyebrow">DRAW</span>
           <p class="dcTraceGuidance">Trace clockwise or anticlockwise around the visible pixels. Use fewer points. Do not reverse direction or draw through another person.</p>
@@ -601,6 +618,26 @@
           <span class="eyebrow">OVERLAP CHECK</span>
           <div id="dcOcclusionRows"></div>
         </section>
+        <section id="dcPairReviewPanel" class="dcPanel dcPairReviewPanel isHidden">
+          <span class="eyebrow">REQUIRED OVERLAP CHECK</span>
+          <h3 id="dcPairTitle">Review Person A and Person B</h3>
+          <p id="dcPairEvidence"></p>
+          <div id="dcPairChoices" class="dcPairChoices" role="group" aria-label="Occlusion pair decision">
+            <button type="button" data-dc-pair-choice="PERSON_A_IN_FRONT">Person A is in front</button>
+            <button type="button" data-dc-pair-choice="PERSON_B_IN_FRONT">Person B is in front</button>
+            <button type="button" data-dc-pair-choice="NO_MEANINGFUL_OVERLAP">No meaningful overlap</button>
+            <button type="button" data-dc-pair-choice="UNRESOLVED">I can't tell</button>
+          </div>
+          <div class="dcPairNavigator">
+            <button id="dcPreviousPair" class="iconButton" type="button" aria-label="Previous overlap pair">&#8592;</button>
+            <strong id="dcPairPosition">Pair 1 of 1</strong>
+            <button id="dcNextPair" class="iconButton" type="button" aria-label="Next overlap pair">&#8594;</button>
+          </div>
+          <details class="dcAdvancedDetails">
+            <summary>Advanced dependency details</summary>
+            <pre id="dcDependencyDetails"></pre>
+          </details>
+        </section>
         <section class="dcPanel dcUnreliablePanel">
           <label><input id="dcUnreliable" type="checkbox"> This person cannot be outlined reliably</label>
           <select id="dcUnreliableReason" disabled>
@@ -612,6 +649,8 @@
           </select>
         </section>
         <p id="dcError" class="formError isHidden" role="alert"></p>
+        <button id="dcPreflight" type="button" class="isHidden" disabled>Check required overlaps</button>
+        <button id="dcRecoverySave" class="saveNext isHidden" type="button" disabled>Save reconciled item</button>
         <button id="dcSave" class="saveNext" type="button" disabled>Save corrected outline</button>
         <p id="dcSaveReason" class="dcSaveReason" aria-live="polite">Save is disabled until the outline and required checks are valid.</p>
         <button id="dcShortcutHelp" class="dcHelpButton" type="button">Keyboard shortcuts</button>

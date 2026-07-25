@@ -53,7 +53,16 @@ def test_live_repair_supply_and_original_c1_are_unchanged() -> None:
     assert len(repair_items) == 20
     assert sum(len(item["affected_candidates"]) for item in repair_items) == 21
     assert DECISIONS.is_dir()
-    assert list(DECISIONS.iterdir()) == []
+    state = json.loads((DECISIONS / "review_decisions.json").read_text(encoding="utf-8"))
+    assert len(state["corrections"]) == 13
+    assert state["event_sequence"] == 13
+    assert state["completed"] is False
+    assert not {
+        "completed_review.json",
+        "completed_review_events.jsonl",
+        "completed_review_manifest.json",
+        "completed_review_summary.json",
+    }.intersection(path.name for path in DECISIONS.iterdir())
     for name, expected in EXPECTED_C1_HASHES.items():
         assert sha256(C1 / name) == expected
 

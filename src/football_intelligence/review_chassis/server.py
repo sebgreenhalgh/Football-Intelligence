@@ -13,7 +13,10 @@ from football_intelligence.detection_gold.persistence import (
     DetectionGoldCompletionError,
     DetectionGoldPilotPersistence,
 )
-from football_intelligence.detection_gold.dense_correction import DenseMaskCorrectionPersistence
+from football_intelligence.detection_gold.dense_correction import (
+    DenseCorrectionDependencyError,
+    DenseMaskCorrectionPersistence,
+)
 from football_intelligence.review.server import _parse_byte_range
 from football_intelligence.review_chassis.config import load_ui_config
 from football_intelligence.review_chassis.manifest import load_manifest, manifest_hash
@@ -329,6 +332,10 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
                 if not isinstance(persistence, DenseMaskCorrectionPersistence):
                     raise ValueError("dense-mask correction persistence is not enabled")
                 _json_response(self, persistence.save_correction(body))
+            elif path == "/api/review/dense-correction-preflight":
+                if not isinstance(persistence, DenseMaskCorrectionPersistence):
+                    raise ValueError("dense-mask correction persistence is not enabled")
+                _json_response(self, persistence.dependency_preflight(body))
             elif path == "/api/review/dense-correction-complete":
                 if not isinstance(persistence, DenseMaskCorrectionPersistence):
                     raise ValueError("dense-mask correction persistence is not enabled")
@@ -336,6 +343,8 @@ class ReviewChassisRequestHandler(SimpleHTTPRequestHandler):
             else:
                 _text_response(self, "not found", status=404)
         except DetectionGoldCompletionError as exc:
+            _json_response(self, exc.response_payload(), status=exc.http_status)
+        except DenseCorrectionDependencyError as exc:
             _json_response(self, exc.response_payload(), status=exc.http_status)
         except Exception as exc:
             _text_response(self, str(exc), status=400)

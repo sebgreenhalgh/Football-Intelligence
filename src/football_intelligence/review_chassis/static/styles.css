@@ -1117,6 +1117,11 @@ body.denseCorrectionPresentation .denseCorrectionShell {
   background: #0b100f;
 }
 
+.denseCorrectionShell button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .dcHeader {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px) minmax(300px, 1fr);
@@ -1454,6 +1459,30 @@ body.denseCorrectionPresentation .dcReviewColumn {
 .dcUnreliablePanel { display: grid; gap: 9px; }
 .dcUnreliablePanel label { display: flex; align-items: flex-start; gap: 8px; }
 .dcReviewColumn > .saveNext { width: 100%; margin-top: 12px; }
+.dcRecoveryPanel h3,
+.dcPairReviewPanel h3 { margin: 5px 0 3px; font-size: 14px; }
+.dcRecoveryCounts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 9px 0; }
+.dcRecoveryCounts span { padding: 7px; color: #aebfba; background: #0b1210; border: 1px solid #2b3935; border-radius: 5px; font-size: 10px; }
+.dcRecoveryCounts strong { display: block; color: #eef7f3; font-size: 16px; }
+.dcRecoveryCurrent,
+.dcDraftRecoveryState { padding: 7px 8px; border-left: 3px solid #30c9e6; background: #0b1210; }
+.dcPairChoices { display: grid; gap: 7px; }
+.dcPairChoices button { min-height: 38px; text-align: left; }
+.dcPairChoices button.selected { color: #081210; background: #76ddc2; border-color: #76ddc2; font-weight: 750; }
+.dcPairNavigator { display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; align-items: center; gap: 7px; margin-top: 9px; }
+.dcPairNavigator strong { text-align: center; font-size: 11px; }
+.dcRecoveryLocked #dcRedraw,
+.dcRecoveryLocked #dcFinish,
+.dcRecoveryLocked #dcUndo,
+.dcRecoveryLocked #dcClear,
+.dcRecoveryLocked #dcQuality,
+.dcRecoveryLocked #dcUnreliable,
+.dcRecoveryLocked #dcUnreliableReason,
+.dcRecoveryLocked #dcPreviousMask,
+.dcRecoveryLocked #dcNextMask { pointer-events: none; opacity: 0.45; }
+.dcMaterialOverlapRegion { fill: rgba(255, 82, 111, 0.34); stroke: #ff526f; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.dcPairPersonA { fill: rgba(48, 201, 230, 0.08); stroke: #30c9e6; stroke-width: 2.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.dcPairPersonB { fill: rgba(225, 86, 172, 0.08); stroke: #e156ac; stroke-width: 2.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .dcHelpButton { width: 100%; margin-top: 4px; }
 .dcHelpDialog { width: min(480px, calc(100vw - 32px)); color: #eef6f2; background: #111816; border: 1px solid #40504b; border-radius: 7px; }
 .dcHelpDialog::backdrop { background: rgba(0, 0, 0, 0.72); }

@@ -68,6 +68,7 @@ async function api(path, options = {}) {
     error.failedChecks = payload.failed_checks || [];
     error.savedAnnotationsUnchanged = payload.saved_annotations_unchanged === true;
     error.retryGuidance = payload.retry_guidance || "Reload server state before retrying.";
+    error.responsePayload = payload;
     throw error;
   }
   return response.json();

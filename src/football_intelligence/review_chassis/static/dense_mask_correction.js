@@ -5,6 +5,19 @@
   const SVG_NS = "http://www.w3.org/2000/svg";
   const GEOMETRY_EPSILON = 1e-6;
   const MINIMUM_POLYGON_AREA = 4;
+  const RECOVERY_BUILD_ID = "m5_5g4_r1_r3_pending_dependency_repair_v1";
+  const DEPENDENCY_HANDSHAKE_VERSION = "m5_5g4_r1_r3_server_authoritative_v1";
+  const RECOVERY_MUTATION_CONTROL_IDS = Object.freeze([
+    "dcRedraw",
+    "dcFinish",
+    "dcUndo",
+    "dcClear",
+    "dcQuality",
+    "dcUnreliable",
+    "dcUnreliableReason",
+    "dcPreviousMask",
+    "dcNextMask",
+  ]);
   const MARKER_SCREEN_RADIUS_CSS = Object.freeze({
     vertex: 3.5,
     crossing: 4,
@@ -53,6 +66,19 @@
     machineExplicitlyFocused: false,
     pendingViewState: null,
     startedAt: performance.now(),
+    recovery: {
+      enabled: false,
+      active: false,
+      rows: [],
+      index: 0,
+      preflight: null,
+      pairIndex: 0,
+      pairAnswers: {},
+      migration: null,
+      draft: null,
+      draftRepresented: false,
+      quarantined: [],
+    },
   };
 
   function uuid() {
@@ -73,10 +99,24 @@
   function activeCandidate() { return candidateRows()[runtime.candidateIndex] || null; }
   function draftKey() { return `${caseData().case_id}:${item().original_mask_uuid}`; }
   function elapsedSeconds() { return Math.max(0, Math.round((performance.now() - runtime.startedAt) / 1000)); }
+  function recoveryMutationLocked() { return runtime.recovery.enabled && runtime.recovery.active; }
 
-  function openDatabase() {
+  function syncRecoveryMutationLock() {
+    const locked = recoveryMutationLocked();
+    RECOVERY_MUTATION_CONTROL_IDS.forEach((id) => { $(id).disabled = locked; });
+    if (locked || !current()) return;
+    const closure = runtime.points.length >= 3 ? validateClosingSegment(runtime.points) : null;
+    $("dcFinish").disabled = !runtime.drawing
+      || runtime.points.length < 3
+      || !closure?.valid
+      || runtime.invalidPreview;
+    $("dcUnreliableReason").disabled = !$("dcUnreliable").checked;
+    $("dcPreviousMask").disabled = runtime.index === 0;
+    $("dcNextMask").disabled = runtime.index === runtime.items.length - 1;
+  }
+
+  function openNamedDatabase(name) {
     return new Promise((resolve, reject) => {
-      const name = runtime.uiConfig.question_contract.indexeddb_namespace;
       const request = indexedDB.open(name, 1);
       request.onupgradeneeded = () => {
         const database = request.result;
@@ -87,6 +127,10 @@
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
+  }
+
+  function openDatabase() {
+    return openNamedDatabase(runtime.uiConfig.question_contract.indexeddb_namespace);
   }
 
   function idb(mode, storeName, operation) {
@@ -104,9 +148,199 @@
   const idbDelete = (store, key) => idb("readwrite", store, (objectStore) => objectStore.delete(key));
   const idbAll = (store) => idb("readonly", store, (objectStore) => objectStore.getAll());
 
+  function databaseRequest(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  function transactionDone(transaction) {
+    return new Promise((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }
+
+  function stableValue(value) {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (value && typeof value === "object") return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, stableValue(value[key])]),
+    );
+    return value;
+  }
+
+  function stableJson(value) {
+    return JSON.stringify(stableValue(value));
+  }
+
+  async function sha256Text(value) {
+    return sha256(new TextEncoder().encode(value));
+  }
+
+  async function databaseSnapshot(database) {
+    const stores = [];
+    for (const name of Array.from(database.objectStoreNames).sort()) {
+      const transaction = database.transaction(name, "readonly");
+      const records = await databaseRequest(transaction.objectStore(name).getAll());
+      stores.push({name, records});
+    }
+    return {name: database.name, version: database.version, stores};
+  }
+
+  async function importSnapshot(database, snapshot, migrationRecord = null) {
+    const names = snapshot.stores.map((store) => store.name);
+    const transaction = database.transaction(names, "readwrite");
+    for (const source of snapshot.stores) {
+      const target = transaction.objectStore(source.name);
+      target.clear();
+      source.records.forEach((record) => target.put(structuredClone(record)));
+    }
+    if (migrationRecord) transaction.objectStore("session").put(migrationRecord);
+    await transactionDone(transaction);
+  }
+
+  async function deleteDatabase(name) {
+    await new Promise((resolve) => {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = request.onerror = request.onblocked = () => resolve();
+    });
+  }
+
   async function sha256(buffer) {
     const digest = await crypto.subtle.digest("SHA-256", buffer);
     return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  function canonicalPolygonKey(points) {
+    const normalized = (points || []).map((point) => ({
+      x: Math.round(Number(point.x) * 1e6) / 1e6,
+      y: Math.round(Number(point.y) * 1e6) / 1e6,
+    }));
+    if (normalized.length > 1 && samePoint(normalized[0], normalized[normalized.length - 1])) normalized.pop();
+    if (!normalized.length) return "[]";
+    const sequences = [];
+    [normalized, [...normalized].reverse()].forEach((ordered) => {
+      ordered.forEach((_, index) => sequences.push([...ordered.slice(index), ...ordered.slice(0, index)]));
+    });
+    return sequences.map((row) => stableJson(row)).sort()[0];
+  }
+
+  async function recoverySourceSnapshot() {
+    const oldName = runtime.uiConfig.question_contract.old_indexeddb_namespace;
+    const known = await indexedDB.databases();
+    if (!oldName || !known.some((row) => row.name === oldName)) return null;
+    const database = await openNamedDatabase(oldName);
+    try {
+      return await databaseSnapshot(database);
+    } finally {
+      database.close();
+    }
+  }
+
+  async function initializeRecoveryMigration() {
+    if (!runtime.recovery.enabled) return;
+    const expected = Number(runtime.uiConfig.question_contract.expected_legacy_pending_records || 5);
+    const existing = await idbGet("session", "pending_recovery_migration");
+    let migration = existing || null;
+    if (!migration) {
+      const source = await recoverySourceSnapshot();
+      if (!source) throw new Error("The preserved R1-R2 browser database is unavailable; no data was changed.");
+      const sourceHash = await sha256Text(stableJson(source.stores));
+      const outbox = source.stores.find((store) => store.name === "outbox")?.records || [];
+      const drafts = source.stores.find((store) => store.name === "drafts")?.records || [];
+      if (outbox.length !== expected) {
+        throw new Error(`Expected ${expected} preserved queue records but found ${outbox.length}; migration stopped.`);
+      }
+      const temporaryName = `${runtime.uiConfig.question_contract.indexeddb_namespace}_migration_probe_${sourceHash.slice(0, 12)}`;
+      await deleteDatabase(temporaryName);
+      const temporary = await openNamedDatabase(temporaryName);
+      await importSnapshot(temporary, source);
+      const restored = await databaseSnapshot(temporary);
+      temporary.close();
+      const restoredHash = await sha256Text(stableJson(restored.stores));
+      if (restoredHash !== sourceHash) {
+        throw new Error("Temporary browser restore hash mismatch; the old database remains untouched.");
+      }
+      await deleteDatabase(temporaryName);
+      migration = {
+        key: "pending_recovery_migration",
+        schema_version: "football_intelligence.m5_5g4_r1_r3.browser_migration.v1",
+        status: "READY",
+        old_database_name: source.name,
+        new_database_name: runtime.uiConfig.question_contract.indexeddb_namespace,
+        old_database_retained_read_only: true,
+        source_export_sha256: sourceHash,
+        temporary_restore_sha256: restoredHash,
+        initial_outbox_count: outbox.length,
+        initial_draft_count: drafts.length,
+        migrated_at: new Date().toISOString(),
+        acknowledged: [],
+      };
+      await importSnapshot(runtime.db, source, migration);
+      const importedOutbox = await idbAll("outbox");
+      const importedDrafts = await idbAll("drafts");
+      if (importedOutbox.length !== outbox.length || importedDrafts.length !== drafts.length) {
+        throw new Error("Real recovery database count mismatch; the old database remains untouched.");
+      }
+    }
+    runtime.recovery.migration = migration;
+    runtime.recovery.rows = (await idbAll("outbox")).sort(
+      (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
+    const drafts = await idbAll("drafts");
+    runtime.recovery.draft = drafts.length === 1 ? drafts[0] : null;
+    const draftKey = canonicalPolygonKey(runtime.recovery.draft?.points || []);
+    runtime.recovery.draftRepresented = Boolean(runtime.recovery.draft) && runtime.recovery.rows.some((row) => (
+      row.draftKey === runtime.recovery.draft.key
+      && canonicalPolygonKey(row.payload?.corrected_polygon_original_pixels || []) === draftKey
+    ));
+    runtime.recovery.active = runtime.recovery.rows.length > 0;
+  }
+
+  async function recordRecoveryAcknowledgement(row, response, disposition) {
+    const migration = await idbGet("session", "pending_recovery_migration");
+    const acknowledged = [...(migration?.acknowledged || [])];
+    if (!acknowledged.some((item) => item.idempotency_key === row.payload.idempotency_key)) {
+      acknowledged.push({
+        original_event_id: row.payload.client_event_id,
+        idempotency_key: row.payload.idempotency_key,
+        original_created_at: row.createdAt,
+        disposition,
+        server_event_sequence: response.acknowledged_event_sequence || response.server_event_sequence || null,
+        acknowledged_at: new Date().toISOString(),
+      });
+    }
+    const remaining = (await idbAll("outbox")).length;
+    const updated = {
+      ...migration,
+      key: "pending_recovery_migration",
+      status: remaining === 0 ? "COMPLETE" : "IN_PROGRESS",
+      acknowledged,
+      remaining_outbox_count: remaining,
+      completed_at: remaining === 0 ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString(),
+    };
+    await idbPut("session", updated);
+    runtime.recovery.migration = updated;
+  }
+
+  async function downloadRecoveryExport() {
+    const source = await recoverySourceSnapshot();
+    const current = await databaseSnapshot(runtime.db);
+    const payload = {
+      schema_version: "football_intelligence.m5_5g4_r1_r3.user_recovery_export.v1",
+      exported_at: new Date().toISOString(),
+      old_database: source,
+      repaired_database: current,
+    };
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {type: "application/json"});
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `m5_5g4_r1_r3_recovery_${Date.now()}.json`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
   }
 
   function asset(type) {
@@ -527,6 +761,7 @@
   }
 
   function materialDependencies() {
+    if (runtime.recovery.enabled) return [];
     if ($("dcUnreliable").checked) return item().occlusion_dependencies || [];
     const validation = validateSimplePolygon(runtime.points);
     if (runtime.points.length < 3 || !validation.valid) return [];
@@ -535,6 +770,48 @@
       return polygonsOverlap(item().original_polygon_original_pixels, other) !== polygonsOverlap(runtime.points, other)
         || dependency.original_graph_inconsistent;
     });
+  }
+
+  function activeRecoveryRow() {
+    return runtime.recovery.rows[runtime.recovery.index] || null;
+  }
+
+  function activeRecoveryPair() {
+    return runtime.recovery.preflight?.occlusion_pairs?.[runtime.recovery.pairIndex] || null;
+  }
+
+  function contextMask(maskUuid) {
+    return (caseData().visible_metadata.context_masks || []).find(
+      (row) => row.original_mask_uuid === maskUuid,
+    ) || null;
+  }
+
+  function drawRecoveryPairOverlay(parent) {
+    const pair = activeRecoveryPair();
+    if (!runtime.recovery.active || !pair) return;
+    const personB = contextMask(pair.person_b_mask_uuid);
+    const personAPoints = runtime.points.length >= 3
+      ? runtime.points
+      : item().original_polygon_original_pixels;
+    const personBPoints = personB?.polygon_original_pixels || [];
+    if (personAPoints.length < 3 || personBPoints.length < 3) return;
+
+    appendPolygon(parent, personAPoints, "dcPairPersonA");
+    appendPolygon(parent, personBPoints, "dcPairPersonB");
+    const evidence = pair.material_overlap_evidence || {};
+    const overlapSource = evidence.original_overlap && !evidence.corrected_overlap
+      ? item().original_polygon_original_pixels
+      : personAPoints;
+    if (evidence.original_overlap || evidence.corrected_overlap) {
+      const clipId = `dcPairClip-${runtime.recovery.index}-${runtime.recovery.pairIndex}`;
+      const definitions = svgElement("defs", {});
+      const clip = svgElement("clipPath", {id: clipId, clipPathUnits: "userSpaceOnUse"});
+      clip.append(svgElement("polygon", {points: pointsAttribute(personBPoints)}));
+      definitions.append(clip);
+      parent.append(definitions);
+      const overlap = appendPolygon(parent, overlapSource, "dcMaterialOverlapRegion");
+      if (overlap) overlap.setAttribute("clip-path", `url(#${clipId})`);
+    }
   }
 
   function drawOriginalIntersections(parent) {
@@ -560,10 +837,11 @@
     const originalLayer = svgElement("g", {class: "dcOriginalLayer", "pointer-events": "none"});
     const machineLayer = svgElement("g", {class: "dcMachineLayer", "pointer-events": "none"});
     const correctionLayer = svgElement("g", {class: "dcCorrectionLayer", "pointer-events": "none"});
+    const pairLayer = svgElement("g", {class: "dcPairLayer", "pointer-events": "none"});
     const drawingLayer = svgElement("g", {class: "dcDrawingLayer", "pointer-events": "none"});
     const errorLayer = svgElement("g", {class: "dcErrorLayer", "pointer-events": "none"});
     const labelLayer = svgElement("g", {class: "dcLabelLayer", "pointer-events": "none"});
-    svg.append(contextLayer, originalLayer, machineLayer, correctionLayer, drawingLayer, errorLayer, labelLayer);
+    svg.append(contextLayer, originalLayer, machineLayer, correctionLayer, pairLayer, drawingLayer, errorLayer, labelLayer);
 
     const context = caseData().visible_metadata.context_masks || [];
     context.forEach((mask) => {
@@ -598,6 +876,7 @@
     if (runtime.points.length >= 3 && !runtime.drawing) {
       appendPolygon(correctionLayer, runtime.points, "dcCorrectionMask");
     }
+    drawRecoveryPairOverlay(pairLayer);
     if (runtime.points.length) {
       const draft = runtime.preview ? [...runtime.points, runtime.preview] : runtime.points;
       const validDraft = !runtime.previewIssue;
@@ -915,12 +1194,15 @@
     $("dcNextCandidate").disabled = runtime.candidateIndex >= rows.length - 1;
     $("dcCandidateLabel").textContent = candidate ? `Machine box ${runtime.candidateIndex + 1} of ${rows.length}` : "No machine box";
     $("dcCandidateRelation").textContent = candidate?.relation_plain_language || "No candidate coverage review is required.";
-    const available = candidateCoverageAvailable() && !$("dcUnreliable").checked;
+    const available = candidateCoverageAvailable()
+      && !$("dcUnreliable").checked
+      && !recoveryMutationLocked();
     const select = document.querySelector("[data-dc-coverage]");
     if (select) select.disabled = !available;
     const status = $("dcMachineStatus");
     status.classList.toggle("isBlocked", Boolean(candidate) && !available && !$("dcUnreliable").checked);
     if (!candidate) status.textContent = "No active machine box for this outline.";
+    else if (recoveryMutationLocked()) status.textContent = "Preserved machine-box coverage is locked during safe recovery.";
     else if (!$("dcShowMachineBox").checked) status.textContent = "Show the machine box before reviewing coverage.";
     else if (!candidateBindingValid(candidate)) status.textContent = "Machine-box source binding is invalid. Coverage is blocked.";
     else if (!runtime.machineRendered) status.textContent = "Machine box is outside this evidence view. Use Focus person + machine box.";
@@ -944,6 +1226,11 @@
   }
 
   function renderOcclusionRows(saved = null) {
+    if (runtime.recovery.enabled) {
+      $("dcOcclusionPanel").classList.add("isHidden");
+      $("dcOcclusionRows").replaceChildren();
+      return;
+    }
     const dependencies = materialDependencies();
     const panel = $("dcOcclusionPanel");
     panel.classList.toggle("isHidden", dependencies.length === 0);
@@ -955,6 +1242,415 @@
       persistDraft();
       updateSaveGate();
     }));
+  }
+
+  function explicitPairAnswers(row, preflight = null) {
+    const allowed = new Set(["PERSON_A_IN_FRONT", "PERSON_B_IN_FRONT", "NO_MEANINGFUL_OVERLAP", "UNRESOLVED"]);
+    const required = new Set(preflight?.required_occlusion_pair_review_ids || []);
+    const answers = {...(row.reconciliation?.pair_answers || {})};
+    (row.payload?.occlusion_reviews || []).forEach((review) => {
+      const dependencyId = String(review.dependency_id || "");
+      const choice = String(review.pair_choice || "");
+      if (dependencyId && allowed.has(choice) && (!preflight || required.has(dependencyId))) {
+        answers[dependencyId] = choice;
+      }
+    });
+    return answers;
+  }
+
+  function recoveryPayload(row, {rawAnswers = false, final = false} = {}) {
+    const payload = structuredClone(row.payload);
+    const preflight = row.reconciliation?.preflight || null;
+    const answers = explicitPairAnswers(row, preflight);
+    payload.client_build_id = RECOVERY_BUILD_ID;
+    if (rawAnswers || !preflight) {
+      payload.occlusion_reviews = (row.payload.occlusion_reviews || []).filter(
+        (review) => review.dependency_id && review.pair_choice,
+      );
+    } else {
+      payload.occlusion_reviews = (preflight.occlusion_pairs || [])
+        .filter((pair) => answers[pair.dependency_id])
+        .map((pair) => ({
+          dependency_id: pair.dependency_id,
+          other_mask_uuid: pair.person_b_mask_uuid,
+          pair_choice: answers[pair.dependency_id],
+        }));
+    }
+    if (final && preflight) {
+      payload.expected_server_state_hash = runtime.state.server_state_hash || null;
+      payload.dependency_handshake_version = DEPENDENCY_HANDSHAKE_VERSION;
+      payload.normalized_polygon_hash = preflight.normalized_polygon_hash;
+      payload.dependency_set_hash = preflight.dependency_set_hash;
+      payload.dependency_algorithm_version_hash = preflight.dependency_algorithm_version_hash;
+      payload.dependency_answer_revision_id = row.reconciliation?.answer_revision_id || null;
+      payload.pending_recovery_provenance = {
+        original_client_event_id: row.payload.client_event_id,
+        original_idempotency_key: row.payload.idempotency_key,
+        original_created_at: row.createdAt,
+        source_database_name: runtime.recovery.migration?.old_database_name || null,
+        source_export_sha256: runtime.recovery.migration?.source_export_sha256 || null,
+        original_payload_preserved_in_read_only_database: true,
+      };
+    }
+    return payload;
+  }
+
+  async function persistRecoveryRow(row) {
+    await idbPut("outbox", row);
+    const index = runtime.recovery.rows.findIndex((candidate) => candidate.id === row.id);
+    if (index >= 0) runtime.recovery.rows[index] = row;
+  }
+
+  function recoveryQuestionCount() {
+    return runtime.recovery.rows.reduce((total, row) => {
+      const preflight = row.reconciliation?.preflight;
+      if (!preflight || preflight.already_acknowledged) return total;
+      const answers = explicitPairAnswers(row, preflight);
+      return total + (preflight.required_occlusion_pair_review_ids || []).filter((id) => !answers[id]).length;
+    }, 0);
+  }
+
+  function recoveryStatusLabel(status) {
+    return ({
+      SAVED_TO_SERVER: "Saved to server",
+      WAITING_FOR_SERVER: "Waiting for server",
+      NEEDS_OVERLAP_ANSWERS: "Needs overlap answers",
+      SERVER_REJECTED_REVIEW_REQUIRED: "Server rejected - review required",
+      OFFLINE_SAFELY_STORED: "Offline - safely stored locally",
+      QUARANTINED_EXPORT_AVAILABLE: "Quarantined - export available",
+      PREFLIGHT_READY: "Ready for server acknowledgement",
+    })[status] || "Checking preserved item";
+  }
+
+  function renderRecoveryStatus() {
+    const panel = $("dcRecoveryPanel");
+    panel.classList.toggle("isHidden", !runtime.recovery.enabled);
+    document.body.classList.toggle("dcRecoveryLocked", runtime.recovery.active);
+    const migration = runtime.recovery.migration || {};
+    const acknowledged = migration.acknowledged?.length || 0;
+    const pending = runtime.recovery.rows.length;
+    const initial = Number(migration.initial_outbox_count || pending || 0);
+    const currentOrdinal = Math.min(initial, acknowledged + 1);
+    $("dcAcknowledgedCount").textContent = String(Object.keys(runtime.state?.corrections || {}).length);
+    $("dcPendingCount").textContent = String(pending);
+    $("dcQuestionCount").textContent = String(recoveryQuestionCount());
+    $("dcRecoverySummary").textContent = pending
+      ? `${Object.keys(runtime.state?.corrections || {}).length} corrections saved to server. ${pending} locally saved ${pending === 1 ? "item needs" : "items need"} reconciliation.`
+      : "All preserved local events have a server acknowledgement. Normal correction can resume.";
+    $("dcSaveState").textContent = pending
+      ? `Locally saved work | pending ${pending}`
+      : "Saved to server | pending 0";
+    const row = activeRecoveryRow();
+    const status = row?.reconciliation?.status || (pending ? "WAITING_FOR_SERVER" : "SAVED_TO_SERVER");
+    $("dcRecoveryCurrent").textContent = row
+      ? `Recovery item ${currentOrdinal} of ${initial}: ${recoveryStatusLabel(status)}.`
+      : "Recovery queue complete.";
+    $("dcDraftRecoveryState").textContent = runtime.recovery.draft
+      ? runtime.recovery.draftRepresented
+        ? "Recovered local draft: its polygon is represented in the preserved queue, so no duplicate event will be created."
+        : "Recovered local draft separately. It will not be submitted without confirmation."
+      : "No separate local draft was present in the preserved browser database.";
+    $("dcMigrationDetails").textContent = JSON.stringify({
+      old_database_name: migration.old_database_name,
+      new_database_name: migration.new_database_name,
+      old_database_retained_read_only: migration.old_database_retained_read_only,
+      source_export_sha256: migration.source_export_sha256,
+      temporary_restore_sha256: migration.temporary_restore_sha256,
+      initial_outbox_count: migration.initial_outbox_count,
+      acknowledged_count: acknowledged,
+      remaining_outbox_count: pending,
+      migration_status: migration.status,
+    }, null, 2);
+    $("dcPreflight").classList.toggle("isHidden", !runtime.recovery.active);
+    $("dcRecoverySave").classList.toggle("isHidden", !runtime.recovery.active);
+    $("dcSave").classList.toggle("isHidden", runtime.recovery.active);
+    syncRecoveryMutationLock();
+  }
+
+  function renderPairReview() {
+    const preflight = runtime.recovery.preflight;
+    const row = activeRecoveryRow();
+    const pairs = preflight?.occlusion_pairs || [];
+    const pair = activeRecoveryPair();
+    const panel = $("dcPairReviewPanel");
+    panel.classList.toggle("isHidden", !runtime.recovery.active || !pair);
+    if (!row || !preflight) {
+      $("dcRecoverySave").disabled = true;
+      return;
+    }
+    const answers = explicitPairAnswers(row, preflight);
+    if (pair) {
+      $("dcPairTitle").textContent = "Review Person A and Person B";
+      const evidence = pair.material_overlap_evidence || {};
+      const relation = pair.existing_original_relation === "PERSON_A_IN_FRONT"
+        ? "The original annotation placed Person A in front."
+        : pair.existing_original_relation === "PERSON_B_IN_FRONT"
+          ? "The original annotation placed Person B in front."
+          : "The original front/back relation was not resolved.";
+      $("dcPairEvidence").textContent = `Person A is cyan and Person B is magenta. ${relation} ${evidence.overlap_changed ? "The overlap changed after the outline correction." : "The original relation still requires explicit review."}`;
+      $("dcPairPosition").textContent = `Pair ${runtime.recovery.pairIndex + 1} of ${pairs.length}`;
+      $("dcPreviousPair").disabled = runtime.recovery.pairIndex === 0;
+      $("dcNextPair").disabled = runtime.recovery.pairIndex >= pairs.length - 1;
+      $("dcPairChoices").querySelectorAll("[data-dc-pair-choice]").forEach((button) => {
+        button.classList.toggle("selected", button.dataset.dcPairChoice === answers[pair.dependency_id]);
+      });
+    }
+    const initial = row.reconciliation?.initial_preflight || preflight;
+    $("dcDependencyDetails").textContent = JSON.stringify({
+      required_dependency_ids: preflight.required_occlusion_pair_review_ids,
+      client_submitted_ids: initial.submitted_answer_ids,
+      missing_ids: preflight.missing_answer_ids,
+      extra_ids: initial.extra_answer_ids,
+      dependency_set_hash: preflight.dependency_set_hash,
+      algorithm_version: preflight.dependency_algorithm_version,
+      algorithm_version_hash: preflight.dependency_algorithm_version_hash,
+      normalized_polygon_hash: preflight.normalized_polygon_hash,
+    }, null, 2);
+    const unanswered = (preflight.required_occlusion_pair_review_ids || []).filter((id) => !answers[id]);
+    const nonPairMissing = (preflight.missing_answer_ids || []).filter(
+      (id) => !(preflight.required_occlusion_pair_review_ids || []).includes(id),
+    );
+    $("dcRecoverySave").disabled = unanswered.length > 0 || nonPairMissing.length > 0
+      || (preflight.extra_answer_ids || []).length > 0;
+    $("dcPreflight").disabled = false;
+    renderRecoveryStatus();
+  }
+
+  function structuredRecoveryError(error) {
+    const payload = error.responsePayload || {};
+    return [
+      payload.message || error.message,
+      payload.error_code ? `Code: ${payload.error_code}.` : null,
+      payload.plain_language_next_action || null,
+      payload.server_saved_corrections_safe === true ? "The 13 server-saved corrections remain safe." : null,
+      payload.missing_dependency_ids?.length ? `Missing: ${payload.missing_dependency_ids.join(", ")}.` : null,
+      payload.extra_dependency_ids?.length ? `Extra: ${payload.extra_dependency_ids.join(", ")}.` : null,
+    ].filter(Boolean).join(" ");
+  }
+
+  async function auditRecoveryQueue() {
+    for (const row of runtime.recovery.rows) {
+      try {
+        const initial = await runtime.api("/api/review/dense-correction-preflight", {
+          method: "POST",
+          body: JSON.stringify(recoveryPayload(row, {rawAnswers: true})),
+        });
+        const answers = explicitPairAnswers(row, initial);
+        row.reconciliation = {
+          ...(row.reconciliation || {}),
+          initial_preflight: row.reconciliation?.initial_preflight || initial,
+          preflight: initial,
+          pair_answers: answers,
+          status: initial.already_acknowledged
+            ? "SAVED_TO_SERVER"
+            : initial.missing_answer_ids.length
+              ? "NEEDS_OVERLAP_ANSWERS"
+              : "PREFLIGHT_READY",
+          audited_at: new Date().toISOString(),
+        };
+        await persistRecoveryRow(row);
+      } catch (error) {
+        row.reconciliation = {
+          ...(row.reconciliation || {}),
+          status: error.httpStatus ? "SERVER_REJECTED_REVIEW_REQUIRED" : "OFFLINE_SAFELY_STORED",
+          structured_error: error.responsePayload || {message: error.message},
+          audited_at: new Date().toISOString(),
+        };
+        await persistRecoveryRow(row);
+      }
+    }
+  }
+
+  async function hydrateRecoveryRow() {
+    const row = activeRecoveryRow();
+    if (!row) return;
+    const nextIndex = runtime.items.findIndex((candidate) => (
+      candidate.caseData.case_id === row.payload.case_id
+      && candidate.item.original_mask_uuid === row.payload.original_mask_uuid
+    ));
+    if (nextIndex < 0) {
+      row.reconciliation = {
+        ...(row.reconciliation || {}),
+        status: "QUARANTINED_EXPORT_AVAILABLE",
+        structured_error: {message: "The pending event is outside the immutable repair manifest."},
+      };
+      runtime.recovery.quarantined.push(row.id);
+      await persistRecoveryRow(row);
+      renderRecoveryStatus();
+      return;
+    }
+    runtime.index = nextIndex;
+    runtime.candidateIndex = 0;
+    runtime.points = (row.payload.corrected_polygon_original_pixels || []).map((point) => ({
+      x: Number(point.x), y: Number(point.y),
+    }));
+    runtime.drawing = false;
+    runtime.preview = null;
+    runtime.previewIssue = null;
+    runtime.coverageValues = Object.fromEntries((row.payload.candidate_coverage_reviews || []).map((review) => [
+      review.candidate_uuid,
+      review.candidate_visible_mask_coverage == null ? "" : String(review.candidate_visible_mask_coverage),
+    ]));
+    runtime.view = "focal";
+    runtime.pendingViewState = null;
+    $("dcQuality").value = row.payload.mask_quality || item().original_mask_quality;
+    $("dcUnreliable").checked = row.payload.decision === "UNRELIABLE_OUTLINE";
+    $("dcUnreliableReason").disabled = true;
+    $("dcUnreliableReason").value = row.payload.unreliable_reason || "";
+    $("dcFocalView").classList.add("active");
+    $("dcPanoramaView").classList.remove("active");
+    updateProgress();
+    renderCoverageRows();
+    renderOcclusionRows();
+    runtime.recovery.preflight = row.reconciliation?.preflight || null;
+    runtime.recovery.pairIndex = 0;
+    await loadEvidence();
+    renderPairReview();
+    renderRecoveryStatus();
+  }
+
+  async function refreshRecoveryRows() {
+    runtime.recovery.rows = (await idbAll("outbox")).sort(
+      (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
+    runtime.recovery.index = 0;
+    runtime.recovery.active = runtime.recovery.rows.length > 0;
+  }
+
+  async function removeAcknowledgedRecoveryRow(row, response, disposition) {
+    await idbDelete("outbox", row.id);
+    const remaining = await idbAll("outbox");
+    const draftPolygon = canonicalPolygonKey(runtime.recovery.draft?.points || []);
+    if (runtime.recovery.draft && !remaining.some((candidate) => (
+      candidate.draftKey === runtime.recovery.draft.key
+      && canonicalPolygonKey(candidate.payload?.corrected_polygon_original_pixels || []) === draftPolygon
+    ))) {
+      await idbDelete("drafts", runtime.recovery.draft.key);
+      runtime.recovery.draft = null;
+    }
+    await recordRecoveryAcknowledgement(row, response, disposition);
+    await refreshRecoveryRows();
+    if (runtime.recovery.active) {
+      await hydrateRecoveryRow();
+      await runCurrentRecoveryPreflight();
+    } else {
+      runtime.recovery.preflight = null;
+      renderPairReview();
+      renderRecoveryStatus();
+      runtime.state = await runtime.api("/api/review/state");
+      await selectIndex(nextIncompleteIndex());
+    }
+  }
+
+  async function runCurrentRecoveryPreflight() {
+    const row = activeRecoveryRow();
+    if (!row) return;
+    $("dcError").classList.add("isHidden");
+    row.reconciliation = {...(row.reconciliation || {}), status: "WAITING_FOR_SERVER"};
+    await persistRecoveryRow(row);
+    renderRecoveryStatus();
+    try {
+      const preflight = await runtime.api("/api/review/dense-correction-preflight", {
+        method: "POST",
+        body: JSON.stringify(recoveryPayload(row)),
+      });
+      row.reconciliation = {
+        ...(row.reconciliation || {}),
+        preflight,
+        pair_answers: explicitPairAnswers(row, preflight),
+        status: preflight.already_acknowledged
+          ? "SAVED_TO_SERVER"
+          : preflight.missing_answer_ids.length
+            ? "NEEDS_OVERLAP_ANSWERS"
+            : "PREFLIGHT_READY",
+        preflighted_at: new Date().toISOString(),
+      };
+      await persistRecoveryRow(row);
+      runtime.recovery.preflight = preflight;
+      if (preflight.already_acknowledged) {
+        await removeAcknowledgedRecoveryRow(row, preflight, "ALREADY_ACKNOWLEDGED");
+        return;
+      }
+      renderPairReview();
+      renderOverlay();
+    } catch (error) {
+      const rejected = Boolean(error.httpStatus);
+      row.reconciliation = {
+        ...(row.reconciliation || {}),
+        status: rejected ? "SERVER_REJECTED_REVIEW_REQUIRED" : "OFFLINE_SAFELY_STORED",
+        structured_error: error.responsePayload || {message: error.message},
+      };
+      await persistRecoveryRow(row);
+      $("dcError").textContent = structuredRecoveryError(error);
+      $("dcError").classList.remove("isHidden");
+      renderPairReview();
+      renderRecoveryStatus();
+    }
+  }
+
+  async function chooseRecoveryPair(choice) {
+    const row = activeRecoveryRow();
+    const pair = activeRecoveryPair();
+    if (!row || !pair) return;
+    row.reconciliation = {
+      ...(row.reconciliation || {}),
+      answer_revision_id: row.reconciliation?.answer_revision_id || uuid(),
+      pair_answers: {
+        ...explicitPairAnswers(row, runtime.recovery.preflight),
+        [pair.dependency_id]: choice,
+      },
+      status: "WAITING_FOR_SERVER",
+      answer_updated_at: new Date().toISOString(),
+    };
+    await persistRecoveryRow(row);
+    await runCurrentRecoveryPreflight();
+  }
+
+  async function saveReconciledRecoveryItem() {
+    const row = activeRecoveryRow();
+    if (!row) return;
+    $("dcRecoverySave").disabled = true;
+    try {
+      runtime.state = await runtime.api("/api/review/state");
+      const preflight = await runtime.api("/api/review/dense-correction-preflight", {
+        method: "POST",
+        body: JSON.stringify(recoveryPayload(row)),
+      });
+      row.reconciliation = {...(row.reconciliation || {}), preflight};
+      await persistRecoveryRow(row);
+      runtime.recovery.preflight = preflight;
+      if (preflight.already_acknowledged) {
+        await removeAcknowledgedRecoveryRow(row, preflight, "ALREADY_ACKNOWLEDGED");
+        return;
+      }
+      if (!preflight.saveable) {
+        row.reconciliation.status = "NEEDS_OVERLAP_ANSWERS";
+        await persistRecoveryRow(row);
+        renderPairReview();
+        return;
+      }
+      const response = await runtime.api("/api/review/dense-correction-event", {
+        method: "POST",
+        body: JSON.stringify(recoveryPayload(row, {final: true})),
+      });
+      runtime.state = response;
+      await removeAcknowledgedRecoveryRow(
+        row,
+        response,
+        response.duplicate_event ? "DUPLICATE_ACKNOWLEDGED" : "SERVER_ACKNOWLEDGED",
+      );
+    } catch (error) {
+      row.reconciliation = {
+        ...(row.reconciliation || {}),
+        status: error.httpStatus ? "SERVER_REJECTED_REVIEW_REQUIRED" : "OFFLINE_SAFELY_STORED",
+        structured_error: error.responsePayload || {message: error.message},
+      };
+      await persistRecoveryRow(row);
+      $("dcError").textContent = structuredRecoveryError(error);
+      $("dcError").classList.remove("isHidden");
+      renderPairReview();
+      renderRecoveryStatus();
+    }
   }
 
   function focalContainmentValid() {
@@ -978,6 +1674,7 @@
   }
 
   function occlusionComplete() {
+    if (runtime.recovery.enabled) return true;
     if ($("dcUnreliable").checked) return true;
     return Array.from(document.querySelectorAll("[data-dc-occlusion]")).every((select) => select.value !== "");
   }
@@ -1015,7 +1712,8 @@
   function updateSaveGate() {
     if (!runtime.state || !current()) return;
     const closure = runtime.points.length >= 3 ? validateClosingSegment(runtime.points) : null;
-    $("dcFinish").disabled = !runtime.drawing
+    $("dcFinish").disabled = recoveryMutationLocked()
+      || !runtime.drawing
       || runtime.points.length < 3
       || !closure?.valid
       || runtime.invalidPreview;
@@ -1024,7 +1722,12 @@
     $("dcSaveReason").textContent = blockers.length ? `Save disabled: ${blockers[0]}.` : "All checks pass. This outline is ready to save.";
     $("dcSaveReason").classList.toggle("isBlocked", blockers.length !== 0);
     const complete = Object.keys(runtime.state.corrections || {}).length === runtime.items.length;
-    $("dcComplete").disabled = !complete || runtime.evidenceBlocked;
+    $("dcComplete").disabled = !complete || runtime.evidenceBlocked || runtime.recovery.active;
+    if (runtime.recovery.enabled) {
+      $("dcSave").classList.toggle("isHidden", runtime.recovery.active);
+      $("dcRecoverySave").classList.toggle("isHidden", !runtime.recovery.active);
+      $("dcPreflight").classList.toggle("isHidden", !runtime.recovery.active);
+    }
   }
 
   function viewState() {
@@ -1050,6 +1753,11 @@
 
   async function persistDraft() {
     if (!runtime.db || !current()) return;
+    if (runtime.recovery.active) {
+      await persistSession();
+      $("dcSaveState").textContent = "Recovered polygon locked until server acknowledgement";
+      return;
+    }
     await idbPut("drafts", {
       key: draftKey(),
       points: runtime.points,
@@ -1093,7 +1801,7 @@
     $("dcPanoramaView").classList.toggle("active", runtime.view === "panorama");
     $("dcQuality").value = source?.quality || item().original_mask_quality;
     $("dcUnreliable").checked = Boolean(source?.unreliable);
-    $("dcUnreliableReason").disabled = !$("dcUnreliable").checked;
+    $("dcUnreliableReason").disabled = recoveryMutationLocked() || !$("dcUnreliable").checked;
     $("dcUnreliableReason").value = source?.unreliableReason || "";
     renderCoverageRows();
     renderOcclusionRows(saved);
@@ -1124,11 +1832,12 @@
     $("dcProgressBar").style.width = `${100 * savedMasks / runtime.items.length}%`;
     $("dcCaseTitle").textContent = `Dense case ${caseIndex + 1}`;
     $("dcMaskLabel").textContent = `Outline ${inCase + 1} of ${caseData().visible_metadata.repair_items.length}`;
-    $("dcPreviousMask").disabled = runtime.index === 0;
-    $("dcNextMask").disabled = runtime.index === runtime.items.length - 1;
+    $("dcPreviousMask").disabled = recoveryMutationLocked() || runtime.index === 0;
+    $("dcNextMask").disabled = recoveryMutationLocked() || runtime.index === runtime.items.length - 1;
   }
 
   async function selectIndex(next) {
+    if (recoveryMutationLocked()) return;
     runtime.index = Math.max(0, Math.min(runtime.items.length - 1, next));
     runtime.candidateIndex = 0;
     runtime.preview = null;
@@ -1213,6 +1922,13 @@
     const row = {id: payload.idempotency_key, draftKey: draftKey(), payload, createdAt: new Date().toISOString()};
     await idbPut("outbox", row);
     $("dcSaveState").textContent = "Queued locally | pending 1";
+    if (runtime.recovery.enabled) {
+      await refreshRecoveryRows();
+      await auditRecoveryQueue();
+      await hydrateRecoveryRow();
+      await runCurrentRecoveryPreflight();
+      return;
+    }
     try {
       await deliverOutbox(row);
       updateProgress();
@@ -1226,7 +1942,10 @@
 
   async function completeRepair() {
     try {
-      await flushOutbox();
+      if (runtime.recovery.enabled && runtime.recovery.active) {
+        throw new Error("locally preserved events still require server acknowledgement");
+      }
+      if (!runtime.recovery.enabled) await flushOutbox();
       const pending = (await idbAll("outbox")).length;
       const drafts = (await idbAll("drafts")).length;
       const id = uuid();
@@ -1253,6 +1972,7 @@
   }
 
   function beginRedraw() {
+    if (recoveryMutationLocked()) return;
     runtime.points = [];
     runtime.preview = null;
     runtime.previewIssue = null;
@@ -1264,6 +1984,7 @@
   }
 
   function removeLastPoint() {
+    if (recoveryMutationLocked()) return;
     runtime.points.pop();
     runtime.drawing = true;
     runtime.preview = null;
@@ -1273,6 +1994,7 @@
   }
 
   function clearOutline() {
+    if (recoveryMutationLocked()) return;
     runtime.points = [];
     runtime.preview = null;
     runtime.previewIssue = null;
@@ -1318,6 +2040,7 @@
     $("dcShowContextLabels").addEventListener("change", renderOverlay);
     $("dcRedraw").addEventListener("click", beginRedraw);
     $("dcFinish").addEventListener("click", () => {
+      if (recoveryMutationLocked()) return;
       const closure = validateClosingSegment(runtime.points);
       const polygon = validateSimplePolygon(runtime.points);
       if (!closure.valid || !polygon.valid) {
@@ -1333,20 +2056,44 @@
     });
     $("dcUndo").addEventListener("click", removeLastPoint);
     $("dcClear").addEventListener("click", clearOutline);
-    $("dcQuality").addEventListener("change", persistDraft);
+    $("dcQuality").addEventListener("change", () => {
+      if (!recoveryMutationLocked()) persistDraft();
+    });
     $("dcUnreliable").addEventListener("change", () => {
+      if (recoveryMutationLocked()) return;
       $("dcUnreliableReason").disabled = !$("dcUnreliable").checked;
       renderCoverageRows();
       renderOcclusionRows();
       persistDraft();
       renderOverlay();
     });
-    $("dcUnreliableReason").addEventListener("change", () => { persistDraft(); updateSaveGate(); });
+    $("dcUnreliableReason").addEventListener("change", () => {
+      if (recoveryMutationLocked()) return;
+      persistDraft();
+      updateSaveGate();
+    });
     $("dcPreviousMask").addEventListener("click", () => selectIndex(runtime.index - 1));
     $("dcNextMask").addEventListener("click", () => selectIndex(runtime.index + 1));
     $("dcPreviousCandidate").addEventListener("click", () => selectCandidate(runtime.candidateIndex - 1));
     $("dcNextCandidate").addEventListener("click", () => selectCandidate(runtime.candidateIndex + 1));
     $("dcSave").addEventListener("click", saveCorrection);
+    $("dcPreflight").addEventListener("click", runCurrentRecoveryPreflight);
+    $("dcRecoverySave").addEventListener("click", saveReconciledRecoveryItem);
+    $("dcExportRecovery").addEventListener("click", downloadRecoveryExport);
+    $("dcPairChoices").querySelectorAll("[data-dc-pair-choice]").forEach((button) => {
+      button.addEventListener("click", () => chooseRecoveryPair(button.dataset.dcPairChoice));
+    });
+    $("dcPreviousPair").addEventListener("click", () => {
+      runtime.recovery.pairIndex = Math.max(0, runtime.recovery.pairIndex - 1);
+      renderPairReview();
+      renderOverlay();
+    });
+    $("dcNextPair").addEventListener("click", () => {
+      const count = runtime.recovery.preflight?.occlusion_pairs?.length || 0;
+      runtime.recovery.pairIndex = Math.min(Math.max(0, count - 1), runtime.recovery.pairIndex + 1);
+      renderPairReview();
+      renderOverlay();
+    });
     $("dcComplete").addEventListener("click", completeRepair);
     $("dcShortcutHelp").addEventListener("click", () => $("dcHelpDialog").showModal());
     $("dcViewport").addEventListener("wheel", (event) => {
@@ -1354,6 +2101,7 @@
       zoomAt(event.deltaY < 0 ? 1.12 : 0.89, event.clientX, event.clientY);
     }, {passive: false});
     $("dcViewport").addEventListener("pointerdown", (event) => {
+      if (recoveryMutationLocked() && event.button === 0 && !event.shiftKey) return;
       if (event.button === 1 || event.shiftKey || !runtime.drawing) {
         runtime.pan = {
           x: event.clientX,
@@ -1412,8 +2160,12 @@
       const target = event.target;
       if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return;
       if (event.key === "?") $("dcHelpDialog").showModal();
-      else if (event.key === "Backspace") { event.preventDefault(); removeLastPoint(); }
-      else if (event.key.toLowerCase() === "c") clearOutline();
+      else if (event.key === "Backspace") {
+        event.preventDefault();
+        if (!recoveryMutationLocked()) removeLastPoint();
+      } else if (event.key.toLowerCase() === "c") {
+        if (!recoveryMutationLocked()) clearOutline();
+      }
       else if (event.key.toLowerCase() === "f" && event.shiftKey) focusPersonAndCandidate();
       else if (event.key.toLowerCase() === "f") focusPerson();
       else if (event.key.toLowerCase() === "m") {
@@ -1432,9 +2184,30 @@
     runtime.uiConfig = uiConfig;
     runtime.state = state;
     runtime.api = api;
+    runtime.recovery.enabled = uiConfig.question_contract.client_build_id === RECOVERY_BUILD_ID
+      || uiConfig.question_contract.pending_recovery_mode === true;
     runtime.items = manifest.cases.flatMap((row) => row.visible_metadata.repair_items.map((repairItem) => ({caseData: row, item: repairItem})));
     runtime.db = await openDatabase();
     bind();
+    if (runtime.recovery.enabled) {
+      try {
+        await initializeRecoveryMigration();
+        runtime.state = await api("/api/review/state");
+        await auditRecoveryQueue();
+        await refreshRecoveryRows();
+        if (runtime.recovery.active) {
+          await hydrateRecoveryRow();
+          await runCurrentRecoveryPreflight();
+          return;
+        }
+      } catch (error) {
+        runtime.recovery.active = true;
+        $("dcError").textContent = `Recovery stopped safely. ${structuredRecoveryError(error)}`;
+        $("dcError").classList.remove("isHidden");
+        renderRecoveryStatus();
+        return;
+      }
+    }
     try {
       await flushOutbox();
       runtime.state = await api("/api/review/state");
@@ -1491,7 +2264,22 @@
         machineInViewport: runtime.machineInViewport,
         coverageAvailable: candidateCoverageAvailable(),
         evidenceBindingValid: runtime.evidenceBindingValid,
+        recovery: {
+          enabled: runtime.recovery.enabled,
+          active: runtime.recovery.active,
+          pendingCount: runtime.recovery.rows.length,
+          questionCount: recoveryQuestionCount(),
+          pairIndex: runtime.recovery.pairIndex,
+          preflight: runtime.recovery.preflight ? structuredClone(runtime.recovery.preflight) : null,
+          migration: runtime.recovery.migration ? structuredClone(runtime.recovery.migration) : null,
+          draftRepresented: runtime.recovery.draftRepresented,
+          currentStatus: activeRecoveryRow()?.reconciliation?.status || null,
+        },
       }),
+      runRecoveryPreflight: () => runCurrentRecoveryPreflight(),
+      saveRecoveredItem: () => saveReconciledRecoveryItem(),
+      chooseRecoveryPair: (choice) => chooseRecoveryPair(choice),
+      downloadRecoveryExport: () => downloadRecoveryExport(),
     },
   };
 })();
