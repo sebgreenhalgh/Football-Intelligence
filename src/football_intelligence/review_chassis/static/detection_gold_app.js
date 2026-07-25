@@ -469,6 +469,85 @@
     return {x: point.x - bounds.x1, y: point.y - bounds.y1};
   }
 
+  function clipPolygonToBounds(points, bounds) {
+    const clip = (input, inside, intersection) => {
+      if (!input.length) return [];
+      const output = [];
+      let previous = input[input.length - 1];
+      let previousInside = inside(previous);
+      input.forEach((current) => {
+        const currentInside = inside(current);
+        if (currentInside) {
+          if (!previousInside) output.push(intersection(previous, current));
+          output.push(current);
+        } else if (previousInside) {
+          output.push(intersection(previous, current));
+        }
+        previous = current;
+        previousInside = currentInside;
+      });
+      return output;
+    };
+    const verticalIntersection = (boundary) => (start, end) => {
+      const delta = end.x - start.x;
+      const ratio = Math.abs(delta) < 1e-12 ? 0 : (boundary - start.x) / delta;
+      return {x: boundary, y: start.y + ratio * (end.y - start.y)};
+    };
+    const horizontalIntersection = (boundary) => (start, end) => {
+      const delta = end.y - start.y;
+      const ratio = Math.abs(delta) < 1e-12 ? 0 : (boundary - start.y) / delta;
+      return {x: start.x + ratio * (end.x - start.x), y: boundary};
+    };
+    let output = points.map((point) => ({x: Number(point.x), y: Number(point.y)}));
+    output = clip(output, (point) => point.x >= bounds.x1, verticalIntersection(bounds.x1));
+    output = clip(output, (point) => point.x <= bounds.x2, verticalIntersection(bounds.x2));
+    output = clip(output, (point) => point.y >= bounds.y1, horizontalIntersection(bounds.y1));
+    return clip(output, (point) => point.y <= bounds.y2, horizontalIntersection(bounds.y2));
+  }
+
+  function clipSegmentToBounds(start, end, bounds) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    let lower = 0;
+    let upper = 1;
+    const tests = [
+      [-dx, start.x - bounds.x1],
+      [dx, bounds.x2 - start.x],
+      [-dy, start.y - bounds.y1],
+      [dy, bounds.y2 - start.y],
+    ];
+    for (const [direction, distance] of tests) {
+      if (Math.abs(direction) < 1e-12) {
+        if (distance < 0) return null;
+        continue;
+      }
+      const ratio = distance / direction;
+      if (direction < 0) lower = Math.max(lower, ratio);
+      else upper = Math.min(upper, ratio);
+      if (lower > upper) return null;
+    }
+    return [
+      {x: start.x + lower * dx, y: start.y + lower * dy},
+      {x: start.x + upper * dx, y: start.y + upper * dy},
+    ];
+  }
+
+  function projectPitchPolygon(points) {
+    const bounds = getBounds();
+    const sourcePoints = points.map((point) => ({x: Number(point.x), y: Number(point.y)}));
+    const fillSource = runtime.view === "focal" ? clipPolygonToBounds(sourcePoints, bounds) : sourcePoints;
+    const segments = [];
+    sourcePoints.forEach((start, index) => {
+      const end = sourcePoints[(index + 1) % sourcePoints.length];
+      const clipped = runtime.view === "focal" ? clipSegmentToBounds(start, end, bounds) : [start, end];
+      if (clipped) segments.push(clipped.map(pointToView));
+    });
+    return {
+      fill: fillSource.map(pointToView),
+      segments,
+    };
+  }
+
   function pointerOriginal(event) {
     const svg = byId("dgOverlay");
     const rectangle = svg.getBoundingClientRect();
@@ -693,15 +772,32 @@
     }
     const pitchPolygon = currentCase().visible_metadata.pitch_polygon_vertices || [];
     if (currentCase().task_type === "detection_gold_pitch_boundary" && pitchPolygon.length) {
-      const polygon = pitchPolygon.map(pointToView).map((point) => `${point.x},${point.y}`).join(" ");
-      const boundary = makeSvg("polygon", {points: polygon, class: "dgPitchPolygon"});
-      boundary.style.pointerEvents = "none";
-      if (c2PitchBoundary()) {
-        const toleranceBand = makeSvg("polygon", {points: polygon, class: "dgPitchToleranceBand"});
-        toleranceBand.style.pointerEvents = "none";
-        svg.insertBefore(toleranceBand, svg.firstChild);
+      const projection = projectPitchPolygon(pitchPolygon);
+      const group = makeSvg("g", {class: "dgPitchProjection"});
+      group.style.pointerEvents = "none";
+      if (projection.fill.length >= 3) {
+        const fillPoints = projection.fill.map((point) => `${point.x},${point.y}`).join(" ");
+        group.appendChild(makeSvg("polygon", {points: fillPoints, class: "dgPitchPolygonFill"}));
       }
-      svg.insertBefore(boundary, svg.firstChild);
+      const boundaryPath = projection.segments
+        .map(([start, end]) => `M ${start.x} ${start.y} L ${end.x} ${end.y}`)
+        .join(" ");
+      if (c2PitchBoundary() && boundaryPath) {
+        const tolerancePixels = Number(currentCase().visible_metadata.pitch_polygon_tolerance_pixels || 10);
+        const toleranceBand = makeSvg("path", {
+          d: boundaryPath,
+          class: "dgPitchToleranceBand",
+          "stroke-width": tolerancePixels * 2,
+        });
+        toleranceBand.style.pointerEvents = "none";
+        group.appendChild(toleranceBand);
+      }
+      if (boundaryPath) {
+        const boundary = makeSvg("path", {d: boundaryPath, class: "dgPitchPolygon", "stroke-width": 2});
+        boundary.style.pointerEvents = "none";
+        group.appendChild(boundary);
+      }
+      svg.insertBefore(group, svg.firstChild);
     }
     if (focalScopeApplies() && runtime.view === "panorama" && row.focal_bounds) {
       const focal = toViewBox(row.focal_bounds);

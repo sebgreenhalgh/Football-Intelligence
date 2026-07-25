@@ -279,8 +279,9 @@ body.detectionGoldPresentation {
 .dgBallPoint { fill: #ff5b83; stroke: #ffffff; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .dgBallTrail { stroke: #ff9ab2; stroke-width: 5; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .dgBallEllipse { fill: rgba(255, 91, 131, 0.08); stroke: #ff5b83; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.dgPitchPolygon { fill: rgba(94, 225, 220, 0.08); stroke: #5ee1dc; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
-.dgPitchToleranceBand { fill: none; stroke: rgba(240, 200, 90, 0.42); stroke-width: 20; vector-effect: non-scaling-stroke; pointer-events: none; }
+.dgPitchPolygonFill { fill: rgba(94, 225, 220, 0.08); stroke: none; pointer-events: none; }
+.dgPitchPolygon { fill: none; stroke: #5ee1dc; pointer-events: none; }
+.dgPitchToleranceBand { fill: none; stroke: rgba(240, 200, 90, 0.42); pointer-events: none; }
 .nwC2Semantics { display: grid; gap: 5px; padding: 10px; border-left: 4px solid #f0c85a; background: #151b18; color: #e8eee9; }
 .nwC2Semantics span { color: #c3cec7; }
 .nwC2SupplyPreview { padding: 9px; border: 1px solid #4c6657; background: #101713; color: #c8d6ce; }

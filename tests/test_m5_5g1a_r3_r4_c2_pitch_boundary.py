@@ -43,6 +43,45 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def copy_pre_c2_decisions_fixture(destination: Path) -> None:
+    """Materialize the immutable event-44 state without touching the completed live root."""
+
+    snapshot_path = LIVE_DECISIONS / "snapshots" / "review_state_000044.json"
+    snapshot = read_json(snapshot_path)
+    state = snapshot["state"]
+    assert state["event_sequence"] == 44
+    assert set(state["tranche_completions"]) == {
+        "A_CORE_STATIC",
+        "B_REMAINING_STATIC",
+        "C1_DENSE_OVERLAP",
+    }
+    assert not set(C2_CASE_IDS) & set(state["annotations"])
+
+    destination.mkdir(parents=True)
+    (destination / "review_decisions.json").write_text(
+        json.dumps(state, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
+    events = (LIVE_DECISIONS / "review_decision_events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(events) >= 57
+    prefix = [json.loads(line) for line in events[:44]]
+    assert [event["event_sequence"] for event in prefix] == list(range(1, 45))
+    assert prefix[-1]["event_type"] == "DETECTION_TRANCHE_COMPLETED"
+    (destination / "review_decision_events.jsonl").write_text(
+        "".join(json.dumps(event, sort_keys=True, ensure_ascii=True) + "\n" for event in prefix),
+        encoding="utf-8",
+    )
+    for tranche_id in state["tranche_completions"]:
+        shutil.copytree(
+            LIVE_DECISIONS / "completed_tranches" / tranche_id,
+            destination / "completed_tranches" / tranche_id,
+        )
+    snapshots = destination / "snapshots"
+    snapshots.mkdir()
+    shutil.copy2(snapshot_path, snapshots / snapshot_path.name)
+    shutil.copy2(snapshot_path.with_suffix(".json.sha256"), snapshots / f"{snapshot_path.name}.sha256")
+
+
 def synthetic_annotation(case: Any, *, hidden_feet: bool = True) -> dict[str, Any]:
     record = authoritative_frame_record(case)
     candidate_uuids = authoritative_candidate_uuids(case)
@@ -255,7 +294,7 @@ def test_c2_atomic_completion_uses_temporary_decisions_only(tmp_path: Path) -> N
         if path.is_file()
     }
     copied = tmp_path / "decisions"
-    shutil.copytree(LIVE_DECISIONS, copied)
+    copy_pre_c2_decisions_fixture(copied)
     store = DetectionGoldPilotPersistence(
         manifest=load_manifest(PACKAGE / "reviewer_manifest.json"),
         ui_config=load_ui_config(PACKAGE / "ui_config.json"),
@@ -263,6 +302,7 @@ def test_c2_atomic_completion_uses_temporary_decisions_only(tmp_path: Path) -> N
         reviewer_session_id=REVIEWER,
     )
     initial = store.state()
+    assert read_json(LIVE_DECISIONS / "review_decisions.json")["event_sequence"] == 57
     assert initial["event_sequence"] == 44
     assert set(initial["tranche_completions"]) == {"A_CORE_STATIC", "B_REMAINING_STATIC", "C1_DENSE_OVERLAP"}
     prior_hashes = {case_id: initial["annotation_hashes"][case_id] for case_id in initial["annotations"]}
