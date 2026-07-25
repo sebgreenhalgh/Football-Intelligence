@@ -46,6 +46,13 @@ EXPECTED_C1_HASHES = {
     "completed_review_manifest.json": "e302885ee16054371cafb26f88b08379f4daa7befbf4239a1da21343d6951475",
     "completed_review_summary.json": "9b9cbeefb30c155096a5dca18298b2aa1054359ddf64efd6f5c0905b56faffab",
 }
+EXPECTED_COMPLETED_REPAIR_HASHES = {
+    "completed_review.json": "0e1539cde18e2a58f47dfdff4ba3f7dd626187752ffb70f1ff1a3f592572d4e8",
+    "completed_review_events.jsonl": "2749e19b6f132e63f31f161063919e928e483749ad3bb741c28fa40635b084ef",
+    "completed_review_manifest.json": "6d15b2fdbabac0febb88727fd08b0d5afcaf6b5491bf93158428145595ce94c7",
+    "completed_review_summary.json": "6acacc5a47ba1b51aa5b641c6e4f7cf981dcdbc551785ea7713e809018e2926e",
+    "review_decisions.json": "0a830be544ded81deda5cc54f340a91a8d9c91c0d9bd7cfd1150ebbadbf47574",
+}
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -58,7 +65,7 @@ def _tree_hashes(root: Path) -> dict[str, str]:
     return {path.relative_to(root).as_posix(): sha256_file(path) for path in root.rglob("*") if path.is_file()}
 
 
-def _assert_live_repair_progress_is_preserved() -> None:
+def _assert_completed_repair_is_preserved() -> None:
     decisions_root = PACKAGE / "decisions"
     state = _read_json(decisions_root / "review_decisions.json")
     completion_names = {
@@ -67,10 +74,14 @@ def _assert_live_repair_progress_is_preserved() -> None:
         "completed_review_manifest.json",
         "completed_review_summary.json",
     }
-    assert len(state["corrections"]) == 13
-    assert state["event_sequence"] == 13
-    assert state["completed"] is False
-    assert not completion_names.intersection(path.name for path in decisions_root.iterdir())
+    assert len(state["corrections"]) == 20
+    assert state["event_sequence"] == 28
+    assert state["completed"] is True
+    assert completion_names.issubset(path.name for path in decisions_root.iterdir())
+    assert {
+        name: sha256_file(decisions_root / name) for name in EXPECTED_COMPLETED_REPAIR_HASHES
+    } == EXPECTED_COMPLETED_REPAIR_HASHES
+    assert validate_completion_bundle(decisions_root)["passed"] is True
 
 
 def _node(identifier: str, box: tuple[float, float, float, float]) -> dict[str, object]:
@@ -191,7 +202,7 @@ def test_generated_repair_set_is_exact_and_original_c1_is_immutable() -> None:
     assert [len(case.visible_metadata["repair_items"]) for case in manifest.cases] == [1, 1, 3, 6, 4, 2, 3]
     assert all(case.task_type == "dense_mask_geometry_correction" for case in manifest.cases)
     assert all(not case.hidden_metadata and not case.reveal_metadata for case in manifest.cases)
-    _assert_live_repair_progress_is_preserved()
+    _assert_completed_repair_is_preserved()
     assert preservation["original_c1_mutated"] is False
     assert {name: sha256_file(SOURCE_C1 / name) for name in EXPECTED_C1_HASHES} == EXPECTED_C1_HASHES
 
@@ -250,7 +261,7 @@ def test_temporary_completion_is_atomic_idempotent_and_does_not_touch_live_root(
         store.complete_corrections({"client_event_id": "again", "idempotency_key": "again"})["duplicate_event"] is True
     )
     assert _tree_hashes(PACKAGE / "decisions") == live_root_hashes_before
-    _assert_live_repair_progress_is_preserved()
+    _assert_completed_repair_is_preserved()
     assert {name: sha256_file(SOURCE_C1 / name) for name in EXPECTED_C1_HASHES} == source_hashes_before
 
 

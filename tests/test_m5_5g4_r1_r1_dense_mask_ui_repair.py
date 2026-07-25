@@ -35,6 +35,13 @@ EXPECTED_C1_HASHES = {
     "completed_review_manifest.json": "e302885ee16054371cafb26f88b08379f4daa7befbf4239a1da21343d6951475",
     "completed_review_summary.json": "9b9cbeefb30c155096a5dca18298b2aa1054359ddf64efd6f5c0905b56faffab",
 }
+EXPECTED_COMPLETED_REPAIR_HASHES = {
+    "completed_review.json": "0e1539cde18e2a58f47dfdff4ba3f7dd626187752ffb70f1ff1a3f592572d4e8",
+    "completed_review_events.jsonl": "2749e19b6f132e63f31f161063919e928e483749ad3bb741c28fa40635b084ef",
+    "completed_review_manifest.json": "6d15b2fdbabac0febb88727fd08b0d5afcaf6b5491bf93158428145595ce94c7",
+    "completed_review_summary.json": "6acacc5a47ba1b51aa5b641c6e4f7cf981dcdbc551785ea7713e809018e2926e",
+    "review_decisions.json": "0a830be544ded81deda5cc54f340a91a8d9c91c0d9bd7cfd1150ebbadbf47574",
+}
 
 
 def sha256(path: Path) -> str:
@@ -45,7 +52,7 @@ def point(x: float, y: float) -> dict[str, float]:
     return {"x": x, "y": y}
 
 
-def test_live_repair_supply_and_original_c1_are_unchanged() -> None:
+def test_completed_repair_supply_and_original_c1_are_unchanged() -> None:
     manifest = json.loads((PACKAGE / "reviewer_manifest.json").read_text(encoding="utf-8"))
     repair_items = [item for case in manifest["cases"] for item in case["visible_metadata"]["repair_items"]]
 
@@ -54,15 +61,18 @@ def test_live_repair_supply_and_original_c1_are_unchanged() -> None:
     assert sum(len(item["affected_candidates"]) for item in repair_items) == 21
     assert DECISIONS.is_dir()
     state = json.loads((DECISIONS / "review_decisions.json").read_text(encoding="utf-8"))
-    assert len(state["corrections"]) == 13
-    assert state["event_sequence"] == 13
-    assert state["completed"] is False
-    assert not {
+    assert len(state["corrections"]) == 20
+    assert state["event_sequence"] == 28
+    assert state["completed"] is True
+    assert {
         "completed_review.json",
         "completed_review_events.jsonl",
         "completed_review_manifest.json",
         "completed_review_summary.json",
-    }.intersection(path.name for path in DECISIONS.iterdir())
+    }.issubset(path.name for path in DECISIONS.iterdir())
+    assert {name: sha256(DECISIONS / name) for name in EXPECTED_COMPLETED_REPAIR_HASHES} == (
+        EXPECTED_COMPLETED_REPAIR_HASHES
+    )
     for name, expected in EXPECTED_C1_HASHES.items():
         assert sha256(C1 / name) == expected
 

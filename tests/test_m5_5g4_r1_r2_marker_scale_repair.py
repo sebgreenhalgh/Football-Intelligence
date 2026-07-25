@@ -21,6 +21,13 @@ PACKAGE = STAGE / "04_REPAIRED_REVIEW_PACKAGE"
 SCRIPT = REPO / "src/football_intelligence/review_chassis/static/dense_mask_correction.js"
 EXPECTED_REPAIR_MANIFEST_HASH = "ec7882bc0ba679b6e21577b4d0ee9bf03f55c2732bc20d3bc930c59a281e8a22"
 EXPECTED_REVIEWER_MANIFEST_HASH = "d7667ff810b192825b67f8f4ffc5dc0e3c60c1053aa4a632085c7ffddb2be42c"
+EXPECTED_COMPLETED_REPAIR_HASHES = {
+    "completed_review.json": "0e1539cde18e2a58f47dfdff4ba3f7dd626187752ffb70f1ff1a3f592572d4e8",
+    "completed_review_events.jsonl": "2749e19b6f132e63f31f161063919e928e483749ad3bb741c28fa40635b084ef",
+    "completed_review_manifest.json": "6d15b2fdbabac0febb88727fd08b0d5afcaf6b5491bf93158428145595ce94c7",
+    "completed_review_summary.json": "6acacc5a47ba1b51aa5b641c6e4f7cf981dcdbc551785ea7713e809018e2926e",
+    "review_decisions.json": "0a830be544ded81deda5cc54f340a91a8d9c91c0d9bd7cfd1150ebbadbf47574",
+}
 NEW_NAMESPACE = "fi_m5_5g4_r1_r2_constant_screen_space_marker_repair_v1"
 CLIENT_BUILD_ID = "m5_5g4_r1_r2_constant_screen_space_marker_repair_v1"
 
@@ -56,7 +63,7 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
-def test_live_root_and_repair_supply_are_preserved_at_authoritative_progress() -> None:
+def test_completed_root_and_repair_supply_are_preserved_at_authoritative_progress() -> None:
     manifest = json.loads((SOURCE_PACKAGE / "reviewer_manifest.json").read_text(encoding="utf-8"))
     items = [item for case in manifest["cases"] for item in case["visible_metadata"]["repair_items"]]
     geometry_reviews = sum(len(item["affected_candidates"]) for item in items)
@@ -65,15 +72,18 @@ def test_live_root_and_repair_supply_are_preserved_at_authoritative_progress() -
     assert len(items) == 20
     assert geometry_reviews == 21
     state = json.loads((REAL_DECISIONS / "review_decisions.json").read_text(encoding="utf-8"))
-    assert len(state["corrections"]) == 13
-    assert state["event_sequence"] == 13
-    assert state["completed"] is False
-    assert not {
+    assert len(state["corrections"]) == 20
+    assert state["event_sequence"] == 28
+    assert state["completed"] is True
+    assert {
         "completed_review.json",
         "completed_review_events.jsonl",
         "completed_review_manifest.json",
         "completed_review_summary.json",
-    }.intersection(path.name for path in REAL_DECISIONS.iterdir())
+    }.issubset(path.name for path in REAL_DECISIONS.iterdir())
+    assert {name: sha256(REAL_DECISIONS / name) for name in EXPECTED_COMPLETED_REPAIR_HASHES} == (
+        EXPECTED_COMPLETED_REPAIR_HASHES
+    )
     assert sha256(SOURCE_PACKAGE / "reviewer_manifest.json") == EXPECTED_REVIEWER_MANIFEST_HASH
     assert (
         sha256(R1 / "01_G4_INPUT_AND_FLAG_VALIDATION" / "flagged_mask_repair_manifest.json")
