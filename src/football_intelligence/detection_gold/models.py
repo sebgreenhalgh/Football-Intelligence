@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = "m5_5g1a_detection_gold_v1"
+C2_PITCH_SCHEMA_VERSION = "m5_5g1a_c2_pitch_boundary_v1"
 
 PitchState = Literal["ON_PITCH", "OFF_PITCH", "BOUNDARY_UNCERTAIN"]
 CoarseRole = Literal[
@@ -43,6 +44,13 @@ FootballState = Literal[
     "OUT_OF_FRAME",
     "UNRESOLVED",
 ]
+FootpointStatus = Literal[
+    "OBSERVED_CLEAR",
+    "OBSERVED_APPROXIMATE",
+    "FEET_NOT_VISIBLE",
+    "CANNOT_TELL",
+]
+PitchStateCertainty = Literal["CLEAR", "APPROXIMATE", "UNCERTAIN"]
 
 
 class StrictModel(BaseModel):
@@ -291,6 +299,55 @@ class PitchRoleAnnotation(StrictModel):
         return self
 
 
+class C2PitchBoundaryPerson(StrictModel):
+    """One visible person in a focused C2 pitch/boundary frame."""
+
+    annotation_uuid: str
+    visible_body_box: BBox
+    footpoint: Point | None = None
+    footpoint_status: FootpointStatus
+    footpoint_uncertainty_pixels: float = Field(ge=0)
+    pitch_state: PitchState
+    pitch_state_certainty: PitchStateCertainty
+    coarse_role: CoarseRole
+    minimum_visible_dimensions: PixelDimensions
+
+    @model_validator(mode="after")
+    def validate_footpoint_semantics(self) -> C2PitchBoundaryPerson:
+        observed = self.footpoint_status in {"OBSERVED_CLEAR", "OBSERVED_APPROXIMATE"}
+        if observed and self.footpoint is None:
+            raise ValueError("observed C2 footpoint states require a point")
+        if not observed and self.footpoint is not None:
+            raise ValueError("hidden or unresolved C2 feet cannot carry an observed point")
+        if self.footpoint_status == "OBSERVED_CLEAR" and self.footpoint_uncertainty_pixels > 8:
+            raise ValueError("clear C2 footpoints cannot carry high uncertainty")
+        if self.footpoint_status in {"FEET_NOT_VISIBLE", "CANNOT_TELL"} and self.footpoint_uncertainty_pixels < 20:
+            raise ValueError("hidden or unresolved C2 feet require explicit high uncertainty")
+        return self
+
+
+class C2PitchBoundaryAnnotation(StrictModel):
+    """Current-frame, focal-ROI C2 gold with role-independent candidate truth."""
+
+    schema_version: Literal[C2_PITCH_SCHEMA_VERSION] = C2_PITCH_SCHEMA_VERSION
+    source_binding: SourceBinding
+    visible_person_count: int = Field(ge=0)
+    player_instances: list[C2PitchBoundaryPerson]
+    candidate_relations: list[CandidateRelationAnnotation]
+    note: str = ""
+
+    @model_validator(mode="after")
+    def count_and_references(self) -> C2PitchBoundaryAnnotation:
+        if self.visible_person_count != len(self.player_instances):
+            raise ValueError("visible_person_count must equal the C2 player-instance count")
+        instance_ids = {item.annotation_uuid for item in self.player_instances}
+        if len(instance_ids) != len(self.player_instances):
+            raise ValueError("C2 player annotation UUIDs must be unique")
+        if any(not set(relation.annotation_uuids) <= instance_ids for relation in self.candidate_relations):
+            raise ValueError("C2 candidate relation references an unknown visible person")
+        return self
+
+
 class FootballFrameState(StrictModel):
     frame_sequence: int = Field(ge=0)
     source_frame_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -375,6 +432,12 @@ def validate_case_annotation(task_type: str, payload: dict[str, Any]) -> dict[st
     if model is None:
         raise ValueError(f"unsupported detection-gold task type: {task_type}")
     return model.model_validate(payload).model_dump(mode="json", exclude_none=True)
+
+
+def validate_c2_pitch_boundary_annotation(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate the feature-gated C2 multi-person annotation without changing legacy pitch rows."""
+
+    return C2PitchBoundaryAnnotation.model_validate(payload).model_dump(mode="json", exclude_none=True)
 
 
 def frozen_json_schemas() -> dict[str, dict[str, Any]]:

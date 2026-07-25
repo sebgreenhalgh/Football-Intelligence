@@ -11,13 +11,16 @@ R3_WIZARD_SCHEMA = "football_intelligence.m5_5g1a_r3.wizard_state.v1"
 R3_R1_CLIENT_BUILD_ID = "m5_5g1a_r3_r1_wizard_state_repair_v1"
 R3_R2_CLIENT_BUILD_ID = "m5_5g1a_r3_r2_dense_first_split_v1"
 R3_R2_R1_C1_CLIENT_BUILD_ID = "m5_5g1a_r3_r2_r1_c1_completion_repair_v1"
+R3_R4_C2_CLIENT_BUILD_ID = "m5_5g1a_r3_r4_c2_pitch_boundary_v1"
 REVISION_AWARE_CLIENT_BUILD_IDS = {
     R3_R1_CLIENT_BUILD_ID,
     R3_R2_CLIENT_BUILD_ID,
     R3_R2_R1_C1_CLIENT_BUILD_ID,
+    R3_R4_C2_CLIENT_BUILD_ID,
 }
 R3_R1_CANDIDATE_VALIDITY_STATES = {"VALID", "NEEDS_REVIEW", "UNANSWERED", "INVALID"}
 STATIC_TASK_TYPES = {"detection_gold_player_static", "detection_gold_dense_region"}
+C2_TASK_TYPE = "detection_gold_pitch_boundary"
 
 
 def r3_enabled(question_contract: Mapping[str, Any]) -> bool:
@@ -30,6 +33,12 @@ def revision_aware_client(question_contract: Mapping[str, Any]) -> bool:
     """Return whether the package uses the immutable revision-aware R3 policy."""
 
     return question_contract.get("client_build_id") in REVISION_AWARE_CLIENT_BUILD_IDS
+
+
+def c2_pitch_boundary_client(question_contract: Mapping[str, Any]) -> bool:
+    """Return whether the focused multi-person C2 workflow is active."""
+
+    return question_contract.get("client_build_id") == R3_R4_C2_CLIENT_BUILD_ID
 
 
 def authoritative_frame_record(case: Any) -> dict[str, Any]:
@@ -87,7 +96,7 @@ def authoritative_candidate_binding_hash(case: Any) -> str:
 def cross_frame_candidate_exclusions(case: Any) -> list[dict[str, Any]]:
     """Audit frozen candidate UUIDs excluded from the authoritative queue."""
 
-    if case.task_type not in STATIC_TASK_TYPES:
+    if case.task_type not in STATIC_TASK_TYPES | {C2_TASK_TYPE}:
         return []
     authoritative = set(authoritative_candidate_uuids(case))
     required = {str(value) for value in case.visible_metadata.get("candidate_uuids", [])}
@@ -188,7 +197,8 @@ def validate_revision_aware_wizard_state(
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"revision-aware wizard state requires a non-negative {field}")
 
-    if case.task_type not in STATIC_TASK_TYPES:
+    c2_pitch = case.task_type == C2_TASK_TYPE and annotation.get("schema_version") == "m5_5g1a_c2_pitch_boundary_v1"
+    if case.task_type not in STATIC_TASK_TYPES and not c2_pitch:
         return
     if wizard_state.get("drawing_complete") is not True or wizard_state.get("step") != 4:
         raise ValueError("revision-aware static saves require completed drawing and review steps")
@@ -228,6 +238,24 @@ def validate_revision_aware_wizard_state(
                 raise ValueError(f"dense mask {mask_uuid} occluder is missing reciprocal overlap evidence")
             if int(masks[occluder_uuid].get("occlusion_order", 0)) >= int(mask.get("occlusion_order", 0)):
                 raise ValueError(f"dense mask {mask_uuid} occlusion order does not place its occluder in front")
+
+    if c2_pitch:
+        reviews = wizard_state.get("footpoint_reviews")
+        if not isinstance(reviews, Mapping) or set(map(str, reviews)) != object_ids:
+            raise ValueError("C2 footpoint review coverage must match every visible person")
+        for person in objects:
+            person_id = str(person["annotation_uuid"])
+            review = reviews[person_id]
+            if review.get("confirmed") is not True:
+                raise ValueError(f"C2 footpoint review is not confirmed for {person_id}")
+            if review.get("status") != person.get("footpoint_status"):
+                raise ValueError(f"C2 footpoint-status binding mismatch for {person_id}")
+            if review.get("pitch_state") != person.get("pitch_state"):
+                raise ValueError(f"C2 pitch-state binding mismatch for {person_id}")
+            if review.get("coarse_role") != person.get("coarse_role"):
+                raise ValueError(f"C2 role binding mismatch for {person_id}")
+            if review.get("pitch_state_certainty") != person.get("pitch_state_certainty"):
+                raise ValueError(f"C2 pitch-certainty binding mismatch for {person_id}")
 
     expected_candidates = authoritative_candidate_uuids(case)
     records = wizard_state.get("candidate_answer_records")

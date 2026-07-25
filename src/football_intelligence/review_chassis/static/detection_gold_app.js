@@ -16,6 +16,7 @@
     detection_gold_football_burst: {label: "Football over time", eyebrow: "FIND THE FOOTBALL", question: "Check the full image for the football in each frame."},
   };
   const LAYERS = ["RAW", "CONFIDENCE", "PRE_NMS", "POST_NMS", "FUSED"];
+  const C2_CLIENT_BUILD_ID = "m5_5g1a_r3_r4_c2_pitch_boundary_v1";
   const SVG_NS = "http://www.w3.org/2000/svg";
   const runtime = {
     manifest: null,
@@ -62,6 +63,7 @@
     firstLoadReconciliation: null,
     completionReplayActive: false,
     completionReplayTimer: null,
+    c2PitchBoundary: false,
   };
 
   const byId = (id) => document.getElementById(id);
@@ -93,8 +95,13 @@
   const evidenceUrl = (relativePath) =>
     `/evidence/${encodeURIComponent(currentCase().case_id)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
 
+  function c2PitchBoundary(caseData = currentCase()) {
+    return runtime.c2PitchBoundary && caseData?.task_type === "detection_gold_pitch_boundary";
+  }
+
   function staticFrameLocked(caseData = currentCase()) {
-    return runtime.incrementalR3 && ["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData?.task_type);
+    return runtime.incrementalR3 && (["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData?.task_type)
+      || c2PitchBoundary(caseData));
   }
 
   function authoritativeBinding(caseData = currentCase()) {
@@ -194,7 +201,8 @@
   }
 
   function focalScopeApplies() {
-    return ["detection_gold_player_static", "detection_gold_dense_region"].includes(currentCase()?.task_type);
+    return ["detection_gold_player_static", "detection_gold_dense_region"].includes(currentCase()?.task_type)
+      || c2PitchBoundary();
   }
 
   function requireFocalAnnotationScope() {
@@ -263,6 +271,16 @@
       };
     }
     if (caseData.task_type === "detection_gold_pitch_boundary") {
+      if (c2PitchBoundary(caseData)) {
+        return {
+          schema_version: "m5_5g1a_c2_pitch_boundary_v1",
+          source_binding: binding,
+          visible_person_count: 0,
+          player_instances: [],
+          candidate_relations: [],
+          note: "",
+        };
+      }
       return {
         schema_version: "m5_5g1a_detection_gold_v1",
         source_binding: binding,
@@ -420,6 +438,22 @@
     clampViewTransform();
   }
 
+  function focusSelectedPerson() {
+    const person = selectedObject();
+    if (!person?.visible_body_box) return;
+    const bounds = getBounds();
+    const viewport = byId("dgViewport").getBoundingClientRect();
+    const centreX = (person.visible_body_box.x1 + person.visible_body_box.x2) / 2 - bounds.x1;
+    const centreY = (person.visible_body_box.y1 + person.visible_body_box.y2) / 2 - bounds.y1;
+    const scale = 4;
+    runtime.viewTransform = {
+      scale,
+      x: viewport.width / 2 - (centreX / (bounds.x2 - bounds.x1)) * viewport.width * scale,
+      y: viewport.height / 2 - (centreY / (bounds.y2 - bounds.y1)) * viewport.height * scale,
+    };
+    clampViewTransform();
+  }
+
   function toViewBox(box) {
     const bounds = getBounds();
     return {
@@ -543,7 +577,7 @@
       appendSelectableBox(item.visible_body_box, item, "dgVisibleBodyBox", index);
       appendSelectableBox(item.full_body_box, item, "dgSupplementaryBox");
       appendSelectableBox(item.optional_head_box, item, "dgHeadBox");
-      if (!runtime.novice || novicePolicy?.footpointUuids?.includes(item.annotation_uuid)) {
+      if (item.footpoint && (!runtime.novice || novicePolicy?.footpointUuids?.includes(item.annotation_uuid))) {
         const point = pointToView(item.footpoint);
         if (Number(item.footpoint_uncertainty_pixels) > 0) {
           svg.appendChild(makeSvg("circle", {
@@ -660,7 +694,14 @@
     const pitchPolygon = currentCase().visible_metadata.pitch_polygon_vertices || [];
     if (currentCase().task_type === "detection_gold_pitch_boundary" && pitchPolygon.length) {
       const polygon = pitchPolygon.map(pointToView).map((point) => `${point.x},${point.y}`).join(" ");
-      svg.insertBefore(makeSvg("polygon", {points: polygon, class: "dgPitchPolygon"}), svg.firstChild);
+      const boundary = makeSvg("polygon", {points: polygon, class: "dgPitchPolygon"});
+      boundary.style.pointerEvents = "none";
+      if (c2PitchBoundary()) {
+        const toleranceBand = makeSvg("polygon", {points: polygon, class: "dgPitchToleranceBand"});
+        toleranceBand.style.pointerEvents = "none";
+        svg.insertBefore(toleranceBand, svg.firstChild);
+      }
+      svg.insertBefore(boundary, svg.firstChild);
     }
     if (focalScopeApplies() && runtime.view === "panorama" && row.focal_bounds) {
       const focal = toViewBox(row.focal_bounds);
@@ -680,6 +721,19 @@
 
   function candidateInstance(candidate, boxOverride = null) {
     const box = clone(boxOverride || candidate.bbox_original_pixels);
+    if (c2PitchBoundary()) {
+      return {
+        annotation_uuid: uid("person"),
+        visible_body_box: box,
+        footpoint: null,
+        footpoint_status: "CANNOT_TELL",
+        footpoint_uncertainty_pixels: 20,
+        pitch_state: "BOUNDARY_UNCERTAIN",
+        pitch_state_certainty: "UNCERTAIN",
+        coarse_role: "UNKNOWN",
+        minimum_visible_dimensions: {width_pixels: box.x2 - box.x1, height_pixels: box.y2 - box.y1},
+      };
+    }
     return {
       annotation_uuid: uid("person"),
       visible_body_box: box,
@@ -722,7 +776,7 @@
     }
     pushHistory();
     const instance = candidateInstance(candidate, boxOverride);
-    if (currentCase().task_type === "detection_gold_player_static") {
+    if (currentCase().task_type === "detection_gold_player_static" || c2PitchBoundary()) {
       annotation.player_instances.push(instance);
       annotation.visible_person_count = annotation.player_instances.length;
       runtime.selectedObjectByCase[currentCase().case_id] = instance.annotation_uuid;
@@ -785,7 +839,7 @@
     const annotation = draft();
     if (runtime.tool === "footpoint") {
       pushHistory();
-      if (currentCase().task_type === "detection_gold_pitch_boundary") {
+      if (currentCase().task_type === "detection_gold_pitch_boundary" && !c2PitchBoundary()) {
         annotation.footpoint = point;
       } else if (currentCase().task_type === "detection_gold_temporal_player") {
         const frame = annotation.frames[runtime.frameIndex];
@@ -795,6 +849,10 @@
         const person = selectedObject(annotation);
         if (!person || !annotation.player_instances) return showError("Select a person before placing its footpoint.");
         person.footpoint = point;
+        if (c2PitchBoundary()) {
+          person.footpoint_status = "OBSERVED_APPROXIMATE";
+          person.footpoint_uncertainty_pixels = Math.max(8, Number(person.footpoint_uncertainty_pixels || 8));
+        }
       }
       persistDraft();
       if (runtime.novice) {
@@ -1066,6 +1124,19 @@
       ${baseNote(annotation)}`;
   }
 
+  function renderC2PitchForm(annotation) {
+    const selected = selectedObject(annotation);
+    return `<section class="dgC2Advanced">
+      <strong>${annotation.visible_person_count} visible people</strong>
+      <p>Pitch state and role are human labels. They never determine which machine box belongs to a person.</p>
+      <div class="dgInstanceList">${annotation.player_instances.map((person, index) => `<button data-dg-object-select="${person.annotation_uuid}" class="${selected?.annotation_uuid === person.annotation_uuid ? "selected" : ""}" type="button"><strong>Person ${index + 1}</strong><span>${person.coarse_role} | ${person.pitch_state} | ${person.footpoint_status}</span></button>`).join("") || "<p>No visible people marked.</p>"}</div>
+      <button id="dgC2FocusPerson" type="button" ${selected ? "" : "disabled"}>Focus selected person</button>
+      <button id="dgRemoveSelected" type="button" ${selected ? "" : "disabled"}>Remove selected person</button>
+      ${candidateBindingControls(annotation)}
+      ${baseNote(annotation)}
+    </section>`;
+  }
+
   function renderFootballForm(annotation) {
     const frame = annotation.frames[runtime.frameIndex];
     return `
@@ -1241,7 +1312,9 @@
     if (task === "detection_gold_player_static") legacyMarkup = renderPlayerForm(annotation);
     else if (task === "detection_gold_dense_region") legacyMarkup = renderDenseForm(annotation);
     else if (task === "detection_gold_temporal_player") legacyMarkup = renderTemporalForm(annotation);
-    else if (task === "detection_gold_pitch_boundary") legacyMarkup = renderPitchForm(annotation);
+    else if (task === "detection_gold_pitch_boundary") legacyMarkup = c2PitchBoundary()
+      ? renderC2PitchForm(annotation)
+      : renderPitchForm(annotation);
     else legacyMarkup = renderFootballForm(annotation);
     form.innerHTML = runtime.novice
       ? `${runtime.wizard.render(annotation)}<details class="nwAdvancedDetails"><summary>Advanced details</summary><div class="nwAdvancedBody">${legacyMarkup}</div></details>`
@@ -1265,6 +1338,7 @@
       setSaveState(`Draw the replacement visible box for ${objectLabel(selected.annotation_uuid, annotation)}`, false);
     });
     byId("dgRemoveSelected")?.addEventListener("click", () => removeSelectedAnnotation(annotation));
+    byId("dgC2FocusPerson")?.addEventListener("click", focusSelectedPerson);
     byId("dgCandidateRelation")?.addEventListener("change", (event) => {
       if (!runtime.selectedCandidate) return;
       if (runtime.selectedCandidate.class_name !== "person") return showError("Player relations require a person proposal.");
@@ -1854,7 +1928,8 @@
     }
     validatePoint(annotation.footpoint, "Pitch footpoint");
 
-    if (["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData.task_type)) {
+    if (["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData.task_type)
+      || c2PitchBoundary(caseData)) {
       if (staticFrameLocked(caseData)) {
         const binding = authoritativeBinding(caseData);
         const row = currentRecord();
@@ -1889,6 +1964,20 @@
         }
         if (maskCoverage !== undefined && (!Number.isFinite(maskCoverage) || maskCoverage < 0 || maskCoverage > 1 || !ids.length)) {
           throw new Error("Dense candidate-to-mask coverage must be between 0 and 1 and bound to selected target masks.");
+        }
+      }
+      if (c2PitchBoundary(caseData)) {
+        if (annotation.visible_person_count !== annotation.player_instances.length) {
+          throw new Error("Visible-person count must match every marked C2 person.");
+        }
+        for (const person of annotation.player_instances) {
+          const observed = ["OBSERVED_CLEAR", "OBSERVED_APPROXIMATE"].includes(person.footpoint_status);
+          if (observed !== Boolean(person.footpoint)) {
+            throw new Error("Observed feet require a point; hidden or unresolved feet must not carry one.");
+          }
+          if (!person.coarse_role || !person.pitch_state || !person.pitch_state_certainty) {
+            throw new Error("Review role, pitch state, and certainty for every visible person.");
+          }
         }
       }
     }
@@ -2256,6 +2345,7 @@
     runtime.state = state;
     runtime.api = api;
     runtime.clientBuildId = uiConfig.question_contract.client_build_id || null;
+    runtime.c2PitchBoundary = runtime.clientBuildId === C2_CLIENT_BUILD_ID;
     runtime.revisionAwareR3R1 = uiConfig.question_contract.revision_aware_wizard_state === true;
     runtime.indexedDbNamespace = uiConfig.question_contract.indexeddb_namespace || null;
     runtime.novice = uiConfig.question_contract.novice_guided_wizard === true;
@@ -2354,7 +2444,9 @@
         authoritativeCandidateUuids,
         currentTrancheId: () => runtime.currentTrancheId,
         revisionAware: () => runtime.revisionAwareR3R1,
+        c2PitchBoundary: () => runtime.c2PitchBoundary,
         estimateHiddenFootpoint,
+        focusSelectedPerson,
       });
     }
     const storedDrafts = await dbAll("drafts");

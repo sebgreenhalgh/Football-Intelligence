@@ -11,19 +11,25 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.detection_gold.incremental import (
+    R3_R4_C2_CLIENT_BUILD_ID,
     R3_R2_R1_C1_CLIENT_BUILD_ID,
     R3_WIZARD_SCHEMA,
     STATIC_TASK_TYPES,
     authoritative_candidate_binding_hash,
     authoritative_candidate_uuids,
     authoritative_frame_record,
+    c2_pitch_boundary_client,
     r3_enabled,
     revision_aware_client,
     tranche_contract,
     tranche_for_case,
     validate_revision_aware_wizard_state,
 )
-from football_intelligence.detection_gold.models import SourceBinding, validate_case_annotation
+from football_intelligence.detection_gold.models import (
+    SourceBinding,
+    validate_c2_pitch_boundary_annotation,
+    validate_case_annotation,
+)
 from football_intelligence.review.schemas import safety_payload
 from football_intelligence.review_chassis.completion import validate_completion_bundle, write_completion_transaction
 from football_intelligence.review_chassis.hashing import sha256_file, stable_hash
@@ -112,6 +118,14 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
 
     def _r3_enabled(self) -> bool:
         return r3_enabled(self.ui_config.question_contract)
+
+    def _c2_enabled(self) -> bool:
+        return c2_pitch_boundary_client(self.ui_config.question_contract)
+
+    def _validate_annotation(self, case: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._c2_enabled() and case.task_type == "detection_gold_pitch_boundary":
+            return validate_c2_pitch_boundary_annotation(payload)
+        return validate_case_annotation(case.task_type, payload)
 
     def _tranches(self) -> dict[str, dict[str, Any]]:
         return tranche_contract(self.ui_config.question_contract)
@@ -208,9 +222,15 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
 
     def _validate_candidate_bindings(self, case: Any, annotation: dict[str, Any]) -> None:
         expected = {str(value) for value in case.visible_metadata.get("candidate_uuids", [])}
-        if self._r3_enabled() and case.task_type in STATIC_TASK_TYPES:
+        if self._r3_enabled() and (
+            case.task_type in STATIC_TASK_TYPES
+            or (self._c2_enabled() and case.task_type == "detection_gold_pitch_boundary")
+        ):
             expected = set(authoritative_candidate_uuids(case))
-        if case.task_type in {"detection_gold_player_static", "detection_gold_dense_region"}:
+        candidate_relation_task = case.task_type in {"detection_gold_player_static", "detection_gold_dense_region"} or (
+            self._c2_enabled() and case.task_type == "detection_gold_pitch_boundary"
+        )
+        if candidate_relation_task:
             relations = annotation.get("candidate_relations", [])
             actual = [str(row.get("candidate_uuid")) for row in relations]
             if len(actual) != len(set(actual)):
@@ -262,7 +282,8 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         expected_tranche = tranche_for_case(self.ui_config.question_contract, case.case_id)
         if tranche_id != expected_tranche:
             raise ValueError("wizard state tranche binding mismatch")
-        if case.task_type not in STATIC_TASK_TYPES:
+        c2_pitch = self._c2_enabled() and case.task_type == "detection_gold_pitch_boundary"
+        if case.task_type not in STATIC_TASK_TYPES and not c2_pitch:
             return tranche_id
         record = authoritative_frame_record(case)
         checks = {
@@ -279,7 +300,8 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
 
     @staticmethod
     def _validate_r3_footpoints(case: Any, annotation: dict[str, Any], wizard_state: dict[str, Any]) -> None:
-        if case.task_type != "detection_gold_player_static":
+        c2_pitch = annotation.get("schema_version") == "m5_5g1a_c2_pitch_boundary_v1"
+        if case.task_type != "detection_gold_player_static" and not c2_pitch:
             return
         reviews = wizard_state.get("footpoint_reviews")
         if not isinstance(reviews, dict):
@@ -292,12 +314,24 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         for person in people:
             person_id = str(person["annotation_uuid"])
             review = reviews[person_id]
-            if not isinstance(review, dict) or review.get("decision") not in allowed:
-                raise ValueError(f"invalid footpoint review for {person_id}")
             point = person.get("footpoint")
             box = person.get("visible_body_box")
-            if not isinstance(point, dict) or not isinstance(box, dict):
-                raise ValueError("every static person requires visible geometry and a footpoint")
+            if not isinstance(review, dict) or not isinstance(box, dict):
+                raise ValueError(f"invalid footpoint review or visible geometry for {person_id}")
+            if c2_pitch:
+                status = person.get("footpoint_status")
+                if review.get("status") != status or review.get("confirmed") is not True:
+                    raise ValueError(f"C2 footpoint review does not match {person_id}")
+                if status in {"FEET_NOT_VISIBLE", "CANNOT_TELL"}:
+                    if point is not None or float(person.get("footpoint_uncertainty_pixels", 0)) < 20:
+                        raise ValueError("hidden C2 feet require no observed point and explicit uncertainty")
+                elif point is None:
+                    raise ValueError("observed C2 feet require a current-frame point")
+                continue
+            if review.get("decision") not in allowed:
+                raise ValueError(f"invalid footpoint review for {person_id}")
+            if not isinstance(point, dict):
+                raise ValueError("every static person requires a footpoint")
             if review["decision"] in {"FEET_NOT_VISIBLE", "CANNOT_TELL"}:
                 if review.get("estimated") is not True or float(person.get("footpoint_uncertainty_pixels", 0)) < 20:
                     raise ValueError("hidden or uncertain feet require a labelled high-uncertainty estimate")
@@ -414,7 +448,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         raw_annotation = payload.get("annotation")
         if not isinstance(raw_annotation, dict):
             raise ValueError("annotation must be an object")
-        annotation = validate_case_annotation(case.task_type, raw_annotation)
+        annotation = self._validate_annotation(case, raw_annotation)
         self._validate_source_binding(case, annotation)
         self._validate_candidate_bindings(case, annotation)
         self._validate_original_pixel_geometry(annotation)
@@ -535,7 +569,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         checks = {
             "exact_case_set": set(annotations) == expected_ids,
             "all_cases_schema_valid": all(
-                validate_case_annotation(self.case_map()[case_id].task_type, annotation) is not None
+                self._validate_annotation(self.case_map()[case_id], annotation) is not None
                 for case_id, annotation in annotations.items()
                 if case_id in self.case_map()
             )
@@ -717,7 +751,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 errors.append({"case_id": case_id, "check": "annotation_missing"})
                 continue
             try:
-                annotation = validate_case_annotation(case.task_type, raw_annotation)
+                annotation = self._validate_annotation(case, raw_annotation)
                 self._validate_original_pixel_geometry(annotation)
                 self._validate_full_strip_gates(case, annotation)
             except (KeyError, TypeError, ValueError):
@@ -941,7 +975,10 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
                 http_status=400,
                 retryable=False,
             )
-        strict_request_binding = self.ui_config.question_contract.get("client_build_id") == R3_R2_R1_C1_CLIENT_BUILD_ID
+        strict_request_binding = self.ui_config.question_contract.get("client_build_id") in {
+            R3_R2_R1_C1_CLIENT_BUILD_ID,
+            R3_R4_C2_CLIENT_BUILD_ID,
+        }
         supplied_review_id = payload.get("review_id")
         if supplied_review_id not in (None, self.manifest.review_id) or (
             strict_request_binding and not supplied_review_id

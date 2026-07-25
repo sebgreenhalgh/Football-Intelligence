@@ -13,6 +13,12 @@
     "Check the machine boxes",
     "Review and save",
   ];
+  const C2_STEPS = [
+    "Draw every visible person",
+    "Mark feet, role, and pitch state",
+    "Check each machine box",
+    "Review and save",
+  ];
 
   const ROLE_CHOICES = [
     ["Player", "PLAYER"],
@@ -52,6 +58,17 @@
     ["Outside the playing field", "OFF_PITCH"],
     ["On or very close to the boundary", "BOUNDARY_UNCERTAIN"],
     ["I can't tell", "BOUNDARY_UNCERTAIN"],
+  ];
+  const PITCH_CERTAINTY_CHOICES = [
+    ["Clear", "CLEAR"],
+    ["Approximate", "APPROXIMATE"],
+    ["Uncertain", "UNCERTAIN"],
+  ];
+  const C2_FOOTPOINT_CHOICES = [
+    ["Feet clearly visible", "OBSERVED_CLEAR"],
+    ["Feet approximately visible", "OBSERVED_APPROXIMATE"],
+    ["Feet not visible", "FEET_NOT_VISIBLE"],
+    ["I cannot tell", "CANNOT_TELL"],
   ];
   const CANDIDATE_RELATIONS = [
     ["One person - the box is useful", "CLEAN_SINGLE_INSTANCE"],
@@ -193,6 +210,11 @@
       return this.host.revisionAware?.() === true;
     }
 
+    c2PitchBoundary() {
+      return this.host.c2PitchBoundary?.() === true
+        && this.host.caseData().task_type === "detection_gold_pitch_boundary";
+    }
+
     ensureRevisionState(state) {
       state.candidate_answer_records ||= {};
       state.mask_front_answers ||= {};
@@ -233,7 +255,8 @@
       const seen = new Set();
       (caseData.visible_metadata.frame_records || []).forEach((record, frameIndex) => {
         if (this.host.incrementalR3?.() === true
-          && ["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData.task_type)
+          && (["detection_gold_player_static", "detection_gold_dense_region"].includes(caseData.task_type)
+            || this.c2PitchBoundary())
           && frameIndex !== this.host.authoritativeFrameIndex(caseData)) return;
         for (const candidate of record.candidates || []) {
           if (!required.has(candidate.diagnostic_uuid) || seen.has(candidate.diagnostic_uuid)) continue;
@@ -424,15 +447,18 @@
       const task = this.host.caseData().task_type;
       const temporalGeometry = task === "detection_gold_temporal_player" && state.frame_phase === "geometry";
       const footballQueue = task === "detection_gold_football_burst" && state.step === 3;
-      const relationQueue = ["detection_gold_player_static", "detection_gold_dense_region"].includes(task) && state.step === 3;
+      const relationQueue = (["detection_gold_player_static", "detection_gold_dense_region"].includes(task)
+        || this.c2PitchBoundary()) && state.step === 3;
       const entry = relationQueue || footballQueue ? this.currentCandidateEntry() : null;
       return {
         showMachine: Boolean(entry || temporalGeometry),
         candidateUuid: entry?.candidate.diagnostic_uuid || this.host.selectedCandidate()?.diagnostic_uuid || null,
         humanInteractive: !(relationQueue || footballQueue),
         numberHumans: true,
-        footpointUuids: this.host.incrementalR3?.() === true && task === "detection_gold_player_static"
-          ? this.host.objects().map((row) => row.annotation_uuid)
+        footpointUuids: this.c2PitchBoundary()
+          ? this.host.objects().filter((row) => row.footpoint).map((row) => row.annotation_uuid)
+          : this.host.incrementalR3?.() === true && task === "detection_gold_player_static"
+            ? this.host.objects().map((row) => row.annotation_uuid)
           : [...state.footpoint_placed_uuids],
         estimatedFootpointUuids: Object.entries(state.footpoint_reviews || {})
           .filter(([, review]) => review?.estimated === true)
@@ -449,7 +475,8 @@
       const entry = this.currentCandidateEntry();
       if (!entry) return;
       if (!(this.host.incrementalR3?.() === true
-        && ["detection_gold_player_static", "detection_gold_dense_region"].includes(this.host.caseData().task_type))) {
+        && (["detection_gold_player_static", "detection_gold_dense_region"].includes(this.host.caseData().task_type)
+          || this.c2PitchBoundary()))) {
         this.host.setFrameSilently(entry.frameIndex);
       }
       this.host.setSelectedCandidate(entry.candidate);
@@ -470,7 +497,8 @@
         }, {history: false});
         return;
       }
-      if (!["detection_gold_player_static", "detection_gold_dense_region"].includes(task)) return;
+      if (!["detection_gold_player_static", "detection_gold_dense_region"].includes(task)
+        && !this.c2PitchBoundary()) return;
       this.mutate((state) => {
         if (this.revisionAware()) {
           const backgroundAnswers = Object.values(state.candidate_answer_records).filter(
@@ -506,6 +534,28 @@
 
     footpointPlaced() {
       const task = this.host.caseData().task_type;
+      if (this.c2PitchBoundary()) {
+        this.mutate((state, annotation) => {
+          const person = (annotation.player_instances || []).find(
+            (row) => row.annotation_uuid === state.current_object_uuid
+          );
+          if (!person) return;
+          const status = state.pending_footpoint_decision || "OBSERVED_APPROXIMATE";
+          person.footpoint_status = status;
+          person.footpoint_uncertainty_pixels = status === "OBSERVED_CLEAR" ? 3 : 8;
+          state.footpoint_reviews[person.annotation_uuid] = {
+            ...(state.footpoint_reviews[person.annotation_uuid] || {}),
+            status,
+            confirmed: true,
+          };
+          state.pending_footpoint_decision = null;
+          if (!state.footpoint_placed_uuids.includes(person.annotation_uuid)) {
+            state.footpoint_placed_uuids.push(person.annotation_uuid);
+          }
+          state.question_index += 1;
+        }, {history: false});
+        return;
+      }
       if (task === "detection_gold_player_static") {
         this.mutate((state) => {
           if (state.current_object_uuid && !state.footpoint_placed_uuids.includes(state.current_object_uuid)) {
@@ -547,7 +597,9 @@
 
     stepper() {
       const active = this.state().step;
-      const steps = this.host.caseData().task_type === "detection_gold_dense_region" ? DENSE_STEPS : GLOBAL_STEPS;
+      const steps = this.c2PitchBoundary()
+        ? C2_STEPS
+        : this.host.caseData().task_type === "detection_gold_dense_region" ? DENSE_STEPS : GLOBAL_STEPS;
       return `<ol class="nwStepper" aria-label="Case steps">${steps.map((label, index) => {
         const step = index + 1;
         const className = step === active ? "active" : step < active ? "done" : "";
@@ -558,7 +610,8 @@
     shell(content, instruction) {
       const state = this.state();
       const repairControls = this.revisionAware()
-        && ["detection_gold_player_static", "detection_gold_dense_region"].includes(this.host.caseData().task_type)
+        && (["detection_gold_player_static", "detection_gold_dense_region"].includes(this.host.caseData().task_type)
+          || this.c2PitchBoundary())
         ? (() => {
           const progress = this.candidateProgress(state);
           const warning = state.invalidation_notice || (progress.stale
@@ -609,6 +662,50 @@
       return answerButtons("Are they cut off by an edge of the image?", [["No", "NONE"], ["Left edge", "LEFT"], ["Top edge", "TOP"], ["Right edge", "RIGHT"], ["Bottom edge", "BOTTOM"], ["I can't tell", "UNSURE"]], key, {columns: 2});
     }
 
+    syncC2FootpointReview(state, person) {
+      state.footpoint_reviews[person.annotation_uuid] = {
+        ...(state.footpoint_reviews[person.annotation_uuid] || {}),
+        status: person.footpoint_status,
+        coarse_role: person.coarse_role,
+        pitch_state: person.pitch_state,
+        pitch_state_certainty: person.pitch_state_certainty,
+      };
+    }
+
+    c2PersonQuestion(annotation, state) {
+      const person = (annotation.player_instances || []).find(
+        (row) => row.annotation_uuid === state.current_object_uuid
+      );
+      if (!person) return "";
+      const observedFeet = ["OBSERVED_CLEAR", "OBSERVED_APPROXIMATE"].includes(person.footpoint_status);
+      const questions = [
+        "c2_role",
+        "c2_footpoint_status",
+        ...(observedFeet ? ["c2_footpoint_confirmation"] : []),
+        "c2_pitch",
+        "c2_pitch_certainty",
+      ];
+      if (state.question_index >= questions.length) {
+        queueMicrotask(() => this.finishObjectQuestions(person.annotation_uuid));
+        return `<div class="nwWaiting">Person ${this.host.objectIndex(person.annotation_uuid) + 1} is ready.</div>`;
+      }
+      const key = questions[state.question_index];
+      const focus = '<button id="nwFocusC2Person" type="button">Focus person + nearest pitch boundary</button>';
+      if (key === "c2_role") {
+        return `${answerButtons("Who is this visible person?", ROLE_CHOICES, key, {columns: 2, hint: "A substitute who is wholly outside the playing field is still a genuine person. Label the role you can see, then mark OFF PITCH separately."})}${focus}`;
+      }
+      if (key === "c2_footpoint_status") {
+        return `${answerButtons("Can you see where their feet meet the ground?", C2_FOOTPOINT_CHOICES, key, {columns: 1, hint: "Visible feet receive a bottom-centre starting point that you must confirm or move. Never invent a point when the feet are hidden."})}${focus}`;
+      }
+      if (key === "c2_footpoint_confirmation") {
+        return `${answerButtons("Is the proposed point roughly where their feet meet the ground?", [["Yes", "YES"], ["Move it", "MOVE_IT"], ["Feet are not visible", "FEET_NOT_VISIBLE"], ["I cannot tell", "CANNOT_TELL"]], key, {columns: 1, hint: "The proposed point is a draft, not observed truth, until you confirm it."})}${focus}`;
+      }
+      if (key === "c2_pitch") {
+        return `${answerButtons("Where are this person's feet relative to the approved pitch boundary?", PITCH_CHOICES, key, {columns: 1, hint: "Use the polygon and tolerance band as visual evidence. The application does not assign this label for you."})}${focus}`;
+      }
+      return `${answerButtons("How certain is that pitch-state decision?", PITCH_CERTAINTY_CHOICES, key, {columns: 1})}${focus}`;
+    }
+
     edgeQuestionRelevant(box) {
       const bounds = this.host.record().focal_bounds;
       if (!box || !bounds) return true;
@@ -656,14 +753,18 @@
     renderStaticOrDense(annotation) {
       const state = this.state();
       const dense = this.host.caseData().task_type === "detection_gold_dense_region";
+      const c2 = this.c2PitchBoundary();
       if (state.step === 1) {
         const objects = dense ? annotation.visible_masks : annotation.player_instances;
         const label = dense ? "visible shapes" : "people";
-        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3><p>${dense ? "Trace only the part of the person you can actually see. Do not draw through another person and do not guess hidden body pixels." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle Current frame only. Previous and Next are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button>${this.revisionAware() && objects.length ? '<button id="nwDeleteAllObjects" type="button">Delete all people</button>' : ""}<button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the focal area." : "Draw one box around each visible person in the highlighted area.");
+        const c2Notice = c2 ? '<aside class="nwC2Semantics"><strong>A substitute or warming-up footballer is still a Player.</strong><span>Mark their role as Player and their pitch location as Outside the playing field. Do not mark them as background merely because they are not currently playing.</span><span>Draw every visible person in this focal crop, including staff, spectators, officials, partial people, and uncertain people.</span></aside>' : "";
+        return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3>${c2Notice}<p>${dense ? "Trace only the part of the person you can actually see. Do not draw through another person and do not guess hidden body pixels." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle Current frame only. Previous and Next are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button>${this.revisionAware() && objects.length ? '<button id="nwDeleteAllObjects" type="button">Delete all people</button>' : ""}<button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the focal area." : "Draw one box around each visible person in the highlighted area.");
       }
       if (state.step === 2) {
         const label = this.host.objectIndex(state.current_object_uuid) + 1;
-        const body = dense ? this.denseQuestion(annotation, state) : this.personQuestion(annotation, state);
+        const body = dense ? this.denseQuestion(annotation, state) : c2
+          ? this.c2PersonQuestion(annotation, state)
+          : this.personQuestion(annotation, state);
         return this.shell(`<div class="nwCurrentObject"><strong>Person ${label}</strong><span>Question ${state.question_index + 1}</span></div>${body}<div class="nwActionRow"><button id="nwQuestionBack" type="button">Back</button><button id="nwUndo" type="button">Undo</button><button id="nwDeleteObject" type="button">Delete Person ${label}</button></div>`, `Answer one simple question at a time for Person ${label}.`);
       }
       if (state.step === 3) return this.renderCandidateQueue(annotation, dense);
@@ -698,7 +799,10 @@
       const targets = this.host.objects(annotation);
       let content;
       if (state.candidate_phase === "relation") {
-        content = answerButtons("What does this machine box represent?", CANDIDATE_RELATIONS, "candidate_relation", {columns: 1, hint: "The highlighted box is selected for you. You do not need to click it."});
+        const hint = this.c2PitchBoundary()
+          ? "Judge only whether the box represents a visible person. Role and inside/outside pitch state must not change this answer."
+          : "The highlighted box is selected for you. You do not need to click it.";
+        content = answerButtons("What does this machine box represent?", CANDIDATE_RELATIONS, "candidate_relation", {columns: 1, hint});
       } else if (state.candidate_phase === "targets") {
         const merged = state.candidate_relation === "MERGED_MULTIPLE_INSTANCES";
         content = `<section class="nwQuestionCard" data-nw-question="candidate_targets"><span class="nwQuestionLabel">CHOOSE THE ${merged ? "PEOPLE" : "PERSON"}</span><h3>${merged ? "Which people are inside this machine box?" : "Which person does this machine box belong to?"}</h3><div class="nwPersonCards">${targets.map((row, index) => `<button type="button" data-nw-target="${row.annotation_uuid}" class="${state.candidate_targets.includes(row.annotation_uuid) ? "selected" : ""}"><span>Person ${index + 1}</span><strong>${state.candidate_targets.includes(row.annotation_uuid) ? "Selected" : "Choose"}</strong></button>`).join("") || "<p>No people have been marked.</p>"}</div>${merged ? `<button id="nwConfirmTargets" class="nwPrimary" type="button" ${state.candidate_targets.length >= 2 ? "" : "disabled"}>Use these ${state.candidate_targets.length} people</button>` : ""}</section>`;
@@ -793,12 +897,15 @@
         rows = annotation.visible_masks.map((mask, index) => `<li><strong>Person ${index + 1}</strong><span>${mask.mask_quality.toLowerCase()} outline - order ${mask.occlusion_order + 1}</span><button type="button" data-nw-edit-object="${mask.annotation_uuid}">Edit Person ${index + 1}</button></li>`).join("");
       } else if (task === "detection_gold_temporal_player") {
         rows = annotation.frames.map((frame, index) => `<li><strong>Frame ${index + 1}</strong><span>${frame.state.replaceAll("_", " ").toLowerCase()}</span><button type="button" data-nw-edit-frame="${index}">Return to Frame ${index + 1}</button></li>`).join("");
+      } else if (this.c2PitchBoundary()) {
+        rows = annotation.player_instances.map((person, index) => `<li><strong>Person ${index + 1}</strong><span>${person.coarse_role.replaceAll("_", " ").toLowerCase()} | ${person.pitch_state.replaceAll("_", " ").toLowerCase()} (${person.pitch_state_certainty.toLowerCase()}) | ${person.footpoint_status.replaceAll("_", " ").toLowerCase()} | ${(annotation.candidate_relations || []).some((relation) => relation.annotation_uuids.includes(person.annotation_uuid)) ? "candidate relation reviewed" : "no candidate bound"}</span><button type="button" data-nw-edit-object="${person.annotation_uuid}">Edit Person ${index + 1}</button></li>`).join("");
       } else if (task === "detection_gold_pitch_boundary") {
         rows = `<li><strong>Foot position</strong><span>${annotation.pitch_state.replaceAll("_", " ").toLowerCase()}</span><button type="button" id="nwEditPitch">Edit</button></li><li><strong>Role</strong><span>${annotation.coarse_role.replaceAll("_", " ").toLowerCase()}</span></li>`;
       } else {
         rows = annotation.frames.map((frame, index) => `<li><strong>Frame ${index + 1}</strong><span>${frame.state.replaceAll("_", " ").toLowerCase()}</span><button type="button" data-nw-edit-frame="${index}">Return to Frame ${index + 1}</button></li>`).join("");
       }
-      const usesCandidateQueue = ["detection_gold_player_static", "detection_gold_dense_region", "detection_gold_football_burst"].includes(task);
+      const usesCandidateQueue = ["detection_gold_player_static", "detection_gold_dense_region", "detection_gold_football_burst"].includes(task)
+        || this.c2PitchBoundary();
       const candidateTotal = this.candidates().length;
       const revisionProgress = this.candidateProgress(state);
       const candidateDone = task === "detection_gold_football_burst"
@@ -810,14 +917,22 @@
       const candidateLinks = usesCandidateQueue && candidateTotal
         ? `<details class="nwCandidateReviewLinks"><summary>Review a machine-box answer</summary><div>${this.candidates().map((entry, index) => `<button type="button" data-nw-edit-candidate="${index}">Review Machine Box ${index + 1}</button>`).join("")}</div></details>`
         : "";
-      const saveBlocked = this.revisionAware() && ["detection_gold_player_static", "detection_gold_dense_region"].includes(task)
+      const saveBlocked = this.revisionAware() && (["detection_gold_player_static", "detection_gold_dense_region"].includes(task)
+        || this.c2PitchBoundary())
         && (revisionProgress.stale || revisionProgress.unanswered || revisionProgress.invalid || state.summary_validity !== "VALID");
-      return this.shell(`<section class="nwReviewCard"><h3>Check your work</h3><div class="nwReviewStats"><span><strong>${task.includes("temporal") || task.includes("football") ? state.frame_answered_sequences.length : this.host.objects(annotation).length}</strong> ${task.includes("temporal") || task.includes("football") ? "frames checked" : "people marked"}</span>${candidateSummary}</div><ul class="nwReviewList">${rows || "<li><strong>No visible people marked</strong><span>This is allowed when none are visible.</span></li>"}</ul>${candidateLinks}<details class="nwNote"><summary>Add a note</summary><textarea id="nwNote" maxlength="1000" rows="3" placeholder="Optional">${escapeHtml(annotation.note || "")}</textarea></details><button id="nwSaveCase" class="nwPrimary nwSave" type="button" ${saveBlocked ? "disabled" : ""}>Save this case</button></section>`, "Check the plain-language summary, then save to the server.");
+      const c2Supply = this.c2PitchBoundary()
+        ? annotation.player_instances.filter((person) => person.pitch_state === "ON_PITCH" && ["PLAYER", "GOALKEEPER", "REFEREE", "OFFICIAL"].includes(person.coarse_role)).length
+        : null;
+      const c2Preview = this.c2PitchBoundary()
+        ? `<p class="nwC2SupplyPreview"><strong>Derived preview only:</strong> ${c2Supply} on-pitch player/goalkeeper/referee label(s). This is not stored as human truth and does not alter machine-box answers.</p>`
+        : "";
+      return this.shell(`<section class="nwReviewCard"><h3>Check your work</h3><div class="nwReviewStats"><span><strong>${task.includes("temporal") || task.includes("football") ? state.frame_answered_sequences.length : this.host.objects(annotation).length}</strong> ${task.includes("temporal") || task.includes("football") ? "frames checked" : "people marked"}</span>${candidateSummary}</div>${c2Preview}<ul class="nwReviewList">${rows || "<li><strong>No visible people marked</strong><span>This is allowed when none are visible.</span></li>"}</ul>${candidateLinks}<details class="nwNote"><summary>Add a note</summary><textarea id="nwNote" maxlength="1000" rows="3" placeholder="Optional">${escapeHtml(annotation.note || "")}</textarea></details><button id="nwSaveCase" class="nwPrimary nwSave" type="button" ${saveBlocked ? "disabled" : ""}>Save this case</button></section>`, "Check the plain-language summary, then save to the server.");
     }
 
     render(annotation) {
       const task = this.host.caseData().task_type;
-      if (["detection_gold_player_static", "detection_gold_dense_region"].includes(task)) return this.renderStaticOrDense(annotation);
+      if (["detection_gold_player_static", "detection_gold_dense_region"].includes(task)
+        || this.c2PitchBoundary()) return this.renderStaticOrDense(annotation);
       if (task === "detection_gold_temporal_player") return this.renderTemporal(annotation);
       if (task === "detection_gold_pitch_boundary") return this.renderPitch(annotation);
       return this.renderFootball(annotation);
@@ -834,7 +949,51 @@
           ]).has(key);
           this.objectSemanticChanged(selected.annotation_uuid, {candidateRelevant});
         }
-        if (key === "role") selected.coarse_role = rawValue;
+        if (key === "c2_role") {
+          selected.coarse_role = rawValue;
+          this.syncC2FootpointReview(draftState, selected);
+        } else if (key === "c2_footpoint_status") {
+          selected.footpoint_status = rawValue;
+          if (["OBSERVED_CLEAR", "OBSERVED_APPROXIMATE"].includes(rawValue)) {
+            const box = selected.visible_body_box;
+            selected.footpoint = {x: (box.x1 + box.x2) / 2, y: box.y2};
+            selected.footpoint_uncertainty_pixels = rawValue === "OBSERVED_CLEAR" ? 3 : 8;
+            this.syncC2FootpointReview(draftState, selected);
+            draftState.footpoint_reviews[selected.annotation_uuid].confirmed = false;
+          } else {
+            selected.footpoint = null;
+            selected.footpoint_uncertainty_pixels = 20;
+            draftState.footpoint_placed_uuids = draftState.footpoint_placed_uuids.filter(
+              (uuid) => uuid !== selected.annotation_uuid
+            );
+            this.syncC2FootpointReview(draftState, selected);
+            draftState.footpoint_reviews[selected.annotation_uuid].confirmed = true;
+          }
+        } else if (key === "c2_footpoint_confirmation") {
+          if (rawValue === "MOVE_IT") {
+            draftState.pending_footpoint_decision = selected.footpoint_status;
+            this.host.setTool("footpoint");
+            return;
+          }
+          if (["FEET_NOT_VISIBLE", "CANNOT_TELL"].includes(rawValue)) {
+            selected.footpoint_status = rawValue;
+            selected.footpoint = null;
+            selected.footpoint_uncertainty_pixels = 20;
+            draftState.footpoint_placed_uuids = draftState.footpoint_placed_uuids.filter(
+              (uuid) => uuid !== selected.annotation_uuid
+            );
+          } else if (!draftState.footpoint_placed_uuids.includes(selected.annotation_uuid)) {
+            draftState.footpoint_placed_uuids.push(selected.annotation_uuid);
+          }
+          this.syncC2FootpointReview(draftState, selected);
+          draftState.footpoint_reviews[selected.annotation_uuid].confirmed = true;
+        } else if (key === "c2_pitch") {
+          selected.pitch_state = rawValue;
+          this.syncC2FootpointReview(draftState, selected);
+        } else if (key === "c2_pitch_certainty") {
+          selected.pitch_state_certainty = rawValue;
+          this.syncC2FootpointReview(draftState, selected);
+        } else if (key === "role") selected.coarse_role = rawValue;
         else if (key === "visibility") {
           selected.visibility_state = rawValue;
           selected.ambiguity_ignore = rawValue === "UNRESOLVED";
@@ -957,7 +1116,7 @@
           return;
         }
         if (state.step === 2 && selected) draftState.question_index += 1;
-        if (this.host.caseData().task_type === "detection_gold_pitch_boundary") {
+        if (this.host.caseData().task_type === "detection_gold_pitch_boundary" && !this.c2PitchBoundary()) {
           if (!draftState.pitch_answers.includes(key)) draftState.pitch_answers.push(key);
           draftState.pitch_question_index += 1;
           if (draftState.pitch_question_index >= 4) draftState.step = 4;
@@ -1168,6 +1327,7 @@
       one("#nwRestartCase", this.host.restartCase);
       one("#nwPlaceFootpoint", () => this.host.setTool("footpoint"));
       one("#nwAdjustFootpoint", () => this.host.setTool("footpoint"));
+      one("#nwFocusC2Person", this.host.focusSelectedPerson);
       one("#nwPlaceBall", () => this.host.setTool("ball"));
       one("#nwDrawBallTrail", () => this.host.setTool("trail"));
       one("#nwSkipBallTrail", () => this.finishCurrentFrame());
@@ -1244,7 +1404,8 @@
       const state = this.state();
       const task = this.host.caseData().task_type;
       if (state.step !== 4) throw new Error("Finish the four guided steps before saving.");
-      if (["detection_gold_player_static", "detection_gold_dense_region"].includes(task)) {
+      if (["detection_gold_player_static", "detection_gold_dense_region"].includes(task)
+        || this.c2PitchBoundary()) {
         const ids = this.host.objects().map((row) => row.annotation_uuid);
         if (ids.some((uuid) => !state.completed_object_uuids.includes(uuid))) throw new Error("Finish the short questions for every marked person.");
         if (this.revisionAware()) {
@@ -1271,6 +1432,23 @@
             && ids.some((uuid) => !state.footpoint_reviews?.[uuid])) {
             throw new Error("Confirm or correct the proposed footpoint for every marked person.");
           }
+          if (this.c2PitchBoundary()) {
+            for (const person of this.host.objects()) {
+              const review = state.footpoint_reviews?.[person.annotation_uuid];
+              if (!review
+                || review.confirmed !== true
+                || review.status !== person.footpoint_status
+                || review.coarse_role !== person.coarse_role
+                || review.pitch_state !== person.pitch_state
+                || review.pitch_state_certainty !== person.pitch_state_certainty) {
+                throw new Error("Finish role, footpoint, pitch-state, and certainty review for every visible person.");
+              }
+              const observed = ["OBSERVED_CLEAR", "OBSERVED_APPROXIMATE"].includes(person.footpoint_status);
+              if (observed !== Boolean(person.footpoint)) {
+                throw new Error("Visible feet require a point; hidden or unresolved feet must not carry one.");
+              }
+            }
+          }
           if (task === "detection_gold_dense_region") {
             const masks = new Map(this.host.objects().map((row) => [row.annotation_uuid, row]));
             for (const mask of masks.values()) {
@@ -1291,7 +1469,10 @@
         if (state.frame_answered_sequences.length !== this.host.annotation().frames.length) throw new Error("Check every frame before saving.");
       }
       if (task === "detection_gold_football_burst" && Object.keys(state.football_candidate_answers).length !== this.candidates().length) throw new Error("Check every machine ball suggestion before saving.");
-      if (task === "detection_gold_pitch_boundary" && (!state.pitch_footpoint_set || state.pitch_answers.length < 4)) throw new Error("Finish the footpoint and boundary questions before saving.");
+      if (task === "detection_gold_pitch_boundary" && !this.c2PitchBoundary()
+        && (!state.pitch_footpoint_set || state.pitch_answers.length < 4)) {
+        throw new Error("Finish the footpoint and boundary questions before saving.");
+      }
     }
   }
 
