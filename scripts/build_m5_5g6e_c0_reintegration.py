@@ -1685,6 +1685,9 @@ def raw_stage_reconciliation(
         "exact_s0_raw_support_count": sum(
             row["stage_support"]["S0_RAW"]["supply_state"] != "NO_PROPOSAL_SUPPORT" for row in rows
         ),
+        "exact_s0_confidence_independent_support_count": sum(
+            row["stage_support"]["S0_CONFIDENCE"]["supply_state"].startswith("INDEPENDENT_") for row in rows
+        ),
         "exact_s0_post_nms_independent_support_count": sum(
             row["stage_support"]["S0_POST_NMS"]["supply_state"].startswith("INDEPENDENT_") for row in rows
         ),
@@ -1985,7 +1988,17 @@ def error_ledger(
             "status": "SUPERSEDED_BY_EXACT_REPLAY_HISTORY_PRESERVED",
         },
         {"error_id": "G6E-CONF-001", "classification": "LOST_AT_CONFIDENCE", "count": lost_confidence},
-        {"error_id": "G6E-NMS-001", "classification": "LOST_AT_NMS", "count": lost_nms},
+        {
+            "error_id": "G6E-NMS-001",
+            "classification": "LOST_AT_NMS",
+            "full_c0_c2_count": lost_nms,
+            "s0_only_nine_target_count": max(
+                0,
+                reconciliation["exact_s0_confidence_independent_support_count"]
+                - reconciliation["exact_s0_post_nms_independent_support_count"],
+            ),
+            "s3_recovered_all_nine_before_fusion": reconciliation["exact_s3_post_nms_independent_support_count"] == 9,
+        },
         {
             "error_id": "G6E-DUP-001",
             "classification": "DUPLICATE_BURDEN",
