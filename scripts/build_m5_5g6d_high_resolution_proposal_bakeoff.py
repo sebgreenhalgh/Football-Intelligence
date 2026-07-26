@@ -1922,11 +1922,9 @@ def source_diff_patch() -> str:
         "scripts/build_m5_5g6d_high_resolution_proposal_bakeoff.py",
         "tests/test_m5_5g6d_high_resolution_proposal_bakeoff.py",
     ]
-    subject = git("log", "-1", "--pretty=%s").stdout.strip()
-    if "M5.5G.6D" in subject:
-        committed = git("show", "--format=", "--binary", "HEAD", "--", *paths).stdout
-        if committed.strip():
-            return committed
+    committed = git("diff", "--binary", f"{BASELINE}..HEAD", "--", *paths).stdout
+    if committed.strip():
+        return committed
     patch = git("diff", "--binary", "HEAD", "--", *paths).stdout
     tracked = set(git("ls-files", "--", *paths).stdout.splitlines())
     additions = []
@@ -2165,9 +2163,16 @@ def build_review_pack(
         "file_count_including_manifest": len(rows) + 1,
         "total_bytes_including_manifest": None,
     }
-    write_json(root / "16_REVIEW_PACK_MANIFEST.json", manifest)
-    manifest["total_bytes_including_manifest"] = sum(path.stat().st_size for path in root.iterdir() if path.is_file())
-    write_json(root / "16_REVIEW_PACK_MANIFEST.json", manifest)
+    manifest_path = root / "16_REVIEW_PACK_MANIFEST.json"
+    write_json(manifest_path, manifest)
+    for _ in range(4):
+        actual_total = sum(path.stat().st_size for path in root.iterdir() if path.is_file())
+        if manifest["total_bytes_including_manifest"] == actual_total:
+            break
+        manifest["total_bytes_including_manifest"] = actual_total
+        write_json(manifest_path, manifest)
+    else:
+        raise RuntimeError("FAIL_REVIEW_PACK: manifest byte total did not stabilize")
     return validate_review_pack(root)
 
 
@@ -2219,6 +2224,7 @@ def validate_review_pack(root: Path) -> dict[str, Any]:
             expected[name]["byte_size"] == row["byte_size"] and expected[name]["sha256"] == row["sha256"]
             for name, row in actual.items()
         ),
+        "manifest_total_bytes_exact": manifest["total_bytes_including_manifest"] == total_bytes,
         "no_forbidden_extensions": not any(path.suffix.lower() in forbidden_names for path in files),
         "no_private_or_sealed_tokens": not private_hits,
     }

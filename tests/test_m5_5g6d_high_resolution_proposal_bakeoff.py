@@ -181,11 +181,14 @@ def test_no_pitch_human_label_or_role_runtime_leakage() -> None:
 
 
 def test_review_pack_is_flat_bounded_and_hash_valid(builder: ModuleType) -> None:
-    validation = builder.validate_review_pack(STAGE / "11_REVIEW_PACK_FOR_CHATGPT")
+    root = STAGE / "11_REVIEW_PACK_FOR_CHATGPT"
+    validation = builder.validate_review_pack(root)
+    manifest = read_json(root / "16_REVIEW_PACK_MANIFEST.json")
     assert validation["passed"] is True
     assert validation["file_count"] <= 20
     assert validation["total_bytes"] <= 50 * 1024 * 1024
     assert validation["visual_count"] == 3
+    assert manifest["total_bytes_including_manifest"] == validation["total_bytes"]
 
 
 def test_no_component_is_promoted() -> None:
