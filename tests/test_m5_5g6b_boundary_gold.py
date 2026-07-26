@@ -201,10 +201,22 @@ def test_nine_missing_people_have_frozen_stage_attribution() -> None:
     assert all(row["weak_overlap_upgraded_to_clean_supply"] is False for row in rows)
 
 
-def test_browser_package_is_target_only_and_fresh() -> None:
+def test_browser_package_is_target_only_and_fresh(tmp_path: Path) -> None:
+    production_hashes = {
+        path.relative_to(PACKAGE / "decisions").as_posix(): sha256_file(path)
+        for path in (PACKAGE / "decisions").rglob("*")
+        if path.is_file()
+    }
     manifest = load_manifest(PACKAGE / "reviewer_manifest.json")
     ui = load_ui_config(PACKAGE / "ui_config.json")
-    state = read_json(PACKAGE / "decisions" / "review_decisions.json")
+    fresh_root = tmp_path / "decisions"
+    store = DetectionGoldPilotPersistence(
+        manifest=manifest,
+        ui_config=ui,
+        decisions_root=fresh_root,
+        reviewer_session_id=REVIEWER,
+    )
+    state = store.ensure_state()
     assert len(manifest.cases) == 18
     assert ui.question_contract["client_build_id"] == G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID
     assert ui.question_contract["boundary_focused_person_gold"] is True
@@ -216,7 +228,8 @@ def test_browser_package_is_target_only_and_fresh() -> None:
     assert "selection_stratum" not in json.dumps(read_json(PACKAGE / "reviewer_manifest.json"))
     assert state["annotations"] == {}
     assert state["event_sequence"] == 0
-    assert not (PACKAGE / "decisions" / "completed_tranches" / TRANCHE).exists()
+    assert (fresh_root / "review_decision_events.jsonl").read_text(encoding="utf-8") == ""
+    assert not (fresh_root / "completed_tranches" / TRANCHE).exists()
 
     raw_manifest = read_json(PACKAGE / "reviewer_manifest.json")
     for case in raw_manifest["cases"]:
@@ -227,6 +240,12 @@ def test_browser_package_is_target_only_and_fresh() -> None:
                 assert frame[f"{kind}_asset_path"] == asset["relative_path"]
                 assert frame[f"{kind}_asset_sha256"] == asset["sha256"]
                 assert (PACKAGE / "evidence" / case["case_id"] / asset["relative_path"]).is_file()
+    after_hashes = {
+        path.relative_to(PACKAGE / "decisions").as_posix(): sha256_file(path)
+        for path in (PACKAGE / "decisions").rglob("*")
+        if path.is_file()
+    }
+    assert after_hashes == production_hashes
 
 
 def test_server_rejects_more_than_one_target(tmp_path: Path) -> None:
