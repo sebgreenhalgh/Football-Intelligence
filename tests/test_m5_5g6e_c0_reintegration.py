@@ -79,7 +79,9 @@ def test_g6c_g6d_row_level_reconciliation_is_explicit() -> None:
     assert len(rows) == summary["target_count"] == 9
     assert summary["historical_origin_counts"] == {"NO_RAW_PROPOSAL": 7, "RAW_LOCALIZATION_BAD": 2}
     assert summary["exact_s0_raw_support_count"] == 9
-    assert summary["exact_s0_confidence_independent_support_count"] == 9
+    assert summary["exact_s0_confidence_independent_support_count"] == 0
+    assert summary["exact_s0_confidence_partial_or_weak_support_count"] == 2
+    assert summary["exact_s0_confidence_no_proposal_support_count"] == 7
     assert summary["exact_s0_post_nms_independent_support_count"] == 0
     assert summary["exact_s3_post_nms_independent_support_count"] == 9
     assert summary["exact_c0_fused_independent_support_count"] == 9
@@ -88,9 +90,13 @@ def test_g6c_g6d_row_level_reconciliation_is_explicit() -> None:
     assert all(stage["semantic_rows_exact"] for stage in equivalence["stages"].values())
     assert all(row["questions"]["raw_candidate_existed_under_same_runtime"] for row in rows)
     errors = read_json(STAGE / "08_VISUAL_QA_AND_ERROR_LEDGER" / "reintegration_error_ledger.json")
+    confidence = next(row for row in errors["entries"] if row["classification"] == "LOST_AT_CONFIDENCE")
+    assert confidence["s0_only_nine_target_count"] == 9
+    assert confidence["s0_only_nine_target_partial_or_weak_after_confidence_count"] == 2
+    assert confidence["s0_only_nine_target_no_support_after_confidence_count"] == 7
     nms = next(row for row in errors["entries"] if row["classification"] == "LOST_AT_NMS")
     assert nms["full_c0_c2_count"] == 0
-    assert nms["s0_only_nine_target_count"] == 9
+    assert nms["s0_only_nine_target_count"] == 0
     assert nms["s3_recovered_all_nine_before_fusion"] is True
 
 

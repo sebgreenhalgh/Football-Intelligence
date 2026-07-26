@@ -1688,6 +1688,12 @@ def raw_stage_reconciliation(
         "exact_s0_confidence_independent_support_count": sum(
             row["stage_support"]["S0_CONFIDENCE"]["supply_state"].startswith("INDEPENDENT_") for row in rows
         ),
+        "exact_s0_confidence_partial_or_weak_support_count": sum(
+            row["stage_support"]["S0_CONFIDENCE"]["supply_state"] == "PARTIAL_OR_WEAK_SUPPORT" for row in rows
+        ),
+        "exact_s0_confidence_no_proposal_support_count": sum(
+            row["stage_support"]["S0_CONFIDENCE"]["supply_state"] == "NO_PROPOSAL_SUPPORT" for row in rows
+        ),
         "exact_s0_post_nms_independent_support_count": sum(
             row["stage_support"]["S0_POST_NMS"]["supply_state"].startswith("INDEPENDENT_") for row in rows
         ),
@@ -1987,7 +1993,22 @@ def error_ledger(
             "count": reconciliation["historical_origin_counts"].get("NO_RAW_PROPOSAL", 0),
             "status": "SUPERSEDED_BY_EXACT_REPLAY_HISTORY_PRESERVED",
         },
-        {"error_id": "G6E-CONF-001", "classification": "LOST_AT_CONFIDENCE", "count": lost_confidence},
+        {
+            "error_id": "G6E-CONF-001",
+            "classification": "LOST_AT_CONFIDENCE",
+            "full_c0_c2_count": lost_confidence,
+            "s0_only_nine_target_count": max(
+                0,
+                reconciliation["exact_s0_raw_support_count"]
+                - reconciliation["exact_s0_confidence_independent_support_count"],
+            ),
+            "s0_only_nine_target_partial_or_weak_after_confidence_count": reconciliation[
+                "exact_s0_confidence_partial_or_weak_support_count"
+            ],
+            "s0_only_nine_target_no_support_after_confidence_count": reconciliation[
+                "exact_s0_confidence_no_proposal_support_count"
+            ],
+        },
         {
             "error_id": "G6E-NMS-001",
             "classification": "LOST_AT_NMS",
