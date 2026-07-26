@@ -19,6 +19,12 @@
     "Check each machine box",
     "Review and save",
   ];
+  const BOUNDARY_FOCUSED_STEPS = [
+    "Confirm target box",
+    "Mark role, feet, and footpoint",
+    "Choose pitch relation",
+    "Review and save",
+  ];
 
   const ROLE_CHOICES = [
     ["Player", "PLAYER"],
@@ -176,6 +182,7 @@
         desired_frame_state: null,
         pitch_footpoint_set: false,
         pitch_question_index: 0,
+        boundary_pitch_question_index: 0,
         pitch_answers: [],
         football_candidate_answers: {},
         failure_reviewed: false,
@@ -215,6 +222,10 @@
         && this.host.caseData().task_type === "detection_gold_pitch_boundary";
     }
 
+    boundaryFocusedPerson() {
+      return this.host.boundaryFocusedPerson?.() === true && this.c2PitchBoundary();
+    }
+
     ensureRevisionState(state) {
       state.candidate_answer_records ||= {};
       state.mask_front_answers ||= {};
@@ -227,6 +238,9 @@
       state.summary_human_truth_revision ??= null;
       state.invalidation_notice ??= null;
       state.candidate_answered_uuids ||= [];
+      state.boundary_pitch_question_index = Number.isInteger(state.boundary_pitch_question_index)
+        ? state.boundary_pitch_question_index
+        : 0;
       return state;
     }
 
@@ -597,7 +611,9 @@
 
     stepper() {
       const active = this.state().step;
-      const steps = this.c2PitchBoundary()
+      const steps = this.boundaryFocusedPerson()
+        ? BOUNDARY_FOCUSED_STEPS
+        : this.c2PitchBoundary()
         ? C2_STEPS
         : this.host.caseData().task_type === "detection_gold_dense_region" ? DENSE_STEPS : GLOBAL_STEPS;
       return `<ol class="nwStepper" aria-label="Case steps">${steps.map((label, index) => {
@@ -678,7 +694,11 @@
       );
       if (!person) return "";
       const observedFeet = ["OBSERVED_CLEAR", "OBSERVED_APPROXIMATE"].includes(person.footpoint_status);
-      const questions = [
+      const questions = this.boundaryFocusedPerson() ? [
+        "c2_role",
+        "c2_footpoint_status",
+        ...(observedFeet ? ["c2_footpoint_confirmation"] : []),
+      ] : [
         "c2_role",
         "c2_footpoint_status",
         ...(observedFeet ? ["c2_footpoint_confirmation"] : []),
@@ -687,7 +707,10 @@
       ];
       if (state.question_index >= questions.length) {
         queueMicrotask(() => this.finishObjectQuestions(person.annotation_uuid));
-        return `<div class="nwWaiting">Person ${this.host.objectIndex(person.annotation_uuid) + 1} is ready.</div>`;
+        const label = this.boundaryFocusedPerson()
+          ? "TARGET"
+          : `Person ${this.host.objectIndex(person.annotation_uuid) + 1}`;
+        return `<div class="nwWaiting">${label} is ready.</div>`;
       }
       const key = questions[state.question_index];
       const focus = '<button id="nwFocusC2Person" type="button">Focus person + nearest pitch boundary</button>';
@@ -722,11 +745,32 @@
           state.person_question_completion_revisions[annotationUuid] = state.person_question_revision;
           state.summary_validity = "NEEDS_REVIEW";
         }
-        state.current_object_uuid = null;
+        state.current_object_uuid = this.boundaryFocusedPerson() ? annotationUuid : null;
         state.question_index = 0;
         state.step = state.drawing_complete ? 3 : 1;
-        if (state.step === 3) state.candidate_index = this.nextUnansweredCandidateIndex();
+        if (state.step === 3) {
+          state.candidate_index = this.nextUnansweredCandidateIndex();
+          state.boundary_pitch_question_index = 0;
+        }
       }, {history: false});
+    }
+
+    renderBoundaryPitchAndCandidate(annotation) {
+      const state = this.state();
+      const person = annotation.player_instances[0];
+      const keys = ["c2_pitch", "c2_pitch_certainty"];
+      if (state.boundary_pitch_question_index >= keys.length) {
+        return this.renderCandidateQueue(annotation, false);
+      }
+      const key = keys[state.boundary_pitch_question_index];
+      const focus = '<button id="nwFocusC2Person" type="button">Focus target + nearest pitch boundary</button>';
+      const content = key === "c2_pitch"
+        ? answerButtons("Where are this target person's feet relative to the approved pitch boundary?", PITCH_CHOICES, key, {columns: 1, hint: "Use the polygon and tolerance band as visual evidence. The application does not assign this label for you."})
+        : answerButtons("How certain is that pitch-state decision?", PITCH_CERTAINTY_CHOICES, key, {columns: 1});
+      const footpointHint = person.footpoint
+        ? "The confirmed footpoint is shown."
+        : "The feet are marked hidden or unresolved.";
+      return this.shell(`<div class="nwCurrentObject"><strong>TARGET</strong><span>Pitch question ${state.boundary_pitch_question_index + 1} of 2</span></div>${content}${focus}<div class="nwActionRow"><button id="nwBoundaryPitchBack" type="button" ${state.boundary_pitch_question_index ? "" : "disabled"}>Back</button><button id="nwUndo" type="button">Undo</button></div>`, `Choose the target's pitch relation and certainty. ${footpointHint}`);
     }
 
     denseQuestion(annotation, state) {
@@ -754,20 +798,32 @@
       const state = this.state();
       const dense = this.host.caseData().task_type === "detection_gold_dense_region";
       const c2 = this.c2PitchBoundary();
+      const boundaryFocused = this.boundaryFocusedPerson();
       if (state.step === 1) {
         const objects = dense ? annotation.visible_masks : annotation.player_instances;
+        if (boundaryFocused) {
+          const target = annotation.player_instances[0];
+          return this.shell(`<section class="nwActionCard nwBoundaryTargetCard"><span class="nwQuestionLabel">ONE HIGHLIGHTED TARGET</span><h3>Confirm the target box</h3><p>Label the highlighted target person only. Other people are context.</p><p class="nwVisibleBodyRule">The box should cover only the visible part of this target person. Do not guess hidden body pixels.</p><div class="nwObjectSummary"><button type="button" data-nw-edit-object="${target.annotation_uuid}"><strong>TARGET</strong><span>Inspect</span></button></div><div class="nwActionRow"><button id="nwConfirmBoundaryTarget" class="nwPrimary" type="button">Target box is correct</button><button id="nwRedrawBoundaryTarget" type="button">Redraw target box</button><button id="nwFocusC2Person" type="button">Focus target + boundary</button><button id="nwUndo" type="button">Undo</button></div></section>`, "Confirm or redraw the one highlighted target. Other visible people are context only.");
+        }
         const label = dense ? "visible shapes" : "people";
         const c2Notice = c2 ? '<aside class="nwC2Semantics"><strong>A substitute or warming-up footballer is still a Player.</strong><span>Mark their role as Player and their pitch location as Outside the playing field. Do not mark them as background merely because they are not currently playing.</span><span>Draw every visible person in this focal crop, including staff, spectators, officials, partial people, and uncertain people.</span></aside>' : "";
         return this.shell(`<section class="nwActionCard"><h3>${dense ? "Trace each visible person" : "Mark every visible person"}</h3>${c2Notice}<p>${dense ? "Trace only the part of the person you can actually see. Do not draw through another person and do not guess hidden body pixels." : "Draw one box around each visible person in the highlighted area."}</p><p class="nwVisibleBodyRule">Box only the part you can actually see. Do not guess the hidden body.</p><p class="nwScopeNote">Label the middle Current frame only. Previous and Next are reference images.</p><div class="nwObjectSummary">${objects.length ? objects.map((row, index) => `<button type="button" data-nw-edit-object="${row.annotation_uuid}"><strong>Person ${index + 1}</strong><span>Edit</span></button>`).join("") : `<span>No ${label} marked yet.</span>`}</div><div class="nwActionRow"><button id="nwDrawObject" class="nwPrimary" type="button">${dense ? "Trace a person" : "Draw a person"}</button>${dense ? `<button id="nwFinishOutline" type="button" ${this.host.maskPointCount() >= 3 ? "" : "disabled"}>Finish this outline</button>` : ""}<button id="nwUndo" type="button">Undo</button>${this.revisionAware() && objects.length ? '<button id="nwDeleteAllObjects" type="button">Delete all people</button>' : ""}<button id="nwDoneDrawing" type="button">I'm done drawing people</button></div></section>`, dense ? "Trace one visible person at a time in the focal area." : "Draw one box around each visible person in the highlighted area.");
       }
       if (state.step === 2) {
-        const label = this.host.objectIndex(state.current_object_uuid) + 1;
+        const label = boundaryFocused
+          ? "TARGET"
+          : `Person ${this.host.objectIndex(state.current_object_uuid) + 1}`;
         const body = dense ? this.denseQuestion(annotation, state) : c2
           ? this.c2PersonQuestion(annotation, state)
           : this.personQuestion(annotation, state);
-        return this.shell(`<div class="nwCurrentObject"><strong>Person ${label}</strong><span>Question ${state.question_index + 1}</span></div>${body}<div class="nwActionRow"><button id="nwQuestionBack" type="button">Back</button><button id="nwUndo" type="button">Undo</button><button id="nwDeleteObject" type="button">Delete Person ${label}</button></div>`, `Answer one simple question at a time for Person ${label}.`);
+        const deleteButton = boundaryFocused
+          ? ""
+          : `<button id="nwDeleteObject" type="button">Delete ${label}</button>`;
+        return this.shell(`<div class="nwCurrentObject"><strong>${label}</strong><span>Question ${state.question_index + 1}</span></div>${body}<div class="nwActionRow"><button id="nwQuestionBack" type="button">Back</button><button id="nwUndo" type="button">Undo</button>${deleteButton}</div>`, `Answer one simple question at a time for ${label}.`);
       }
-      if (state.step === 3) return this.renderCandidateQueue(annotation, dense);
+      if (state.step === 3) return boundaryFocused
+        ? this.renderBoundaryPitchAndCandidate(annotation)
+        : this.renderCandidateQueue(annotation, dense);
       return this.renderReview(annotation);
     }
 
@@ -799,10 +855,15 @@
       const targets = this.host.objects(annotation);
       let content;
       if (state.candidate_phase === "relation") {
-        const hint = this.c2PitchBoundary()
+        const hint = this.boundaryFocusedPerson()
+          ? "Judge only the anonymous proposal highlighted for TARGET. Pitch state must not change this answer."
+          : this.c2PitchBoundary()
           ? "Judge only whether the box represents a visible person. Role and inside/outside pitch state must not change this answer."
           : "The highlighted box is selected for you. You do not need to click it.";
-        content = answerButtons("What does this machine box represent?", CANDIDATE_RELATIONS, "candidate_relation", {columns: 1, hint});
+        const question = this.boundaryFocusedPerson()
+          ? "What does this target proposal represent?"
+          : "What does this machine box represent?";
+        content = answerButtons(question, CANDIDATE_RELATIONS, "candidate_relation", {columns: 1, hint});
       } else if (state.candidate_phase === "targets") {
         const merged = state.candidate_relation === "MERGED_MULTIPLE_INSTANCES";
         content = `<section class="nwQuestionCard" data-nw-question="candidate_targets"><span class="nwQuestionLabel">CHOOSE THE ${merged ? "PEOPLE" : "PERSON"}</span><h3>${merged ? "Which people are inside this machine box?" : "Which person does this machine box belong to?"}</h3><div class="nwPersonCards">${targets.map((row, index) => `<button type="button" data-nw-target="${row.annotation_uuid}" class="${state.candidate_targets.includes(row.annotation_uuid) ? "selected" : ""}"><span>Person ${index + 1}</span><strong>${state.candidate_targets.includes(row.annotation_uuid) ? "Selected" : "Choose"}</strong></button>`).join("") || "<p>No people have been marked.</p>"}</div>${merged ? `<button id="nwConfirmTargets" class="nwPrimary" type="button" ${state.candidate_targets.length >= 2 ? "" : "disabled"}>Use these ${state.candidate_targets.length} people</button>` : ""}</section>`;
@@ -898,7 +959,10 @@
       } else if (task === "detection_gold_temporal_player") {
         rows = annotation.frames.map((frame, index) => `<li><strong>Frame ${index + 1}</strong><span>${frame.state.replaceAll("_", " ").toLowerCase()}</span><button type="button" data-nw-edit-frame="${index}">Return to Frame ${index + 1}</button></li>`).join("");
       } else if (this.c2PitchBoundary()) {
-        rows = annotation.player_instances.map((person, index) => `<li><strong>Person ${index + 1}</strong><span>${person.coarse_role.replaceAll("_", " ").toLowerCase()} | ${person.pitch_state.replaceAll("_", " ").toLowerCase()} (${person.pitch_state_certainty.toLowerCase()}) | ${person.footpoint_status.replaceAll("_", " ").toLowerCase()} | ${(annotation.candidate_relations || []).some((relation) => relation.annotation_uuids.includes(person.annotation_uuid)) ? "candidate relation reviewed" : "no candidate bound"}</span><button type="button" data-nw-edit-object="${person.annotation_uuid}">Edit Person ${index + 1}</button></li>`).join("");
+        rows = annotation.player_instances.map((person, index) => {
+          const label = this.boundaryFocusedPerson() ? "TARGET" : `Person ${index + 1}`;
+          return `<li><strong>${label}</strong><span>${person.coarse_role.replaceAll("_", " ").toLowerCase()} | ${person.pitch_state.replaceAll("_", " ").toLowerCase()} (${person.pitch_state_certainty.toLowerCase()}) | ${person.footpoint_status.replaceAll("_", " ").toLowerCase()} | ${(annotation.candidate_relations || []).some((relation) => relation.annotation_uuids.includes(person.annotation_uuid)) ? "candidate relation reviewed" : "no candidate bound"}</span><button type="button" data-nw-edit-object="${person.annotation_uuid}">Edit ${label}</button></li>`;
+        }).join("");
       } else if (task === "detection_gold_pitch_boundary") {
         rows = `<li><strong>Foot position</strong><span>${annotation.pitch_state.replaceAll("_", " ").toLowerCase()}</span><button type="button" id="nwEditPitch">Edit</button></li><li><strong>Role</strong><span>${annotation.coarse_role.replaceAll("_", " ").toLowerCase()}</span></li>`;
       } else {
@@ -1080,6 +1144,16 @@
             this.commitCandidateRelation(rawValue, [], undefined, draftState, annotation);
             return;
           }
+          if (this.boundaryFocusedPerson()) {
+            this.commitCandidateRelation(
+              rawValue,
+              [annotation.player_instances[0].annotation_uuid],
+              undefined,
+              draftState,
+              annotation,
+            );
+            return;
+          }
           draftState.candidate_phase = "targets";
           return;
         } else if (key === "candidate_coverage") {
@@ -1116,6 +1190,10 @@
           return;
         }
         if (state.step === 2 && selected) draftState.question_index += 1;
+        if (this.boundaryFocusedPerson() && state.step === 3
+          && ["c2_pitch", "c2_pitch_certainty"].includes(key)) {
+          draftState.boundary_pitch_question_index += 1;
+        }
         if (this.host.caseData().task_type === "detection_gold_pitch_boundary" && !this.c2PitchBoundary()) {
           if (!draftState.pitch_answers.includes(key)) draftState.pitch_answers.push(key);
           draftState.pitch_question_index += 1;
@@ -1290,6 +1368,14 @@
         state.candidate_phase = "relation";
       })));
       one("#nwDrawObject", () => this.host.setTool(this.host.caseData().task_type === "detection_gold_dense_region" ? "mask" : "box"));
+      one("#nwConfirmBoundaryTarget", () => this.mutate((state, annotation) => {
+        const target = annotation.player_instances[0];
+        state.drawing_complete = true;
+        state.current_object_uuid = target.annotation_uuid;
+        state.question_index = 0;
+        state.step = 2;
+      }));
+      one("#nwRedrawBoundaryTarget", this.host.redrawSelectedPerson);
       one("#nwFinishOutline", this.host.finishMask);
       one("#nwDoneDrawing", () => this.mutate((state) => {
         const unfinished = this.host.objects().find(
@@ -1373,6 +1459,9 @@
         state.candidate_phase = "relation";
       }));
       one("#nwPitchBack", () => this.mutate((state) => { state.pitch_question_index = Math.max(0, state.pitch_question_index - 1); }));
+      one("#nwBoundaryPitchBack", () => this.mutate((state) => {
+        state.boundary_pitch_question_index = Math.max(0, state.boundary_pitch_question_index - 1);
+      }));
       one("#nwEditPitch", () => this.mutate((state) => { state.step = 1; state.pitch_footpoint_set = false; }));
       one("#nwSaveCase", this.host.save);
       document.querySelector("#nwNote")?.addEventListener("input", (event) => {

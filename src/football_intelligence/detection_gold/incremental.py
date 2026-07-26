@@ -12,11 +12,13 @@ R3_R1_CLIENT_BUILD_ID = "m5_5g1a_r3_r1_wizard_state_repair_v1"
 R3_R2_CLIENT_BUILD_ID = "m5_5g1a_r3_r2_dense_first_split_v1"
 R3_R2_R1_C1_CLIENT_BUILD_ID = "m5_5g1a_r3_r2_r1_c1_completion_repair_v1"
 R3_R4_C2_CLIENT_BUILD_ID = "m5_5g1a_r3_r4_c2_pitch_boundary_v1"
+G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID = "m5_5g6b_boundary_focused_person_gold_v1"
 REVISION_AWARE_CLIENT_BUILD_IDS = {
     R3_R1_CLIENT_BUILD_ID,
     R3_R2_CLIENT_BUILD_ID,
     R3_R2_R1_C1_CLIENT_BUILD_ID,
     R3_R4_C2_CLIENT_BUILD_ID,
+    G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID,
 }
 R3_R1_CANDIDATE_VALIDITY_STATES = {"VALID", "NEEDS_REVIEW", "UNANSWERED", "INVALID"}
 STATIC_TASK_TYPES = {"detection_gold_player_static", "detection_gold_dense_region"}
@@ -38,7 +40,19 @@ def revision_aware_client(question_contract: Mapping[str, Any]) -> bool:
 def c2_pitch_boundary_client(question_contract: Mapping[str, Any]) -> bool:
     """Return whether the focused multi-person C2 workflow is active."""
 
-    return question_contract.get("client_build_id") == R3_R4_C2_CLIENT_BUILD_ID
+    return question_contract.get("client_build_id") in {
+        R3_R4_C2_CLIENT_BUILD_ID,
+        G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID,
+    }
+
+
+def boundary_focused_person_client(question_contract: Mapping[str, Any]) -> bool:
+    """Return whether the supplementary one-target boundary workflow is active."""
+
+    return (
+        question_contract.get("client_build_id") == G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID
+        and question_contract.get("boundary_focused_person_gold") is True
+    )
 
 
 def authoritative_frame_record(case: Any) -> dict[str, Any]:

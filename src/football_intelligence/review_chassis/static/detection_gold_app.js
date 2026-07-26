@@ -17,6 +17,7 @@
   };
   const LAYERS = ["RAW", "CONFIDENCE", "PRE_NMS", "POST_NMS", "FUSED"];
   const C2_CLIENT_BUILD_ID = "m5_5g1a_r3_r4_c2_pitch_boundary_v1";
+  const G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID = "m5_5g6b_boundary_focused_person_gold_v1";
   const SVG_NS = "http://www.w3.org/2000/svg";
   const runtime = {
     manifest: null,
@@ -64,6 +65,7 @@
     completionReplayActive: false,
     completionReplayTimer: null,
     c2PitchBoundary: false,
+    boundaryFocusedPerson: false,
   };
 
   const byId = (id) => document.getElementById(id);
@@ -97,6 +99,10 @@
 
   function c2PitchBoundary(caseData = currentCase()) {
     return runtime.c2PitchBoundary && caseData?.task_type === "detection_gold_pitch_boundary";
+  }
+
+  function boundaryFocusedPerson(caseData = currentCase()) {
+    return runtime.boundaryFocusedPerson && caseData?.task_type === "detection_gold_pitch_boundary";
   }
 
   function staticFrameLocked(caseData = currentCase()) {
@@ -272,6 +278,31 @@
     }
     if (caseData.task_type === "detection_gold_pitch_boundary") {
       if (c2PitchBoundary(caseData)) {
+        if (boundaryFocusedPerson(caseData)) {
+          const box = clone(caseData.visible_metadata.target_initial_box_original_pixels);
+          const target = {
+            annotation_uuid: caseData.visible_metadata.target_annotation_uuid,
+            visible_body_box: box,
+            footpoint: null,
+            footpoint_status: "CANNOT_TELL",
+            footpoint_uncertainty_pixels: 20,
+            pitch_state: "BOUNDARY_UNCERTAIN",
+            pitch_state_certainty: "UNCERTAIN",
+            coarse_role: "UNKNOWN",
+            minimum_visible_dimensions: {
+              width_pixels: box.x2 - box.x1,
+              height_pixels: box.y2 - box.y1,
+            },
+          };
+          return {
+            schema_version: "m5_5g1a_c2_pitch_boundary_v1",
+            source_binding: binding,
+            visible_person_count: 1,
+            player_instances: [target],
+            candidate_relations: [],
+            note: "",
+          };
+        }
         return {
           schema_version: "m5_5g1a_c2_pitch_boundary_v1",
           source_binding: binding,
@@ -632,7 +663,7 @@
         y: box.y1,
         width: box.x2 - box.x1,
         height: box.y2 - box.y1,
-        class: `dgHumanBox ${geometryClass} ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""} ${runtime.novice && novicePolicy?.humanInteractive === false ? "dgCandidateReference" : ""}`,
+        class: `dgHumanBox ${geometryClass} ${selectedUuid === item.annotation_uuid ? "selectedObject" : ""} ${runtime.novice && novicePolicy?.humanInteractive === false ? "dgCandidateReference" : ""} ${boundaryFocusedPerson() ? "dgBoundaryTarget" : ""}`,
         "data-dg-object-uuid": item.annotation_uuid,
         tabindex: 0,
       });
@@ -648,7 +679,7 @@
           y: Math.max(16, box.y1 - 6),
           class: "dgNovicePersonLabel",
         });
-        label.textContent = `Person ${objectIndex + 1}`;
+        label.textContent = boundaryFocusedPerson() ? "TARGET" : `Person ${objectIndex + 1}`;
         svg.appendChild(label);
       }
     };
@@ -1222,15 +1253,31 @@
 
   function renderC2PitchForm(annotation) {
     const selected = selectedObject(annotation);
+    const targetOnly = boundaryFocusedPerson();
     return `<section class="dgC2Advanced">
-      <strong>${annotation.visible_person_count} visible people</strong>
-      <p>Pitch state and role are human labels. They never determine which machine box belongs to a person.</p>
-      <div class="dgInstanceList">${annotation.player_instances.map((person, index) => `<button data-dg-object-select="${person.annotation_uuid}" class="${selected?.annotation_uuid === person.annotation_uuid ? "selected" : ""}" type="button"><strong>Person ${index + 1}</strong><span>${person.coarse_role} | ${person.pitch_state} | ${person.footpoint_status}</span></button>`).join("") || "<p>No visible people marked.</p>"}</div>
+      <strong>${targetOnly ? "One highlighted target" : `${annotation.visible_person_count} visible people`}</strong>
+      <p>${targetOnly ? "Label the highlighted target person only. Other people are context." : "Pitch state and role are human labels. They never determine which machine box belongs to a person."}</p>
+      <div class="dgInstanceList">${annotation.player_instances.map((person, index) => `<button data-dg-object-select="${person.annotation_uuid}" class="${selected?.annotation_uuid === person.annotation_uuid ? "selected" : ""}" type="button"><strong>${targetOnly ? "TARGET" : `Person ${index + 1}`}</strong><span>${person.coarse_role} | ${person.pitch_state} | ${person.footpoint_status}</span></button>`).join("") || "<p>No visible people marked.</p>"}</div>
       <button id="dgC2FocusPerson" type="button" ${selected ? "" : "disabled"}>Focus selected person</button>
-      <button id="dgRemoveSelected" type="button" ${selected ? "" : "disabled"}>Remove selected person</button>
+      ${targetOnly ? "" : `<button id="dgRemoveSelected" type="button" ${selected ? "" : "disabled"}>Remove selected person</button>`}
       ${candidateBindingControls(annotation)}
       ${baseNote(annotation)}
     </section>`;
+  }
+
+  function beginRedrawSelectedVisible() {
+    const annotation = draft();
+    const selected = selectedObject(annotation);
+    if (!selected || !requireFocalAnnotationScope()) return;
+    runtime.redrawVisibleObjectUuid = selected.annotation_uuid;
+    runtime.tool = "box";
+    document.querySelectorAll("[data-dg-tool]").forEach((item) => {
+      item.classList.toggle("active", item.dataset.dgTool === "box");
+    });
+    const subject = boundaryFocusedPerson()
+      ? "the highlighted target"
+      : objectLabel(selected.annotation_uuid, annotation);
+    setSaveState(`Draw the replacement visible box for ${subject}`, false);
   }
 
   function renderFootballForm(annotation) {
@@ -1423,16 +1470,7 @@
     for (const button of document.querySelectorAll("[data-dg-object-select]")) {
       button.addEventListener("click", () => selectObject(button.dataset.dgObjectSelect));
     }
-    byId("dgRedrawSelectedVisible")?.addEventListener("click", () => {
-      const selected = selectedObject(annotation);
-      if (!selected || !requireFocalAnnotationScope()) return;
-      runtime.redrawVisibleObjectUuid = selected.annotation_uuid;
-      runtime.tool = "box";
-      document.querySelectorAll("[data-dg-tool]").forEach((item) => {
-        item.classList.toggle("active", item.dataset.dgTool === "box");
-      });
-      setSaveState(`Draw the replacement visible box for ${objectLabel(selected.annotation_uuid, annotation)}`, false);
-    });
+    byId("dgRedrawSelectedVisible")?.addEventListener("click", beginRedrawSelectedVisible);
     byId("dgRemoveSelected")?.addEventListener("click", () => removeSelectedAnnotation(annotation));
     byId("dgC2FocusPerson")?.addEventListener("click", focusSelectedPerson);
     byId("dgCandidateRelation")?.addEventListener("change", (event) => {
@@ -2063,6 +2101,9 @@
         }
       }
       if (c2PitchBoundary(caseData)) {
+        if (boundaryFocusedPerson(caseData) && annotation.player_instances.length !== 1) {
+          throw new Error("Boundary-focused review requires exactly one highlighted target person.");
+        }
         if (annotation.visible_person_count !== annotation.player_instances.length) {
           throw new Error("Visible-person count must match every marked C2 person.");
         }
@@ -2441,7 +2482,9 @@
     runtime.state = state;
     runtime.api = api;
     runtime.clientBuildId = uiConfig.question_contract.client_build_id || null;
-    runtime.c2PitchBoundary = runtime.clientBuildId === C2_CLIENT_BUILD_ID;
+    runtime.c2PitchBoundary = [C2_CLIENT_BUILD_ID, G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID].includes(runtime.clientBuildId);
+    runtime.boundaryFocusedPerson = runtime.clientBuildId === G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID
+      && uiConfig.question_contract.boundary_focused_person_gold === true;
     runtime.revisionAwareR3R1 = uiConfig.question_contract.revision_aware_wizard_state === true;
     runtime.indexedDbNamespace = uiConfig.question_contract.indexeddb_namespace || null;
     runtime.novice = uiConfig.question_contract.novice_guided_wizard === true;
@@ -2541,6 +2584,8 @@
         currentTrancheId: () => runtime.currentTrancheId,
         revisionAware: () => runtime.revisionAwareR3R1,
         c2PitchBoundary: () => runtime.c2PitchBoundary,
+        boundaryFocusedPerson: () => runtime.boundaryFocusedPerson,
+        redrawSelectedPerson: beginRedrawSelectedVisible,
         estimateHiddenFootpoint,
         focusSelectedPerson,
       });

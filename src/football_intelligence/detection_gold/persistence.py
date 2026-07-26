@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from football_intelligence.detection_gold.incremental import (
+    G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID,
     R3_R4_C2_CLIENT_BUILD_ID,
     R3_R2_R1_C1_CLIENT_BUILD_ID,
     R3_WIZARD_SCHEMA,
@@ -18,6 +19,7 @@ from football_intelligence.detection_gold.incremental import (
     authoritative_candidate_binding_hash,
     authoritative_candidate_uuids,
     authoritative_frame_record,
+    boundary_focused_person_client,
     c2_pitch_boundary_client,
     r3_enabled,
     revision_aware_client,
@@ -122,9 +124,29 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
     def _c2_enabled(self) -> bool:
         return c2_pitch_boundary_client(self.ui_config.question_contract)
 
+    def _boundary_focused_enabled(self) -> bool:
+        return boundary_focused_person_client(self.ui_config.question_contract)
+
     def _validate_annotation(self, case: Any, payload: dict[str, Any]) -> dict[str, Any]:
         if self._c2_enabled() and case.task_type == "detection_gold_pitch_boundary":
-            return validate_c2_pitch_boundary_annotation(payload)
+            annotation = validate_c2_pitch_boundary_annotation(payload)
+            if self._boundary_focused_enabled():
+                people = annotation["player_instances"]
+                if annotation["visible_person_count"] != 1 or len(people) != 1:
+                    raise ValueError("boundary-focused gold requires exactly one highlighted target person")
+                expected_candidates = authoritative_candidate_uuids(case)
+                if len(expected_candidates) != 1:
+                    raise ValueError("boundary-focused gold requires exactly one anonymous target proposal")
+                relations = annotation["candidate_relations"]
+                if len(relations) != 1 or relations[0]["candidate_uuid"] != expected_candidates[0]:
+                    raise ValueError("boundary-focused gold requires one source-bound target proposal relation")
+                targets = relations[0]["annotation_uuids"]
+                if relations[0]["relation"] in {"BACKGROUND", "AMBIGUOUS"}:
+                    if targets:
+                        raise ValueError("a background or ambiguous target proposal cannot bind a human target")
+                elif targets != [people[0]["annotation_uuid"]]:
+                    raise ValueError("the target proposal relation must bind only the highlighted target person")
+            return annotation
         return validate_case_annotation(case.task_type, payload)
 
     def _tranches(self) -> dict[str, dict[str, Any]]:
@@ -913,6 +935,28 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         filtered["completion_scope"] = "TRANCHE"
         filtered["completed_tranche_id"] = tranche_id
         decision_state_hash = stable_hash(filtered)
+        boundary_completion: dict[str, Any] | None = None
+        if self._boundary_focused_enabled():
+            contract = self.ui_config.question_contract
+            people = [
+                person
+                for annotation in filtered.get("annotations", {}).values()
+                for person in annotation.get("player_instances", [])
+            ]
+            boundary_completion = {
+                "schema_version": "football_intelligence.m5_5g6b.boundary_completion.v1",
+                "selection_specification_hash": str(contract["boundary_selection_specification_hash"]),
+                "exact_target_count": len(people),
+                "quota_shortfalls": copy.deepcopy(contract.get("boundary_quota_shortfalls", {})),
+                "source_group_count": int(contract["boundary_source_group_count"]),
+                "source_group_diversity_hash": str(contract["boundary_source_group_diversity_hash"]),
+                "human_pitch_state_counts": dict(sorted(Counter(person["pitch_state"] for person in people).items())),
+                "footpoint_visibility_counts": dict(
+                    sorted(Counter(person["footpoint_status"] for person in people).items())
+                ),
+                "prior_gold_unchanged": True,
+                "original_88_case_pilot_completed": False,
+            }
         common = {
             "review_id": self.manifest.review_id,
             "stage_id": self.manifest.stage_id,
@@ -957,6 +1001,10 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
             "reviewer_session_id": self.reviewer_session_id,
             **safety_payload(),
         }
+        if boundary_completion is not None:
+            export["boundary_completion"] = boundary_completion
+            manifest["boundary_completion"] = boundary_completion
+            summary["boundary_completion"] = boundary_completion
         root = self.decisions_root / "completed_tranches" / tranche_id
         return write_completion_transaction(
             decisions_root=root,
@@ -978,6 +1026,7 @@ class DetectionGoldPilotPersistence(GenericReviewPersistence):
         strict_request_binding = self.ui_config.question_contract.get("client_build_id") in {
             R3_R2_R1_C1_CLIENT_BUILD_ID,
             R3_R4_C2_CLIENT_BUILD_ID,
+            G6B_BOUNDARY_FOCUSED_CLIENT_BUILD_ID,
         }
         supplied_review_id = payload.get("review_id")
         if supplied_review_id not in (None, self.manifest.review_id) or (

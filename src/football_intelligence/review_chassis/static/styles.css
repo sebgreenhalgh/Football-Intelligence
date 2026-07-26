@@ -243,6 +243,16 @@ body.detectionGoldPresentation {
   stroke-width: 4;
 }
 
+.dgHumanBox.dgBoundaryTarget {
+  fill: rgba(255, 91, 131, 0.12);
+  stroke: #ff5b83;
+  stroke-width: 4;
+}
+
+.dgHumanBox.dgBoundaryTarget.selectedObject {
+  stroke: #ffffff;
+}
+
 .dgSupplementaryBox { stroke-dasharray: 7 4; fill: transparent; }
 .dgHeadBox { stroke: #a6f1ed; fill: rgba(166, 241, 237, 0.08); }
 
