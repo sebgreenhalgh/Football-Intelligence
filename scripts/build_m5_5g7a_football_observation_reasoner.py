@@ -7240,7 +7240,13 @@ def main() -> int:
                 "passed": False,
             },
         )
-    prior, sources, people = run_audit_phase(paths)
+    if not (args.refresh_review_pack or args.finalize_only):
+        prior, sources, people = run_audit_phase(paths)
+    else:
+        # Final gates are read-only over the test-bound sections 01--13.
+        # Re-running the audit phase here would replace the fully materialized
+        # label matrix with its earlier availability-only form.
+        prior, sources, people = {}, {}, {}
     if args.audit_only:
         write_json(
             STAGE / "stage_summary.json",

@@ -65,3 +65,10 @@ def test_parquet_writer_encodes_all_empty_nested_mappings_without_zero_field_str
     table = pq.read_table(output)
     assert table.to_pylist()[0]["features"]["kit_prototype_distances"] is None
     assert table.schema.metadata[b"empty_mapping_encoding"] == b"NULL_UNAMBIGUOUS_WITH_PROVENANCE_HASH"
+
+
+def test_refresh_and_finalize_skip_the_mutating_audit_phase() -> None:
+    source = __import__("inspect").getsource(load_builder().main)
+    audit_call = source.index("prior, sources, people = run_audit_phase(paths)")
+    guard = source.rfind("if not (args.refresh_review_pack or args.finalize_only):", 0, audit_call)
+    assert guard >= 0
