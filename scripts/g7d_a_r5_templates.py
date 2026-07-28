@@ -4,7 +4,7 @@
 
 from g7d_a_r4_templates import R4_HTML
 
-R5_SERVER = r"""import argparse, json, os, re, tempfile
+R5_SERVER = r"""import argparse, hashlib, json, os, re, tempfile
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +13,7 @@ from polygon_validation import validate_canonical_polygon
 PACKAGE = Path(__file__).resolve().parent
 CASES = json.loads((PACKAGE / "review_cases.json").read_text(encoding="utf-8"))["cases"]
 CASE_BY_ID = {case["match_id"]: case for case in CASES}
+REQUIRED_MATCH_IDS = ["118575", "117092"]
 EVENT_ID = re.compile(r"^[0-9a-f-]{16,64}$")
 
 
@@ -24,6 +25,37 @@ def event_files(match_id):
 def latest_event(match_id):
     files = event_files(match_id)
     return json.loads(files[-1].read_text(encoding="utf-8")) if files else None
+def hash_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024): digest.update(chunk)
+    return digest.hexdigest()
+def atomic_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    if path.exists():
+        if path.read_text(encoding="utf-8") != encoded: raise RuntimeError("immutable receipt content mismatch")
+        return
+    fd, temporary = tempfile.mkstemp(prefix=".receipt-", suffix=".json", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream: stream.write(encoded); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+def acknowledgement_receipt(event_path, event):
+    receipt_path = PACKAGE / "review_receipts" / "event_acknowledgements" / f"{event['match_id']}.json"
+    receipt = {"schema_version": "football_intelligence.g7d_a.human_event_ack_receipt.v1", "receipt_id": f"ack-{event['event_id']}", "review_id": event["review_id"], "review_revision": event["revision"], "match_id": event["match_id"], "human_event_id": event["event_id"], "human_event_relative_path": str(event_path.relative_to(PACKAGE)).replace("\\\\", "/"), "human_event_sha256": hash_file(event_path), "human_event_byte_size": event_path.stat().st_size, "server_validated": True, "case_complete": True, "validation_summary": event.get("validation", {}), "created_at_utc": timestamp(), "creation_reason": "SERVER_PERSISTED_ACKNOWLEDGEMENT", "receipt_sha256_parent_inputs": {"human_event_sha256": hash_file(event_path)}, "production_ready": False}
+    atomic_json(receipt_path, receipt)
+    return receipt_path, receipt
+def completion_receipt():
+    paths = [PACKAGE / "review_receipts" / "event_acknowledgements" / f"{match_id}.json" for match_id in REQUIRED_MATCH_IDS]
+    if not all(path.is_file() for path in paths): return None, None
+    receipts = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    refs = [{"match_id": receipt["match_id"], "receipt_id": receipt["receipt_id"], "receipt_path": str(path.relative_to(PACKAGE)).replace("\\\\", "/"), "receipt_sha256": hash_file(path)} for path, receipt in zip(paths, receipts)]
+    completion = {"schema_version": "football_intelligence.g7d_a.review_completion_receipt.v1", "completion_receipt_id": "completion-" + hashlib.sha256(json.dumps(refs, sort_keys=True).encode()).hexdigest()[:32], "review_id": "G7D_A_PITCH_POLYGON_REVIEW", "review_revision": "G7D_A_PITCH_POLYGON_REVIEW_R5", "required_match_ids": REQUIRED_MATCH_IDS, "acknowledgement_receipts": refs, "human_event_ids": [receipt["human_event_id"] for receipt in receipts], "human_event_sha256_values": [receipt["human_event_sha256"] for receipt in receipts], "all_cases_complete": True, "created_at_utc": timestamp(), "creation_reason": "SERVER_PERSISTED_TWO_CASE_COMPLETION", "production_ready": False}
+    path = PACKAGE / "review_receipts" / "completion" / "final.json"
+    atomic_json(path, completion)
+    return path, completion
 def validate(payload):
     if not isinstance(payload, dict): return None, error("INVALID_PAYLOAD", "payload", "payload must be an object")
     required = {"schema_version", "review_id", "revision", "match_id", "client_event_id", "timestamp", "alignment_answer", "first_half_polygon_source_xy", "first_half_closed", "second_half_polygon_source_xy", "second_half_closed", "frame_hashes", "source_dimensions", "coordinate_audit", "normalization"}
@@ -77,8 +109,13 @@ class Handler(BaseHTTPRequestHandler):
                 os.replace(temporary, event_path)
             finally:
                 if os.path.exists(temporary): os.unlink(temporary)
-        all_complete = all(latest_event(case["match_id"]) is not None for case in CASES)
-        self.send_json(200, {"ok": True, "event_id": event["event_id"], "match_id": payload["match_id"], "saved_path": str(event_path.relative_to(PACKAGE)).replace("\\\\", "/"), "server_timestamp": event["server_timestamp"], "case_complete": True, "all_cases_complete": all_complete, "validation": result["validation"]})
+        try:
+            acknowledgement_path, acknowledgement = acknowledgement_receipt(event_path, event)
+            completion_path, completion = completion_receipt()
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.send_json(500, error("RECEIPT_PERSISTENCE_FAILED", "receipt", "event persisted but acknowledgement receipt could not be persisted", {"reason": str(exc)})); return
+        all_complete = completion is not None
+        self.send_json(200, {"ok": True, "event_id": event["event_id"], "match_id": payload["match_id"], "saved_path": str(event_path.relative_to(PACKAGE)).replace("\\\\", "/"), "server_timestamp": event["server_timestamp"], "receipt_id": acknowledgement["receipt_id"], "receipt_path": str(acknowledgement_path.relative_to(PACKAGE)).replace("\\\\", "/"), "case_complete": True, "all_cases_complete": all_complete, "completion_receipt_id": completion["completion_receipt_id"] if completion else None, "completion_receipt_path": str(completion_path.relative_to(PACKAGE)).replace("\\\\", "/") if completion_path else None, "validation": result["validation"]})
 
 
 if __name__ == "__main__":

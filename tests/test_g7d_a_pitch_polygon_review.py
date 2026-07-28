@@ -192,11 +192,15 @@ def test_r4_save_acknowledgement_idempotency_and_completion() -> None:
             first = post(save_payload(cases[0], "11111111-1111-4111-8111-111111111111", polygon=dense_pitch_polygon()))
             assert first["ok"] and first["case_complete"] and not first["all_cases_complete"]
             assert first["saved_path"].startswith("review_events/118575/")
+            assert first["receipt_id"].startswith("ack-")
+            assert (isolated / first["receipt_path"]).exists()
             repeat = post(save_payload(cases[0], "11111111-1111-4111-8111-111111111111", polygon=dense_pitch_polygon()))
             assert repeat["event_id"] == first["event_id"]
             assert len(list((isolated / "review_events" / "118575").glob("*.json"))) == 1
             second = post(save_payload(cases[1], "22222222-2222-4222-8222-222222222222", polygon=dense_pitch_polygon()))
             assert second["all_cases_complete"]
+            assert second["completion_receipt_id"].startswith("completion-")
+            assert (isolated / second["completion_receipt_path"]).exists()
             restored = json.loads(urlopen("http://127.0.0.1:8814/api/cases", timeout=3).read())
             assert restored["saved_events"]["118575"]["event_id"] == first["event_id"]
             bad = save_payload(cases[0], "33333333-3333-4333-8333-333333333333")
@@ -261,3 +265,25 @@ def test_r5_canonical_closure_and_field_level_geometry_validation() -> None:
         validate_canonical_polygon([[0, 0], [100, 0], [200, 0], [300, 0]], True, 4096, 1080)["error_code"]
         == "ZERO_AREA"
     )
+
+
+def test_r6a_append_only_receipts_and_event_immutability() -> None:
+    receipts = WORKSPACE / "06_PITCH_POLYGON_REVIEW_PACKAGE" / "review_receipts"
+    events = PACKAGE / "review_events"
+    assert sorted(path.name for path in receipts.glob("event_acknowledgements/*.json")) == [
+        "117092.json",
+        "118575.json",
+    ]
+    completion = load(receipts / "completion" / "final.json")
+    assert completion["required_match_ids"] == ["118575", "117092"]
+    assert completion["all_cases_complete"] is True
+    assert len(completion["acknowledgement_receipts"]) == 2
+    for match_id in ("118575", "117092"):
+        event = next(events.joinpath(match_id).glob("*.json"))
+        receipt = load(receipts / "event_acknowledgements" / f"{match_id}.json")
+        assert receipt["human_event_sha256"] == hashlib.sha256(event.read_bytes()).hexdigest()
+        assert receipt["case_complete"] is True
+        assert receipt["creation_reason"] == "AUTHORIZED_POST_HOC_ACKNOWLEDGEMENT_RECEIPT_BACKFILL"
+        assert "synthetic" not in event.read_text(encoding="utf-8").lower()
+    assert not (ROOT / "matches" / "118575" / "calibration" / "pitch_polygon_v1" / "pitch_polygon.json").exists()
+    assert not (ROOT / "matches" / "117092" / "calibration" / "pitch_polygon_v1" / "pitch_polygon.json").exists()
