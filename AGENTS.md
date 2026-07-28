@@ -1,79 +1,260 @@
-# AGENTS.md — SoccerTrack v2 (public)
+# AGENTS.md
 
-Working rules for AI agents (and humans) operating in **this** repo: the public dataset + code + landing page for SoccerTrack v2.
+## Purpose
 
-The **journal paper** lives in a separate private repo, [`AtomScott/soccertrack-v2-paper`](https://github.com/AtomScott/soccertrack-v2-paper). Don't reference paper-internal things from here. The arXiv preprint (<https://arxiv.org/abs/2508.01802>) is the public surface.
+This file contains the stable operating instructions for automated coding agents working in the Football Intelligence Infrastructure repository.
 
-## What this repo is
+Repository:
 
-Five things:
-
-1. **Dataset tooling** — `src/`, `scripts/`, `notebooks/`. Pipelines that build the SoccerTrack v2 ground truth from raw BePro panoramic recordings.
-2. **Public landing page + developer docs** — `docs/`. Served via GitHub Pages at <https://atomscott.github.io/SoccerTrack-v2/>. Includes [`docs/leaderboard.html`](docs/leaderboard.html), [`docs/format-gsr.md`](docs/format-gsr.md), [`docs/format-bas.md`](docs/format-bas.md).
-3. **Dataset loader + evaluation CLIs** — `src/data_utils/soccertrack_v2.py`, `src/evaluation/{gs_hota,bas_map,mot_hota}.py`. Zero-ceremony access to annotations + reference metrics.
-4. **Baseline starter kits** — `baselines/{gsr,bas,mot}/`. Thin scaffolds (config + train + eval) that define the submission flow.
-5. **Public release artefacts** — LICENSE / LICENSE-DATA, CONTRIBUTING.md, CI under `.github/workflows/`, issue templates. See [`docs/TODO.md`](docs/TODO.md) for what remains.
-
-## Working in public
-
-This is a **build-in-public** project. Default to openness:
-
-- Issues, PRs, discussions all happen here.
-- Roadmap is `docs/TODO.md`. Edit it freely; tick items as you ship.
-- When something benefits external researchers (loaders, baselines, eval scripts, demo notebooks), it lands here.
-- When something is paper-only (draft prose, baseline numbers we're still refining for the paper, internal scratch), it goes in the private paper repo.
-
-## Git workflow
-
-- **Default**: commit directly to `main` and `git push`. No PR ceremony for routine work.
-- **Branches**: only when an experiment might not pan out, or work spans many commits that should land atomically. Name them `feature/<thing>`, `fix/<thing>`, `docs/<thing>`, or `experiment/<thing>`.
-- **External PRs**: review like any open-source project. Squash-merge by default.
-- **Commit messages**: imperative, one-line subject + optional body. Reference paths so reviewers can jump (e.g. ``"Add task-page links to `docs/index-ja.html`"``).
-
-## Common commands
-
-Use the [`Makefile`](Makefile):
-
-```bash
-make help           # list targets
-make serve-docs     # http://localhost:8000 (override with DOCS_PORT=...)
-make format         # ruff autofix on src/
+```text
+C:\Users\sebgr\Documents\football-intelligence\SoccerTrack-v2
 ```
 
-## Docs conventions (`docs/`)
+Expected branch:
 
-- **Public landing page**: `docs/index.html` (EN) and `docs/index-ja.html` (JA). Treat them as a pair — when EN content changes substantively, update JA in the same commit (or add a TODO).
-- **Task pages**: `docs/task-{gsr,bas,mot}.html`. Linked from both index pages.
-- **Assets**: `docs/assets/`. Don't commit videos > ~30 MB without compressing first; consider hosting on HF instead.
-- **Markdown developer docs**: `docs/*.md`. Cross-link from the relevant code/script.
-- **Local preview**: `make serve-docs` → <http://localhost:8000>.
-- **Hosting**: GitHub Pages serves `docs/` from this repo's `main` branch. Pushes go live in ~1 minute.
-- **Format specs (`format-gsr.md`, `format-bas.md`)** are TODO; add them when the dataset annotation schema is final.
+```text
+main
+```
 
-## Code conventions (`src/`, `scripts/`)
+External project-data root:
 
-- Run `make format` before committing.
-- Type hints on public functions; minimal docstrings (one line: what + non-obvious assumptions).
-- Don't add a new heavy dependency without checking if `pyproject.toml` already has something equivalent.
-- Pipeline shell scripts live in `scripts/`; reusable Python lives in `src/`.
+```text
+C:\Users\sebgr\Documents\football-intelligence
+```
 
-## Issue / bug triage workflow
+## Required reading order
 
-When someone reports an issue:
+Before beginning a Football Intelligence task, read:
 
-1. **Reproduce locally** before changing anything. If you can't, ask for the smallest input that does.
-2. **Classify** the fix:
-   - **Docs / website** → fix in `docs/`, tick the relevant item in `docs/TODO.md`.
-   - **Code / pipeline** → fix in `src/` or `scripts/`. Land on `main` directly if low-risk; branch + ask for review if it touches annotation parsing or evaluation.
-   - **Dataset content** (bad annotation, missing match, wrong metadata) → log under `docs/TODO.md` "Dataset release" and address as a batched re-release.
-   - **Paper-related** → if it's about the dataset itself or how it's documented, fix here. If it's about paper prose / unpublished baseline numbers, that belongs in the private paper repo.
-3. **Smallest possible fix.** Don't refactor surrounding code while you're in there.
-4. **Commit message** should reference the issue (`Fix #N: …`) and the file(s) touched.
+```text
+AGENTS.md
+docs\football_intelligence\CURRENT_STATE.md
+docs\football_intelligence\SAFETY_CONTRACT.md
+docs\football_intelligence\DATA_LAYOUT.md
+docs\football_intelligence\ONTOLOGY.md
+docs\football_intelligence\NEXT_STAGE.md
+```
 
-## Defaults agents should follow
+Read historical workspaces or review packs only when:
 
-- Don't reformat files you didn't touch.
-- Don't add docstrings/comments that just narrate code.
-- Don't make placeholder PRs. Ship to `main` or don't ship.
-- When you finish a task, leave [`docs/TODO.md`](docs/TODO.md) tidy: tick what's done, add anything new you discovered.
-- If a change affects external users (breaking API, schema change, removed feature), call it out in the commit message and update `README.md` / `docs/`.
+- the authorized task explicitly names them;
+- a canonical hash or provenance check fails;
+- exact historical behavior must be reproduced;
+- the current canonical documents are insufficient.
+
+Do not scan every historical run by default.
+
+## Repository and data boundaries
+
+The Git repository contains:
+
+- source code;
+- tests;
+- schemas;
+- compact documentation;
+- lightweight configuration.
+
+Large or mutable project data must remain outside Git:
+
+```text
+matches\
+datasets\
+experiments\
+models\
+```
+
+Do not commit:
+
+- videos;
+- model weights;
+- embeddings;
+- large Parquet files;
+- raw downloaded datasets;
+- credentials;
+- full human decision payloads;
+- temporary caches.
+
+## Immutable evidence
+
+Treat the following as immutable unless the task explicitly authorizes a versioned replacement:
+
+- source videos and dataset files;
+- human annotation decisions;
+- completed review ledgers;
+- frozen case manifests;
+- historical stage outputs;
+- approved pitch polygons;
+- model checkpoint files and hashes;
+- frozen dataset splits;
+- sealed-holdout membership.
+
+Never silently rewrite history.
+
+Corrections must be:
+
+- append-only where possible;
+- versioned;
+- linked to the superseded artifact;
+- accompanied by an audit trail.
+
+## Standard safety state
+
+Unless a task explicitly changes the boundary:
+
+```text
+VISUAL_ONLY_NOT_METRIC
+sandbox_only=true
+no_auto_promotion=true
+production_ready=false
+```
+
+Do not calculate or claim:
+
+- speed;
+- distance;
+- fatigue;
+- physical load;
+- team shape;
+- tactical conclusions;
+- pass, dribble, shot, possession, or event metrics;
+- stable player identity.
+
+Do not create identity tracking or temporal predicted observations unless explicitly authorized.
+
+## Football-specific invariants
+
+- Team labels are match-local.
+- Team colours must be human-confirmed for every match.
+- For match `128058`, the historical convention is `TEAM_1 = BLUE` and `TEAM_2 = WHITE`.
+- Goalkeeper role and team affiliation are separate fields.
+- There may be one active goalkeeper per team, but the system must not force goalkeeper detections.
+- Pitch state and participation state are separate.
+- An active player may be temporarily outside the pitch polygon.
+- Off-pitch warming players, staff, and spectators are out of scope for the primary MVP observation population.
+- Do not force exactly 22 visible people.
+- Do not invent people to satisfy a count prior.
+- The human-confirmed pitch polygon is authoritative for the MVP.
+- The model estimates footpoints and uncertainty; deterministic geometry assigns pitch state.
+
+## Development population
+
+The primary MVP observation population is:
+
+```text
+TEAM_1 active outfield players
+TEAM_2 active outfield players
+TEAM_1 active goalkeeper
+TEAM_2 active goalkeeper
+relevant match officials
+```
+
+Peripheral off-pitch people should normally route to:
+
+```text
+OUT_OF_SCOPE_PERSON
+```
+
+They must not leak into accepted active observations.
+
+## Coding behavior
+
+Before changing code:
+
+1. Validate the repository, branch, ancestry, and worktree.
+2. Identify the exact authorized phase.
+3. List the files permitted to change.
+4. Validate all named input hashes.
+5. Stop if the task boundary is ambiguous.
+
+During implementation:
+
+- prefer small, testable changes;
+- preserve deterministic behavior;
+- keep provenance in every derived row;
+- use explicit schemas;
+- avoid hidden global defaults;
+- keep machine-generated coordinates in source-coordinate lineage;
+- separate evaluator truth from runtime inputs;
+- never use human target geometry to construct runtime crops unless explicitly authorized.
+
+## Testing policy
+
+For ordinary bounded tasks:
+
+1. run focused tests;
+2. run relevant regressions only when integration is complete;
+3. run the full suite once at the end of a major stage;
+4. save successful logs to workspace files;
+5. inspect full logs only on failure.
+
+Standard commands may include:
+
+```powershell
+uv lock --check
+uv sync
+.\.venv\Scripts\python.exe -c "import torch; assert torch.cuda.is_available()"
+uv run ruff check <changed files>
+uv run ruff format --check <changed files>
+uv run pytest <focused tests> -q
+uv run pytest <relevant regressions> -q
+uv run pytest -q
+uv run fi-pipeline --help
+uv run fi-pipeline review-chassis --help
+git diff --check
+```
+
+Do not weaken existing tests.
+
+## Review-pack defaults
+
+Unless a task requires otherwise:
+
+- flat pack;
+- no more than 8–10 files;
+- no more than two visuals;
+- include a complete source diff;
+- include one consolidated results file;
+- include one tests/safety file;
+- include a non-recursive SHA-256/size manifest;
+- exclude weights, video, credentials, large training tables, and full human decisions.
+
+## Cost-conservation contract
+
+Default model intention:
+
+```text
+GPT-5.6 Terra
+```
+
+Use Luna for simple inventories, manifests, packaging, and mechanical scripts.
+
+Use Sol only for a bounded architecture decision or difficult audit that Terra cannot complete reliably.
+
+Every task should contain one phase only.
+
+Do not:
+
+- conduct open-ended research unless authorized;
+- repeat validated inference;
+- rebuild cached embeddings when hashes match;
+- inspect every historical workspace;
+- run the full test suite during every subtask;
+- generate multiple redundant reports;
+- continue into the next phase without approval.
+
+Prefer a final response of no more than 20 lines. Put detailed evidence in files.
+
+## Commit and push
+
+Only commit and push when the task explicitly authorizes it.
+
+Before committing:
+
+- inspect the complete diff;
+- verify no large files or weights are tracked;
+- verify historical gold is unchanged;
+- verify local and remote repository identity;
+- verify tests pass;
+- verify no component has been promoted.
+
+Do not push to any repository other than the expected Football Intelligence repository.
