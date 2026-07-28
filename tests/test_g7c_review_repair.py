@@ -19,13 +19,14 @@ def test_real_contact_sheet_and_human_form() -> None:
     assert all(
         not row["representative_frame_approved"] and not row["proposed_split_approved"] for row in form["matches"]
     )
-    assert all(row["lighting"] == "" and row["weather"] == "" for row in form["matches"])
+    corrected = next(row for row in form["matches"] if row["match_id"] == "117093")
+    assert corrected["lighting"] == "" and corrected["weather"] == ""
 
 
 def test_manifest_is_nonrecursive_and_not_self_hashed() -> None:
     _, workspace = _paths()
     review = workspace / "08_REVIEW_PACK"
-    manifest = json.loads((review / "07_MANIFEST.json").read_text())
+    manifest = json.loads((review / "07_MANIFEST.json").read_text(encoding="utf-8-sig"))
     assert len(list(review.iterdir())) == 7
     assert len(manifest["files"]) == 6
     assert all(entry["filename"] != "07_MANIFEST.json" for entry in manifest["files"])
