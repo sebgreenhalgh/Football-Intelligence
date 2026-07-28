@@ -113,7 +113,7 @@ def main() -> None:
         },
     )
     (package / "review_server.py").write_text(SERVER, encoding="utf-8")
-    (package / "index.html").write_text(HTML, encoding="utf-8")
+    (package / "index.html").write_text(R3_HTML, encoding="utf-8")
     (package / "launch_pitch_polygon_review.ps1").write_text(
         "$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath $PSScriptRoot\n"
         "python .\\review_server.py --port 8812\n",
@@ -207,6 +207,42 @@ function r2Project(poly,img,target){return poly.map(p=>[p[0]*target.width/img.na
 function r2Render(){if(!r2First.complete||!r2Second.complete)return;r2SecondCanvas.width=r2Second.naturalWidth;r2SecondCanvas.height=r2Second.naturalHeight;const c=r2SecondCanvas.getContext("2d");c.clearRect(0,0,r2SecondCanvas.width,r2SecondCanvas.height);const poly=r2Align.value==="NO"?r2SecondPoints:points;const isClosed=r2Align.value==="NO"?r2SecondClosed:closed;if(!poly.length)return;const projected=r2Project(poly,r2Second,r2SecondCanvas);c.strokeStyle="#49e6ff";c.lineWidth=Math.max(3,c.canvas.width/1000);c.beginPath();projected.forEach((p,i)=>i?c.lineTo(...p):c.moveTo(...p));if(isClosed)c.closePath();c.stroke();projected.forEach(p=>{c.fillStyle="#49e6ff";c.fillRect(p[0]-5,p[1]-5,10,10)});r2OverlayReady=loaded.first&&loaded.second&&points.length>=4&&closed;r2Align.disabled=!r2OverlayReady;r2Save.disabled=!r2OverlayReady||!r2Align.value||(r2Align.value==="NO"&&(r2SecondPoints.length<4||!r2SecondClosed))};
 const r2OldDraw=draw;r2First.onload=()=>{loaded.first=true;r2OldDraw();r2Render()};r2Second.onload=()=>{loaded.second=true;r2Render()};r2SecondCanvas.onclick=e=>{if(r2Align.value==="NO"&&!r2SecondClosed){const r=r2SecondCanvas.getBoundingClientRect();r2SecondPoints.push([Math.round((e.clientX-r.left)*r2SecondCanvas.width/r.width),Math.round((e.clientY-r.top)*r2SecondCanvas.height/r.height)]);r2Render()}};
 const r2OldClose=closePolygon;closePolygon=()=>{if(r2Align.value==="NO"&&r2SecondPoints.length>=4)r2SecondClosed=true;else r2OldClose();r2Render()};const r2OldUndo=undo;undo=()=>{if(r2Align.value==="NO"&&r2SecondPoints.length&&!r2SecondClosed)r2SecondPoints.pop();else r2OldUndo();r2Render()};const r2OldClear=clearPolygon;clearPolygon=()=>{r2SecondPoints=[];r2SecondClosed=false;r2OldClear();r2Render()};const r2OldSave=save;save=()=>{if(!r2OverlayReady||!r2Align.value||(r2Align.value==="NO"&&!r2SecondClosed))return;r2OldSave()};r2Align.onchange=()=>{if(r2Align.value!=="NO"){r2SecondPoints=[];r2SecondClosed=false}r2Render()};window.addEventListener("resize",r2Render);
+</script>"""
+
+R3_HTML = """<!doctype html>
+<meta charset="utf-8"><title>G7D-A Pitch Polygon Review R3</title>
+<style>
+body{font:14px sans-serif;background:#17202a;color:#eee;margin:20px}.panel{display:inline-block;vertical-align:top;margin:6px}.stage{position:relative;display:inline-block}.stage img{display:block;max-width:620px;max-height:430px;border:1px solid #8aa4b8}.stage canvas{position:absolute;inset:0;width:100%;height:100%}button,select{margin:4px;padding:7px}.state{min-height:20px;color:#ffd27f}.verified{color:#9fda9f}
+</style>
+<h1>G7D-A Pitch Polygon Review</h1>
+<select id="case"><option>118575</option><option>117092</option></select>
+<button id="undo">Undo last point</button><button id="clear">Clear</button><button id="close">Close polygon</button><button id="save" disabled>Save</button>
+<div id="audit">Coordinate mapping: checking…</div>
+<div class="panel"><strong>FIRST HALF — DRAW HERE</strong><div id="firstState" class="state">Loading first-half frame…</div><div class="stage"><img id="first"><canvas id="firstOverlay"></canvas></div></div>
+<div class="panel"><strong>SECOND HALF — READ-ONLY ALIGNMENT CHECK</strong><div id="secondState" class="state">Loading second-half frame…</div><div class="stage"><img id="second"><canvas id="secondOverlay"></canvas></div></div>
+<p>Second-half alignment: <select id="alignment" disabled><option value="">Choose…</option><option>YES</option><option>NO</option><option>UNCERTAIN</option></select> Vertices: <span id="count">0</span></p>
+<script>
+let cases=[],active=null,firstPoints=[],secondPoints=[],closed=false,secondClosed=false,loaded={first:false,second:false},auditOk=false;
+const first=document.querySelector("#first"),second=document.querySelector("#second"),firstCanvas=document.querySelector("#firstOverlay"),secondCanvas=document.querySelector("#secondOverlay"),align=document.querySelector("#alignment"),saveButton=document.querySelector("#save");
+function dims(image){return {source_width:image.naturalWidth,source_height:image.naturalHeight,displayed_image_content_left:image.getBoundingClientRect().left,displayed_image_content_top:image.getBoundingClientRect().top,displayed_image_content_width:image.getBoundingClientRect().width,displayed_image_content_height:image.getBoundingClientRect().height,canvas_backing_width:Math.round(image.naturalWidth*(window.devicePixelRatio||1)),canvas_backing_height:Math.round(image.naturalHeight*(window.devicePixelRatio||1)),device_pixel_ratio:window.devicePixelRatio||1}}
+function displayToSource(clientX,clientY,t){return [(clientX-t.displayed_image_content_left)*t.source_width/t.displayed_image_content_width,(clientY-t.displayed_image_content_top)*t.source_height/t.displayed_image_content_height]}
+function sourceToDisplay(point,t){return [t.displayed_image_content_left+point[0]*t.displayed_image_content_width/t.source_width,t.displayed_image_content_top+point[1]*t.displayed_image_content_height/t.source_height]}
+function sourceToCanvas(point,t){return [point[0]*t.canvas_backing_width/t.source_width,point[1]*t.canvas_backing_height/t.source_height]}
+function configure(canvas,image){const t=dims(image);canvas.width=t.canvas_backing_width;canvas.height=t.canvas_backing_height;return t}
+function render(canvas,image,points,isClosed,color){if(!loaded.first||!loaded.second)return false;const t=configure(canvas,image),c=canvas.getContext("2d");c.clearRect(0,0,canvas.width,canvas.height);if(!points.length)return true;const p=points.map(x=>sourceToCanvas(x,t));c.strokeStyle=color;c.lineWidth=3*t.device_pixel_ratio;c.beginPath();p.forEach((x,i)=>i?c.lineTo(...x):c.moveTo(...x));if(isClosed)c.closePath();c.stroke();p.forEach(x=>{c.fillStyle=color;c.fillRect(x[0]-4*t.device_pixel_ratio,x[1]-4*t.device_pixel_ratio,8*t.device_pixel_ratio,8*t.device_pixel_ratio)});return true}
+function valid(p,isClosed){return p.length>=4&&isClosed}
+function audit(){if(!loaded.first||!loaded.second)return false;let max=0;for(const image of [first,second]){const t=dims(image),pts=[[0,0],[t.source_width,0],[t.source_width,t.source_height],[0,t.source_height],[t.source_width/2,t.source_height/2],[.19*t.source_width,.11*t.source_height],[.76*t.source_width,.85*t.source_height],[.46*t.source_width,.33*t.source_height],[.93*t.source_width,.93*t.source_height]];for(const p of pts){const d=sourceToDisplay(p,t),back=displayToSource(d[0],d[1],t),again=sourceToDisplay(back,t);max=Math.max(max,Math.hypot(again[0]-d[0],again[1]-d[1]),Math.abs(back[0]-p[0]),Math.abs(back[1]-p[1]))}}auditOk=max<=1;document.querySelector("#audit").textContent=auditOk?"Coordinate mapping: VERIFIED | First-half round-trip max error: "+max.toFixed(3)+" CSS px | Second-half projection: VERIFIED":"Coordinate mapping: FAILED";return auditOk}
+function redraw(){const overlay=render(firstCanvas,first,firstPoints,closed,"#ffcc00")&&render(secondCanvas,second,align.value==="NO"?secondPoints:firstPoints,align.value==="NO"?secondClosed:closed,"#49e6ff");const ready=audit()&&overlay&&valid(firstPoints,closed);align.disabled=!ready;saveButton.disabled=!ready||!align.value||(align.value==="NO"&&!valid(secondPoints,secondClosed));document.querySelector("#count").textContent=firstPoints.length}
+function pointFromEvent(e,image){const t=dims(image);return displayToSource(e.clientX,e.clientY,t)}
+firstCanvas.onclick=e=>{if(loaded.first&&!closed){firstPoints.push(pointFromEvent(e,first));redraw()}};
+secondCanvas.onclick=e=>{if(align.value==="NO"&&loaded.second&&!secondClosed){secondPoints.push(pointFromEvent(e,second));redraw()}};
+document.querySelector("#undo").onclick=()=>{if(align.value==="NO"&&secondPoints.length&&!secondClosed)secondPoints.pop();else {firstPoints.pop();closed=false}redraw()};
+document.querySelector("#clear").onclick=()=>{firstPoints=[];secondPoints=[];closed=false;secondClosed=false;redraw()};
+document.querySelector("#close").onclick=()=>{if(align.value==="NO"&&secondPoints.length>=4)secondClosed=true;else if(firstPoints.length>=4)closed=true;redraw()};
+align.onchange=()=>{if(align.value!=="NO"){secondPoints=[];secondClosed=false}redraw()};window.addEventListener("resize",redraw);
+function wire(image,key,label){image.onload=()=>{loaded[key]=true;document.querySelector("#"+key+"State").textContent=label+" loaded ("+image.naturalWidth+"x"+image.naturalHeight+")";redraw()};image.onerror=()=>{loaded[key]=false;document.querySelector("#"+key+"State").textContent="ERROR "+label+": do not annotate";redraw()}}
+async function loadCase(){firstPoints=[];secondPoints=[];closed=false;secondClosed=false;loaded={first:false,second:false};align.value="";active=cases.find(x=>x.match_id===document.querySelector("#case").value);wire(first,"first","First-half frame");wire(second,"second","Second-half frame");first.src=active.asset_urls.first;second.src=active.asset_urls.second;redraw()}
+document.querySelector("#case").onchange=loadCase;fetch("/api/cases").then(r=>r.json()).then(x=>{cases=x.cases;loadCase()});
 </script>"""
 
 
