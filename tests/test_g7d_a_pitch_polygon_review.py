@@ -9,6 +9,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from g7d_a_polygon_validation import normalize_client_vertices, validate_canonical_polygon
+
 
 ROOT = Path(r"C:\Users\sebgr\Documents\football-intelligence")
 WORKSPACE = ROOT / r"experiments\football_observation_reasoner\part 5\G7D_A_TWO_MATCH_SETUP_AND_PITCH_POLYGON_REVIEW_v1"
@@ -122,14 +125,24 @@ def test_canonical_transform_round_trip_and_r3_contract() -> None:
     assert "firstPoints=[];secondPoints=[]" in html
 
 
-def save_payload(case: dict, event_id: str, alignment: str = "YES") -> dict:
+def dense_pitch_polygon() -> list[list[float]]:
+    top = [[300 + 340 * index, 180 + (index % 2)] for index in range(11)]
+    right = [[3700 + (index % 2), 260 + 95 * index] for index in range(8)]
+    bottom = [[3600 - 330 * index, 980 - (index % 2)] for index in range(10)]
+    left = [[300 - (index % 2), 880 - 100 * index] for index in range(8)]
+    polygon = top + right + bottom + left
+    assert len(polygon) == 37
+    return polygon
+
+
+def save_payload(case: dict, event_id: str, alignment: str = "YES", polygon: list[list[float]] | None = None) -> dict:
     first = case["source_frames"]["first"]
     second = case["source_frames"]["second"]
-    polygon = [[10, 10], [100, 10], [100, 80], [10, 80]]
+    polygon = polygon or [[10, 10], [100, 10], [100, 80], [10, 80]]
     return {
         "schema_version": "football_intelligence.g7d_a.pitch_polygon_review_event.v1",
         "review_id": "G7D_A_PITCH_POLYGON_REVIEW",
-        "revision": "G7D_A_PITCH_POLYGON_REVIEW_R4",
+        "revision": "G7D_A_PITCH_POLYGON_REVIEW_R5",
         "match_id": case["match_id"],
         "client_event_id": event_id,
         "timestamp": "2026-07-28T21:00:00Z",
@@ -148,6 +161,11 @@ def save_payload(case: dict, event_id: str, alignment: str = "YES") -> dict:
             "first_half_round_trip_max_error_css_px": 0,
             "second_half_projection_verified": True,
         },
+        "normalization": {
+            "closure_convention": "distinct_vertices_once_plus_closed_true",
+            "removed_exact_adjacent_vertex_indices": [],
+            "removed_exact_terminal_duplicate": False,
+        },
     }
 
 
@@ -156,6 +174,7 @@ def test_r4_save_acknowledgement_idempotency_and_completion() -> None:
         isolated = Path(temporary)
         shutil.copy2(PACKAGE / "review_server.py", isolated / "review_server.py")
         shutil.copy2(PACKAGE / "review_cases.json", isolated / "review_cases.json")
+        shutil.copy2(PACKAGE / "polygon_validation.py", isolated / "polygon_validation.py")
         process = subprocess.Popen([sys.executable, "review_server.py", "--port", "8814"], cwd=isolated)
         try:
             time.sleep(0.25)
@@ -170,13 +189,13 @@ def test_r4_save_acknowledgement_idempotency_and_completion() -> None:
                 )
                 return json.loads(urlopen(request, timeout=3).read())
 
-            first = post(save_payload(cases[0], "11111111-1111-4111-8111-111111111111"))
+            first = post(save_payload(cases[0], "11111111-1111-4111-8111-111111111111", polygon=dense_pitch_polygon()))
             assert first["ok"] and first["case_complete"] and not first["all_cases_complete"]
             assert first["saved_path"].startswith("review_events/118575/")
-            repeat = post(save_payload(cases[0], "11111111-1111-4111-8111-111111111111"))
+            repeat = post(save_payload(cases[0], "11111111-1111-4111-8111-111111111111", polygon=dense_pitch_polygon()))
             assert repeat["event_id"] == first["event_id"]
             assert len(list((isolated / "review_events" / "118575").glob("*.json"))) == 1
-            second = post(save_payload(cases[1], "22222222-2222-4222-8222-222222222222"))
+            second = post(save_payload(cases[1], "22222222-2222-4222-8222-222222222222", polygon=dense_pitch_polygon()))
             assert second["all_cases_complete"]
             restored = json.loads(urlopen("http://127.0.0.1:8814/api/cases", timeout=3).read())
             assert restored["saved_events"]["118575"]["event_id"] == first["event_id"]
@@ -187,6 +206,7 @@ def test_r4_save_acknowledgement_idempotency_and_completion() -> None:
                 raise AssertionError("invalid canonical polygon unexpectedly saved")
             except HTTPError as error:
                 assert error.code == 422
+                assert json.loads(error.read())["error_code"] == "OUT_OF_BOUNDS_VERTEX"
         finally:
             process.terminate()
             process.wait(timeout=5)
@@ -205,5 +225,39 @@ def test_r4_ui_save_binding_and_unsaved_guard_contract() -> None:
         "ALL CASES COMPLETE",
         "first_half_polygon_source_xy",
         "coordinate_audit",
+        "normalizeVertices",
+        "Outgoing canonical payload:",
+        "Server validation:",
     ):
         assert required in html
+
+
+def test_r5_canonical_closure_and_field_level_geometry_validation() -> None:
+    dense = dense_pitch_polygon()
+    terminal_duplicate, metadata = normalize_client_vertices(dense + [dense[0]], closed=True)
+    assert terminal_duplicate == dense
+    assert metadata["removed_exact_terminal_duplicate"]
+    adjacent_duplicate, metadata = normalize_client_vertices(dense[:8] + [dense[7]] + dense[8:], closed=True)
+    assert len(adjacent_duplicate) == len(dense)
+    assert metadata["removed_exact_adjacent_vertex_indices"] == [8]
+    accepted = validate_canonical_polygon(dense, True, 4096, 1080)
+    assert accepted["ok"] and accepted["details"]["vertex_count"] == 37
+    crossing = validate_canonical_polygon([[0, 0], [100, 100], [0, 100], [100, 0]], True, 4096, 1080)
+    assert crossing["error_code"] == "SELF_INTERSECTION"
+    duplicate = validate_canonical_polygon([[0, 0], [100, 0], [100, 0], [0, 100]], True, 4096, 1080)
+    assert duplicate["error_code"] == "DUPLICATE_OR_ZERO_LENGTH_EDGE"
+    terminal = validate_canonical_polygon([[0, 0], [100, 0], [100, 100], [0, 0]], True, 4096, 1080)
+    assert terminal["error_code"] == "DUPLICATE_TERMINAL_VERTEX"
+    assert validate_canonical_polygon([[0, 0], [100, 0], [100, 100], [0, 200]], True, 4096, 1080)["ok"]
+    assert (
+        validate_canonical_polygon([[0, 0], [100, 0], [100, 100], [0, float("inf")]], True, 4096, 1080)["error_code"]
+        == "NON_FINITE_VERTEX"
+    )
+    assert (
+        validate_canonical_polygon([[0, 0], [100, 0], [100, 100], [-1, 10]], True, 4096, 1080)["error_code"]
+        == "OUT_OF_BOUNDS_VERTEX"
+    )
+    assert (
+        validate_canonical_polygon([[0, 0], [100, 0], [200, 0], [300, 0]], True, 4096, 1080)["error_code"]
+        == "ZERO_AREA"
+    )

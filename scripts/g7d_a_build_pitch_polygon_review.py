@@ -6,10 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
-from g7d_a_r4_templates import R4_HTML, R4_SERVER
+from g7d_a_r5_templates import R5_HTML, R5_SERVER
 
 MATCHES = ["118575", "117092"]
 
@@ -114,8 +115,9 @@ def main() -> None:
             "save_root": "review_events",
         },
     )
-    (package / "review_server.py").write_text(R4_SERVER, encoding="utf-8")
-    (package / "index.html").write_text(R4_HTML, encoding="utf-8")
+    shutil.copyfile(Path(__file__).with_name("g7d_a_polygon_validation.py"), package / "polygon_validation.py")
+    (package / "review_server.py").write_text(R5_SERVER, encoding="utf-8")
+    (package / "index.html").write_text(R5_HTML, encoding="utf-8")
     (package / "launch_pitch_polygon_review.ps1").write_text(
         "$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath $PSScriptRoot\n"
         "python .\\review_server.py --port 8812\n",
