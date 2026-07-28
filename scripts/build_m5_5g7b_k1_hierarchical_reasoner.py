@@ -3295,7 +3295,10 @@ def _render_k1_atlas(paths: dict[str, Path], inputs: dict[str, Any], node_eval: 
     )
     extend(worst, 20 - len(selected))
     selected = selected[:20]
-    canvas = Image.new("RGB", (1500, 4 * 250 + 55), "white")
+    tile_width = 450
+    tile_height = 285
+    columns = 4
+    canvas = Image.new("RGB", (columns * tile_width, 5 * tile_height + 65), "white")
     draw = ImageDraw.Draw(canvas)
     draw.text((12, 12), "K1 grouped-OOF truth/prediction: role | team | kit | participation", fill="black")
     draw.text(
@@ -3304,12 +3307,12 @@ def _render_k1_atlas(paths: dict[str, Path], inputs: dict[str, Any], node_eval: 
         fill="navy",
     )
     for position, case_id in enumerate(selected):
-        row, column = divmod(position, 5)
+        row, column = divmod(position, columns)
         crop_path = G7A / "_tmp" / "k1_target_crops" / f"{case_id}.png"
         with Image.open(crop_path) as image:
             thumb = image.convert("RGB")
-            thumb.thumbnail((270, 135))
-        x, y = column * 300 + 10, row * 250 + 65
+            thumb.thumbnail((420, 125))
+        x, y = column * tile_width + 10, row * tile_height + 65
         canvas.paste(thumb, (x, y))
         truth = decisions[case_id]
         heads = by_case[case_id]["heads"]
@@ -3321,13 +3324,18 @@ def _render_k1_atlas(paths: dict[str, Path], inputs: dict[str, Any], node_eval: 
         ]
         predicted_values = [heads[name]["raw_prediction"] for name in ("role", "team", "kit", "participation")]
         correct = truth_values == predicted_values
-        draw.text((x, y + 140), case_id[-18:], fill="black")
-        draw.text((x, y + 157), "T " + " | ".join(truth_values), fill="black")
+        prediction_colour = "darkgreen" if correct else "darkred"
+        draw.text((x, y + 130), case_id[-18:], fill="black")
+        draw.text((x, y + 147), f"T role={truth_values[0]} | team={truth_values[1]}", fill="black")
+        draw.text((x, y + 164), f"T kit={truth_values[2]}", fill="black")
+        draw.text((x, y + 181), f"T participation={truth_values[3]}", fill="black")
         draw.text(
-            (x, y + 190),
-            "P " + " | ".join(predicted_values),
-            fill="darkgreen" if correct else "darkred",
+            (x, y + 206),
+            f"P role={predicted_values[0]} | team={predicted_values[1]}",
+            fill=prediction_colour,
         )
+        draw.text((x, y + 223), f"P kit={predicted_values[2]}", fill=prediction_colour)
+        draw.text((x, y + 240), f"P participation={predicted_values[3]}", fill=prediction_colour)
     path = paths["11_ERROR_ANALYSIS_AND_VISUAL_QA"] / "k1_oof_atlas.png"
     canvas.save(path, format="PNG", optimize=True)
     return path
@@ -3382,7 +3390,10 @@ def _render_pair_atlas(
                 "index": component_index,
                 "disposition": component["disposition"],
             }
-    canvas = Image.new("RGB", (1500, 4 * 260 + 65), "white")
+    tile_width = 600
+    tile_height = 280
+    columns = 3
+    canvas = Image.new("RGB", (columns * tile_width, 4 * tile_height + 65), "white")
     draw = ImageDraw.Draw(canvas)
     chain_vetoes = hierarchy["clustering_comparison"]["clear_distinct_chain_veto_count"]
     draw.text((12, 12), "P3 calibrated grouped-OOF pair examples with H2 component membership", fill="black")
@@ -3392,13 +3403,13 @@ def _render_pair_atlas(
         fill="navy",
     )
     for position, row in enumerate(selected):
-        tile_row, column = divmod(position, 3)
-        x, y = column * 500 + 10, tile_row * 260 + 65
+        tile_row, column = divmod(position, columns)
+        x, y = column * tile_width + 10, tile_row * tile_height + 65
         left_uuid, right_uuid = row["candidate_uuids"]
-        left = _candidate_thumbnail(nodes[left_uuid], (215, 115))
-        right = _candidate_thumbnail(nodes[right_uuid], (215, 115))
+        left = _candidate_thumbnail(nodes[left_uuid], (270, 115))
+        right = _candidate_thumbnail(nodes[right_uuid], (270, 115))
         canvas.paste(left, (x, y))
-        canvas.paste(right, (x + 235, y))
+        canvas.paste(right, (x + 300, y))
         probabilities = row["probabilities"]
         components = (h2_components.get(left_uuid), h2_components.get(right_uuid))
         draw.text(
@@ -3415,12 +3426,13 @@ def _render_pair_atlas(
             ),
             fill="black",
         )
-        draw.text(
-            (x, y + 160),
-            f"H2 components {components[0]} | {components[1]}",
-            fill="black",
-        )
-        draw.text((x, y + 195), str(row["edge_uuid"]), fill="gray")
+        for component_offset, component in enumerate(components):
+            component_label = (
+                "not in an H2 component" if component is None else f"C{component['index']} {component['disposition']}"
+            )
+            side = "left" if component_offset == 0 else "right"
+            draw.text((x, y + 160 + 17 * component_offset), f"H2 {side}: {component_label}", fill="black")
+        draw.text((x, y + 203), str(row["edge_uuid"]), fill="gray")
     path = paths["11_ERROR_ANALYSIS_AND_VISUAL_QA"] / "pairwise_component_atlas.png"
     canvas.save(path, format="PNG", optimize=True)
     return path
@@ -3451,7 +3463,10 @@ def _render_hierarchy_atlas(
             1,
         )
     selected = selected[:15]
-    canvas = Image.new("RGB", (1500, 3 * 280 + 120), "white")
+    tile_width = 600
+    tile_height = 270
+    columns = 3
+    canvas = Image.new("RGB", (columns * tile_width, 5 * tile_height + 105), "white")
     draw = ImageDraw.Draw(canvas)
     baselines = hierarchy["payload"]["g7a_r0_r1_r2_comparison"]["baselines"]
     draw.text((12, 12), "Actual H2/H3 accepted / routed / suppressed observations", fill="black")
@@ -3476,15 +3491,15 @@ def _render_hierarchy_atlas(
         fill="darkred",
     )
     for position, identifier in enumerate(selected):
-        tile_row, column = divmod(position, 5)
-        x, y = column * 300 + 10, tile_row * 280 + 105
-        thumb = _candidate_thumbnail(nodes[identifier], (270, 145))
+        tile_row, column = divmod(position, columns)
+        x, y = column * tile_width + 10, tile_row * tile_height + 105
+        thumb = _candidate_thumbnail(nodes[identifier], (560, 135))
         canvas.paste(thumb, (x, y))
         target = str(nodes[identifier].get("candidate_state_target") or "UNLABELLED")
-        draw.text((x, y + 150), f"Gold {target}", fill="black")
-        draw.text((x, y + 170), f"H2 {h2[identifier]['outcome']}", fill="darkblue")
-        draw.text((x, y + 205), f"H3 {h3[identifier]['outcome']}", fill="darkgreen")
-        draw.text((x, y + 240), identifier[-18:], fill="gray")
+        draw.text((x, y + 140), f"Gold {target}", fill="black")
+        draw.text((x, y + 158), f"H2 {h2[identifier]['outcome']}", fill="darkblue")
+        draw.text((x, y + 181), f"H3 {h3[identifier]['outcome']}", fill="darkgreen")
+        draw.text((x, y + 218), identifier[-18:], fill="gray")
     path = paths["11_ERROR_ANALYSIS_AND_VISUAL_QA"] / "hierarchical_selection_atlas.png"
     canvas.save(path, format="PNG", optimize=True)
     return path
@@ -4051,6 +4066,70 @@ def run_and_record_tests() -> dict[str, Any]:
     return results
 
 
+def refresh_visuals_only() -> dict[str, Any]:
+    """Re-render review atlases from sealed OOF ledgers without fitting models."""
+
+    if not WORKSPACE.is_dir():
+        raise RuntimeError("G7B workspace does not exist; build it first")
+    immutable = validate_k1_and_g7a(LOCATIONS)
+    if not immutable["passed"]:
+        raise RuntimeError(f"immutable inputs failed before visual refresh: {immutable['failures']}")
+    paths = create_workspace_layout(LOCATIONS)
+    inputs = _load_inputs()
+    node_eval = {
+        "prediction_ledger": read_jsonl(paths["08_GROUPED_OUT_OF_FOLD_EVALUATION"] / "k1_oof_prediction_ledger.jsonl")
+    }
+    pair_payload = read_json(paths["06_PAIRWISE_DUPLICATE_MERGE_MODELS"] / "pairwise_model_results.json")
+    hierarchy_payload = read_json(
+        paths["07_HIERARCHICAL_CLUSTERING_AND_SELECTION"] / "hierarchical_selection_results.json"
+    )
+    component_payload = read_json(
+        paths["07_HIERARCHICAL_CLUSTERING_AND_SELECTION"] / "hierarchical_component_manifest.json"
+    )
+    pairwise = {
+        "trained": {
+            "variants": {
+                "P3": pair_payload["P1_P2_P3"]["variants"]["P3"],
+            }
+        }
+    }
+    hierarchy = {
+        "payload": hierarchy_payload,
+        "component_rows": component_payload["rows"],
+        "solver_rows": read_jsonl(paths["07_HIERARCHICAL_CLUSTERING_AND_SELECTION"] / "solver_decision_ledger.jsonl"),
+        "clustering_comparison": hierarchy_payload["clustering_comparison"],
+    }
+    visuals = _render_visuals(paths, inputs, node_eval, pairwise, hierarchy)
+    before = read_json(paths["01_G7A_AND_K1_VALIDATION"] / "protected_inputs_before.json")
+    after = _input_snapshot()
+    write_json(paths["01_G7A_AND_K1_VALIDATION"] / "protected_inputs_after.json", after)
+    safety = _write_safety(paths, before, after)
+    if not safety["passed"]:
+        raise RuntimeError("protected inputs changed during visual refresh")
+    review = _refresh_review_pack(paths)
+    stage_manifest = _write_stage_manifest(paths)
+    completion_path = paths["14_COMMANDS_AND_TESTS"] / "build_completion.json"
+    if completion_path.is_file():
+        completion = read_json(completion_path)
+        completion.update(
+            {
+                "review_pack": review,
+                "stage_manifest_tree_hash": stage_manifest["payload_tree_hash"],
+                "visuals": [file_record(path, root=WORKSPACE) for path in visuals],
+            }
+        )
+        write_json(completion_path, completion)
+        stage_manifest = _write_stage_manifest(paths)
+    return {
+        "stage_id": STAGE_ID,
+        "visuals": [file_record(path, root=WORKSPACE) for path in visuals],
+        "review_pack_passed": review["passed"],
+        "stage_manifest_tree_hash": stage_manifest["payload_tree_hash"],
+        "model_fitting_performed": False,
+        "production_promoted": False,
+    }
+
+
 def finalize_only() -> dict[str, Any]:
     if not WORKSPACE.is_dir():
         raise RuntimeError("G7B workspace does not exist; build it first")
@@ -4128,6 +4207,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--run-and-record-tests", action="store_true")
+    mode.add_argument("--refresh-visuals-only", action="store_true")
     mode.add_argument("--finalize-only", action="store_true")
     parser.add_argument("--skip-tests", action="store_true", help="Build evidence without the final command suite")
     return parser.parse_args()
@@ -4140,6 +4220,8 @@ def main() -> int:
     torch.backends.cudnn.deterministic = True
     if args.run_and_record_tests:
         payload = run_and_record_tests()
+    elif args.refresh_visuals_only:
+        payload = refresh_visuals_only()
     elif args.finalize_only:
         payload = finalize_only()
     else:

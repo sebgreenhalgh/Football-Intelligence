@@ -188,3 +188,17 @@ def test_stage_builder_does_not_feed_evaluator_gold_to_runtime_selector() -> Non
     assert '"clean_control": False' in selector_source
     assert "gold_person_ids" not in selector_source
     assert "candidate_state_target" not in selector_source
+
+
+def test_visual_refresh_mode_reuses_sealed_ledgers_without_model_fitting() -> None:
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "build_m5_5g7b_k1_hierarchical_reasoner.py").read_text(
+        encoding="utf-8"
+    )
+    refresh_source = source[source.index("def refresh_visuals_only(") : source.index("def finalize_only(")]
+    assert "k1_oof_prediction_ledger.jsonl" in refresh_source
+    assert "pairwise_model_results.json" in refresh_source
+    assert "solver_decision_ledger.jsonl" in refresh_source
+    assert "_fit_nested_calibration" not in refresh_source
+    assert "_pairwise_evaluation" not in refresh_source
+    assert "_run_ablations" not in refresh_source
+    assert '"model_fitting_performed": False' in refresh_source
