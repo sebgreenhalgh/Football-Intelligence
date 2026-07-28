@@ -285,5 +285,10 @@ def test_r6a_append_only_receipts_and_event_immutability() -> None:
         assert receipt["case_complete"] is True
         assert receipt["creation_reason"] == "AUTHORIZED_POST_HOC_ACKNOWLEDGEMENT_RECEIPT_BACKFILL"
         assert "synthetic" not in event.read_text(encoding="utf-8").lower()
-    assert not (ROOT / "matches" / "118575" / "calibration" / "pitch_polygon_v1" / "pitch_polygon.json").exists()
-    assert not (ROOT / "matches" / "117092" / "calibration" / "pitch_polygon_v1" / "pitch_polygon.json").exists()
+    for match_id in ("118575", "117092"):
+        polygon = ROOT / "matches" / match_id / "calibration" / "pitch_polygon_v1" / "pitch_polygon.json"
+        setup = load(ROOT / "matches" / match_id / "calibration" / "match_setup.json")
+        assert polygon.exists()
+        assert load(polygon)["status"] == "HUMAN_CONFIRMED"
+        assert setup["pitch_calibration"]["polygon_sha256"] == hashlib.sha256(polygon.read_bytes()).hexdigest()
+        assert setup["pitch_calibration"]["camera_segment_count"] == 1
