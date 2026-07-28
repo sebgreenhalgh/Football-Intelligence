@@ -9,6 +9,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from g7d_a_r4_templates import R4_HTML, R4_SERVER
+
 MATCHES = ["118575", "117092"]
 
 
@@ -112,8 +114,8 @@ def main() -> None:
             "save_root": "review_events",
         },
     )
-    (package / "review_server.py").write_text(SERVER, encoding="utf-8")
-    (package / "index.html").write_text(R3_HTML, encoding="utf-8")
+    (package / "review_server.py").write_text(R4_SERVER, encoding="utf-8")
+    (package / "index.html").write_text(R4_HTML, encoding="utf-8")
     (package / "launch_pitch_polygon_review.ps1").write_text(
         "$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath $PSScriptRoot\n"
         "python .\\review_server.py --port 8812\n",
