@@ -1,5 +1,10 @@
 import hashlib
 import json
+import subprocess
+import sys
+import time
+from urllib.error import HTTPError
+from urllib.request import urlopen
 from pathlib import Path
 
 
@@ -28,6 +33,41 @@ def test_review_package_and_safety_boundaries() -> None:
     assert "review_events" in (PACKAGE / "review_server.py").read_text(encoding="utf-8")
     assert "inference" not in (PACKAGE / "review_server.py").read_text(encoding="utf-8").lower()
     assert not any("validation" in p.name.lower() or "holdout" in p.name.lower() for p in PACKAGE.iterdir())
+
+
+def test_bounded_http_assets_and_browser_bindings() -> None:
+    process = subprocess.Popen([sys.executable, "review_server.py", "--port", "8813"], cwd=PACKAGE)
+    try:
+        time.sleep(0.25)
+        root = urlopen("http://127.0.0.1:8813/", timeout=3)
+        assert root.status == 200
+        html = root.read().decode()
+        assert "first.src=item.asset_urls.first" in html
+        assert "second.src=item.asset_urls.second" in html
+        for match in ("118575", "117092"):
+            for half in ("first", "second"):
+                response = urlopen(f"http://127.0.0.1:8813/assets/{match}/{half}.png", timeout=3)
+                assert response.status == 200
+                assert response.headers["Content-Type"].startswith("image/png")
+                assert (
+                    hashlib.sha256(response.read()).hexdigest()
+                    == load(PACKAGE / "review_cases.json")["cases"][0 if match == "118575" else 1]["source_frames"][
+                        half
+                    ]["frame_sha256"]
+                )
+        try:
+            urlopen("http://127.0.0.1:8813/assets/unknown/first.png", timeout=3)
+            raise AssertionError("unknown asset unexpectedly served")
+        except HTTPError as error:
+            assert error.code == 404
+        try:
+            urlopen("http://127.0.0.1:8813/assets/../review_cases.json", timeout=3)
+            raise AssertionError("path traversal unexpectedly served")
+        except HTTPError as error:
+            assert error.code == 404
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
 
 
 def test_polygon_rules_and_coordinate_round_trip() -> None:

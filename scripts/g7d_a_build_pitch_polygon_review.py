@@ -86,6 +86,10 @@ def main() -> None:
             "default_polygon_count": 1,
             "status": "PENDING_HUMAN_REVIEW",
             "source_frames": halves,
+            "asset_urls": {
+                "first": f"/assets/{match}/first.png",
+                "second": f"/assets/{match}/second.png",
+            },
         }
         case_dir = root / "matches" / match / "calibration" / "pitch_polygon_v1"
         write_json(case_dir / "selection_manifest.json", case)
@@ -137,56 +141,64 @@ def make_contact_sheet(workspace: Path, cases: list[dict], frames_dir: Path) -> 
     sheet.save(output)
 
 
-SERVER = """import argparse
-import json
-import os
-import tempfile
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+SERVER = """import argparse, json, os, tempfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-
-class Handler(SimpleHTTPRequestHandler):
+PACKAGE = Path(__file__).resolve().parent
+CASES = json.loads((PACKAGE / "review_cases.json").read_text(encoding="utf-8"))["cases"]
+ASSETS = {(c["match_id"], h): PACKAGE / "_frames" / f"{c['match_id']}_{h}.png" for c in CASES for h in ("first", "second")}
+class Handler(BaseHTTPRequestHandler):
+    def send_file(self, path, content_type):
+        body = path.read_bytes()
+        self.send_response(200); self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def do_GET(self):
+        if self.path == "/":
+            self.send_file(PACKAGE / "index.html", "text/html"); return
+        if self.path == "/api/cases":
+            self.send_file(PACKAGE / "review_cases.json", "application/json"); return
+        parts = self.path.removeprefix("/assets/").split("/")
+        if self.path.startswith("/assets/") and len(parts) == 2 and parts[1] in ("first.png", "second.png"):
+            path = ASSETS.get((parts[0], parts[1][:-4]))
+            if path and path.is_file(): self.send_file(path, "image/png"); return
+        self.send_error(404)
     def do_POST(self):
-        if self.path != "/api/save":
-            self.send_error(404)
-            return
+        if self.path != "/api/save": self.send_error(404); return
         payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-        target = Path("review_events") / str(payload["match_id"])
-        target.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=".event-", suffix=".json", dir=target)
-        os.close(fd)
+        target = PACKAGE / "review_events" / str(payload["match_id"]); target.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".event-", suffix=".json", dir=target); os.close(fd)
         Path(temporary).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
         os.replace(temporary, target / "latest.json")
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b'{"saved": true}')
-
+        self.send_response(200); self.end_headers(); self.wfile.write(b'{"saved": true}')
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8812)
-    options = parser.parse_args()
-    ThreadingHTTPServer(("127.0.0.1", options.port), Handler).serve_forever()
+    parser = argparse.ArgumentParser(); parser.add_argument("--port", type=int, default=8812)
+    ThreadingHTTPServer(("127.0.0.1", parser.parse_args().port), Handler).serve_forever()
 """
 
 
 HTML = """<!doctype html>
 <meta charset="utf-8"><title>G7D-A Pitch Polygon Review</title>
-<style>body{font:14px sans-serif;background:#17202a;color:#eee;margin:20px}canvas{border:1px solid #8aa4b8}button,select{margin:4px;padding:7px}</style>
+<style>body{font:14px sans-serif;background:#17202a;color:#eee;margin:20px}.frame{display:inline-block;vertical-align:top;margin:4px}.frame img{display:block;max-width:620px;max-height:430px;border:1px solid #8aa4b8}.draw{position:relative}.draw canvas{position:absolute;inset:0;width:100%;height:100%}button,select{margin:4px;padding:7px}.state{min-height:20px;color:#ffd27f}</style>
 <h1>G7D-A Pitch Polygon Review</h1>
 <p>Trace the playable pitch boundary in source-image coordinates. First-half is authoritative; second-half is read-only context.</p>
 <select id="case"><option>118575</option><option>117092</option></select>
 <button onclick="undo()">Undo last point</button><button onclick="clearPolygon()">Clear</button>
 <button onclick="closePolygon()">Close polygon</button><button onclick="save()">Save</button>
 <span id="status">Not saved</span><br>
-<canvas id="canvas" width="640" height="360"></canvas>
+<div class="frame draw"><strong>FIRST HALF — DRAW HERE</strong><div id="firstState" class="state">Loading first-half frame…</div><img id="first" alt="First-half frame"><canvas id="canvas"></canvas></div>
+<div class="frame"><strong>SECOND HALF — READ-ONLY ALIGNMENT CHECK</strong><div id="secondState" class="state">Loading second-half frame…</div><img id="second" alt="Second-half context frame"></div>
 <p>Second-half alignment:
 <select id="alignment"><option value="">Choose...</option><option>YES</option><option>NO</option><option>UNCERTAIN</option></select>
 Vertices: <span id="count">0</span></p>
 <script>
-let points=[],closed=false;const canvas=document.querySelector("#canvas"),ctx=canvas.getContext("2d");
-function draw(){ctx.clearRect(0,0,640,360);ctx.strokeStyle="#ffcc00";ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));if(closed)ctx.closePath();ctx.stroke();points.forEach(p=>{ctx.fillStyle="#ffcc00";ctx.fillRect(p[0]-3,p[1]-3,6,6)});document.querySelector("#count").textContent=points.length}
-canvas.onclick=e=>{if(!closed){const r=canvas.getBoundingClientRect();points.push([Math.round((e.clientX-r.left)*640/r.width),Math.round((e.clientY-r.top)*360/r.height)]);draw()}};
+let points=[],closed=false,loaded={first:false,second:false};const canvas=document.querySelector("#canvas"),ctx=canvas.getContext("2d"),first=document.querySelector("#first"),second=document.querySelector("#second");
+function draw(){canvas.width=first.naturalWidth||640;canvas.height=first.naturalHeight||360;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.strokeStyle="#ffcc00";ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));if(closed)ctx.closePath();ctx.stroke();points.forEach(p=>{ctx.fillStyle="#ffcc00";ctx.fillRect(p[0]-5,p[1]-5,10,10)});document.querySelector("#count").textContent=points.length}
+canvas.onclick=e=>{if(!closed&&loaded.first){const r=canvas.getBoundingClientRect();points.push([Math.round((e.clientX-r.left)*canvas.width/r.width),Math.round((e.clientY-r.top)*canvas.height/r.height)]);draw()}};
 function undo(){points.pop();closed=false;draw()} function clearPolygon(){points=[];closed=false;draw()} function closePolygon(){if(points.length>=4)closed=true;draw()}
-async function save(){if(points.length<4||!closed||!document.querySelector("#alignment").value){alert("Need four vertices, closed polygon, and alignment answer");return}const payload={match_id:document.querySelector("#case").value,camera_segment_id:"MATCH_LEVEL",vertices_source_xy:points,closed:true,second_half_alignment_answer:document.querySelector("#alignment").value,save_event:true,transaction_id:crypto.randomUUID(),timestamp:new Date().toISOString()};const response=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});document.querySelector("#status").textContent=response.ok?"Server acknowledged save":"Save failed"}draw();
+function setState(image,state,label){image.onload=()=>{loaded[state]=true;document.querySelector("#"+state+"State").textContent=label+" loaded ("+image.naturalWidth+"x"+image.naturalHeight+")";if(state==="first")draw()};image.onerror=()=>{loaded[state]=false;document.querySelector("#"+state+"State").textContent="ERROR "+label+": frame unavailable; do not annotate";document.querySelector("#status").textContent="Save disabled: required frame unavailable"}}
+async function loadCase(){const id=document.querySelector("#case").value;points=[];closed=false;loaded={first:false,second:false};document.querySelector("#firstState").textContent="Loading first-half frame…";document.querySelector("#secondState").textContent="Loading second-half frame…";const data=await fetch("/api/cases").then(r=>r.json());const item=data.cases.find(x=>x.match_id===id);setState(first,"first","First-half frame");setState(second,"second","Second-half frame");first.src=item.asset_urls.first;second.src=item.asset_urls.second;draw()}
+async function save(){if(!loaded.first||!loaded.second||points.length<4||!closed||!document.querySelector("#alignment").value){alert("Need loaded frames, four vertices, closed polygon, and alignment answer");return}const payload={match_id:document.querySelector("#case").value,camera_segment_id:"MATCH_LEVEL",vertices_source_xy:points,closed:true,second_half_alignment_answer:document.querySelector("#alignment").value,save_event:true,transaction_id:crypto.randomUUID(),timestamp:new Date().toISOString()};const response=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});document.querySelector("#status").textContent=response.ok?"Server acknowledged save":"Save failed"}
+document.querySelector("#case").onchange=loadCase;loadCase();
 </script>"""
 
 
