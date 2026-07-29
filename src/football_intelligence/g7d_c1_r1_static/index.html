@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Football picture review</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="navigatorButton" class="icon-button" aria-expanded="false" aria-controls="navigator">Scenes</button>
+    <div class="brand"><span class="brand-mark">FI</span><span>Football picture review</span></div>
+    <div id="saveState" class="save-state" aria-live="polite">Ready</div>
+    <button id="helpButton" class="icon-button">Help</button>
+  </header>
+
+  <div class="overall-progress" aria-label="Overall review progress"><span id="overallBar"></span></div>
+  <div class="status-strip">
+    <span id="scenePosition">Scene 1 of 24</span>
+    <span id="boxPosition">Box 1 of 8</span>
+    <span id="questionPosition">Question 1 of 8</span>
+    <strong id="overallText">Overall progress 0%</strong>
+  </div>
+
+  <nav id="navigator" class="navigator" aria-label="Scene navigator" hidden>
+    <div class="navigator-head"><strong>Choose a scene</strong><button id="closeNavigator" class="quiet">Close</button></div>
+    <div id="sceneList" class="scene-list"></div>
+  </nav>
+
+  <main class="wizard-layout">
+    <section class="visual-panel" aria-label="Selected picture and box">
+      <div class="visual-heading">
+        <div><span id="matchName" class="eyebrow"></span><h1 id="targetName">Highlighted box</h1></div>
+        <label class="toggle"><input id="showOthers" type="checkbox"><span>Show other boxes</span></label>
+      </div>
+      <div class="view-grid">
+        <div class="context-card">
+          <div class="view-label">Where they are in the scene</div>
+          <canvas id="contextCanvas" tabindex="0" aria-label="Large context view with highlighted box"></canvas>
+        </div>
+        <div class="closeup-card">
+          <div class="view-label">Closer look</div>
+          <canvas id="closeupCanvas" tabindex="0" aria-label="Large close-up of highlighted box"></canvas>
+        </div>
+      </div>
+      <div class="visual-tools" aria-label="Picture controls">
+        <button id="fitTarget" class="tool">Fit target <kbd>Z</kbd></button>
+        <button id="zoomOut" class="tool" aria-label="Zoom out">−</button>
+        <button id="zoomIn" class="tool" aria-label="Zoom in">+</button>
+        <button id="resetView" class="tool">Reset</button>
+        <span>Drag the large view to pan</span>
+      </div>
+      <div class="orientation-card">
+        <div><strong>Whole frame</strong><small>Use this to stay oriented</small></div>
+        <canvas id="orientationCanvas" aria-label="Whole frame orientation thumbnail"></canvas>
+      </div>
+    </section>
+
+    <section class="question-panel" aria-live="polite">
+      <div id="questionCard" class="question-card">
+        <div id="questionStep" class="eyebrow">Step 1</div>
+        <h2 id="questionTitle">Loading the next question…</h2>
+        <p id="questionHint" class="question-hint"></p>
+        <div id="answers" class="answer-grid" role="radiogroup"></div>
+        <div id="specialArea"></div>
+        <div class="question-actions">
+          <button id="backButton" class="secondary">Back</button>
+          <button id="continueButton" class="primary">Continue</button>
+        </div>
+      </div>
+      <div class="shortcuts">Keys: <kbd>1–6</kbd> answer · <kbd>Enter</kbd> continue · <kbd>Backspace</kbd> back · <kbd>H</kbd> help</div>
+    </section>
+  </main>
+
+  <dialog id="tutorial" class="tutorial">
+    <div class="tutorial-art" aria-hidden="true">1 → 2 → ✓</div>
+    <p class="eyebrow">A quick four-step guide</p>
+    <h2 id="tutorialTitle">We highlight one box.</h2>
+    <p id="tutorialText">The thick yellow outline shows exactly what to review.</p>
+    <div class="tutorial-dots" id="tutorialDots"></div>
+    <div class="dialog-actions"><button id="skipTutorial" class="secondary">Skip</button><button id="nextTutorial" class="primary">Next</button></div>
+  </dialog>
+
+  <aside id="helpDrawer" class="help-drawer" aria-label="Help" hidden>
+    <div class="navigator-head"><h2>Simple help</h2><button id="closeHelp" class="quiet">Close</button></div>
+    <dl>
+      <dt>Duplicate</dt><dd>Two boxes show the same person.</dd>
+      <dt>Merged</dt><dd>One box covers more than one person.</dd>
+      <dt>Too big</dt><dd>The box includes lots of space around the person.</dd>
+      <dt>Too small</dt><dd>The box cuts off part of the person.</dd>
+      <dt>On the line</dt><dd>The person’s feet are on or very close to the pitch boundary.</dd>
+      <dt>Not sure</dt><dd>The picture is unclear. This is always a valid answer.</dd>
+    </dl>
+    <button id="showTutorial" class="secondary">Show tutorial again</button>
+  </aside>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>
