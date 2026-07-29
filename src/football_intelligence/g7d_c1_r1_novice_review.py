@@ -123,11 +123,14 @@ def error(code: str, field: str, message: str, **details: Any) -> dict[str, Any]
 class ReviewStore:
     """Append-only final truth plus atomic, explicitly non-authoritative drafts."""
 
+    review_revision = REVISION
+    compatible_revisions = (LEGACY_REVISION, REVISION)
+
     def __init__(self, package: Path):
         self.package = package
         document = json.loads((package / "review_cases.json").read_text(encoding="utf-8"))
-        self.revision = document.get("review_revision", REVISION)
-        if self.revision != REVISION:
+        self.revision = document.get("review_revision", self.review_revision)
+        if self.revision != self.review_revision:
             raise RuntimeError("R1 reviewer package has an incompatible revision")
         self.cases = document["cases"]
         self.by_scene = {case["scene_id"]: case for case in self.cases}
@@ -147,10 +150,10 @@ class ReviewStore:
         for event_type in counts:
             for path, event in self._events(event_type):
                 counts[event_type] += 1
-                if event.get("schema_version") != EVENT_SCHEMA or event.get("review_revision") not in {
-                    LEGACY_REVISION,
-                    REVISION,
-                }:
+                if (
+                    event.get("schema_version") != EVENT_SCHEMA
+                    or event.get("review_revision") not in self.compatible_revisions
+                ):
                     raise RuntimeError(f"incompatible acknowledged event: {path}")
                 receipt = self.package / "review_receipts" / "acknowledgements" / f"ack-{event['event_id']}.json"
                 if not receipt.is_file():
@@ -177,7 +180,7 @@ class ReviewStore:
         if (
             payload.get("schema_version") != EVENT_SCHEMA
             or payload.get("review_id") != REVIEW_ID
-            or payload.get("revision") != REVISION
+            or payload.get("revision") != self.revision
             or payload.get("event_type") != event_type
         ):
             return error("REVIEW_IDENTITY_MISMATCH", "revision", "This answer belongs to a different review version.")
@@ -301,7 +304,7 @@ class ReviewStore:
         if (
             payload.get("schema_version") != DRAFT_SCHEMA
             or payload.get("review_id") != REVIEW_ID
-            or payload.get("revision") != REVISION
+            or payload.get("revision") != self.revision
         ):
             return HTTPStatus.UNPROCESSABLE_ENTITY, error(
                 "DRAFT_IDENTITY_MISMATCH", "revision", "This progress belongs to another review version."
@@ -327,7 +330,9 @@ class ReviewStore:
 
     def _event_id(self, payload: Mapping[str, Any]) -> str:
         return hashlib.sha256(
-            canonical_bytes({"revision": REVISION, "idempotency_key": payload["idempotency_key"], "payload": payload})
+            canonical_bytes(
+                {"revision": self.revision, "idempotency_key": payload["idempotency_key"], "payload": payload}
+            )
         ).hexdigest()[:32]
 
     def _persist_event(self, event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -355,7 +360,7 @@ class ReviewStore:
             "event_id": event_id,
             "event_type": event_type,
             "review_id": REVIEW_ID,
-            "review_revision": REVISION,
+            "review_revision": self.revision,
             "persisted_at_utc": now(),
             "supersedes_event_id": previous["event_id"] if previous else None,
             "payload": payload,
@@ -417,7 +422,7 @@ class ReviewStore:
                 if not draft.get("finalized_event_id"):
                     drafts[draft.get("target_id") or draft["scene_id"]] = draft
         return {
-            "review_revision": REVISION,
+            "review_revision": self.revision,
             "cases": self.cases,
             "saved_candidates": saved_candidates,
             "saved_scenes": saved_scenes,
@@ -426,7 +431,7 @@ class ReviewStore:
         }
 
     def complete(self, payload: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
-        if payload.get("review_id") != REVIEW_ID or payload.get("revision") != REVISION:
+        if payload.get("review_id") != REVIEW_ID or payload.get("revision") != self.revision:
             return HTTPStatus.UNPROCESSABLE_ENTITY, error(
                 "REVIEW_IDENTITY_MISMATCH", "revision", "This completion belongs to another review version."
             )
@@ -457,7 +462,7 @@ class ReviewStore:
             "schema_version": "football_intelligence.g7d_c1.review_completion_receipt.v1",
             "completion_receipt_id": receipt_id,
             "review_id": REVIEW_ID,
-            "review_revision": REVISION,
+            "review_revision": self.revision,
             "latest_acknowledged_event_count": 216,
             "candidate_decision_count": 192,
             "scene_review_count": 24,
@@ -475,8 +480,8 @@ class ReviewStore:
         return HTTPStatus.OK, {"ok": True, "status": "ALL CASES COMPLETE", "completion_receipt_id": receipt_id}
 
 
-def serve(package: Path, port: int = 8814) -> None:
-    store = ReviewStore(package)
+def serve(package: Path, port: int = 8814, store_type: type[ReviewStore] = ReviewStore) -> None:
+    store = store_type(package)
     assets = {case["asset_name"] for case in store.cases}
 
     class Handler(BaseHTTPRequestHandler):
