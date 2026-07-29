@@ -93,8 +93,12 @@ class LoadedReviewStore(CalibratedReviewStore):
         }
 
 
-def create_server(package: Path, port: int = 0) -> ThreadingHTTPServer:
-    store = LoadedReviewStore(package)
+def create_server(
+    package: Path,
+    port: int = 0,
+    store_type: type[LoadedReviewStore] = LoadedReviewStore,
+) -> ThreadingHTTPServer:
+    store = store_type(package)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, _format: str, *_args: object) -> None:
