@@ -507,6 +507,11 @@ def execute_arm(
     *,
     keep_records: bool,
     keep_features: bool,
+    selected_candidates: Sequence[Mapping[str, Any]] | None = None,
+    suppressed_candidates: Sequence[Mapping[str, Any]] | None = None,
+    decision_rows: Sequence[Mapping[str, Any]] | None = None,
+    selection_manifest: Mapping[str, Any] | None = None,
+    selection_seconds: float | None = None,
 ) -> dict[str, Any]:
     if arm not in {"CONTROL", "GATED"}:
         raise ValueError(arm)
@@ -514,9 +519,18 @@ def execute_arm(
     all_candidates = inputs["candidates"]
     started_total = time.perf_counter()
     gate_started = time.perf_counter()
-    if arm == "CONTROL":
+    overrides = (selected_candidates, suppressed_candidates, decision_rows, selection_manifest, selection_seconds)
+    if any(value is not None for value in overrides):
+        if arm != "GATED" or any(value is None for value in overrides):
+            raise ValueError("external gated selection requires all explicit override fields")
+        selected = selected_candidates
+        suppressed = suppressed_candidates
+        active_decisions = decision_rows
+        filter_manifest = dict(selection_manifest)
+    elif arm == "CONTROL":
         selected = all_candidates
         suppressed: Sequence[Mapping[str, Any]] = ()
+        active_decisions = inputs["decisions"]
         filter_manifest = {"mode": "DISABLED", "retained_candidate_count": 5940, "suppressed_candidate_count": 0}
     else:
         selected, suppressed, filter_manifest = apply_bounded_sandbox_filter(
@@ -526,9 +540,10 @@ def execute_arm(
             mode=BOUNDED_MODE,
             external_output_root=STAGE,
         )
-    gate_seconds = time.perf_counter() - gate_started
+        active_decisions = inputs["decisions"]
+    gate_seconds = selection_seconds if selection_seconds is not None else time.perf_counter() - gate_started
     selected_by_frame: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    decision_by_id = {row["candidate_local_id"]: row["decision"] for row in inputs["decisions"]}
+    decision_by_id = {row["candidate_local_id"]: row["decision"] for row in active_decisions}
     for row in selected:
         selected_by_frame[row["frame_sha256"]].append(row)
 

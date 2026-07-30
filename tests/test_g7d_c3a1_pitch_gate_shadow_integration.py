@@ -49,13 +49,19 @@ def test_expected_baseline_and_versioned_contract() -> None:
 
 def test_disabled_is_project_default_and_environment_cannot_enable_shadow() -> None:
     assert DEFAULT_PITCH_GATE_MODE is PitchGateMode.DISABLED
-    assert tuple(PitchGateMode) == (PitchGateMode.DISABLED, PitchGateMode.SHADOW)
+    assert tuple(PitchGateMode) == (
+        PitchGateMode.DISABLED,
+        PitchGateMode.SHADOW,
+        PitchGateMode.ACTIVE_SANDBOX,
+    )
     assert resolve_pitch_gate_mode(environment={}) is PitchGateMode.DISABLED
     assert resolve_pitch_gate_mode(environment={"FI_PITCH_GATE_MODE": "DISABLED"}) is PitchGateMode.DISABLED
     with pytest.raises(ValueError):
         resolve_pitch_gate_mode(environment={"FI_PITCH_GATE_MODE": "SHADOW"})
     with pytest.raises(ValueError):
         resolve_pitch_gate_mode("ACTIVE", environment={})
+    with pytest.raises(ValueError):
+        resolve_pitch_gate_mode(environment={"FI_PITCH_GATE_MODE": "ACTIVE_SANDBOX"})
     restored = PitchGateMode(json.loads(json.dumps(PitchGateMode.SHADOW.value)))
     assert restored is PitchGateMode.SHADOW
 
