@@ -38,6 +38,7 @@ from football_intelligence.g7d_b1_foldwise_runtime import (
     proposal_view_plan,
     validate_candidate_record,
 )
+from football_intelligence.proposal_gate_hook import apply_shadow_hook
 from football_intelligence.review_chassis.hashing import stable_hash
 
 
@@ -445,6 +446,8 @@ def run_once(
             ],
             key=lambda row: row["observation_uuid"],
         )
+        # Versioned hook boundary: consolidation -> disabled pitch gate -> features.
+        observations, _, _ = apply_shadow_hook(observations)
         with Image.open(frame["path"]) as image:
             rgb = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
         source_tensor = torch.from_numpy(rgb).permute(2, 0, 1)

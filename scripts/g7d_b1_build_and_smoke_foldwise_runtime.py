@@ -41,6 +41,7 @@ from football_intelligence.g7d_b1_foldwise_runtime import (
     sha256_file,
     validate_candidate_record,
 )
+from football_intelligence.proposal_gate_hook import apply_shadow_hook
 from football_intelligence.review_chassis.hashing import stable_hash
 
 
@@ -662,6 +663,8 @@ def smoke(artifacts: list[FoldArtifact]) -> None:
         proposal_nodes = g6e.proposal_nodes({frame_hash: normalized_post}, runtime_by_view)[frame_hash]
         consolidated = consolidate_proposals(proposal_nodes, "IOU_CONNECTED_COMPONENT_055", apply_merged_gate=True)
         observations = sorted(consolidated["observations"], key=lambda row: row["observation_uuid"])
+        # Versioned hook boundary: consolidation -> disabled pitch gate -> features.
+        observations, _, _ = apply_shadow_hook(observations)
         with Image.open(frame["path"]) as image:
             rgb = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
         source_tensor = torch.from_numpy(rgb).permute(2, 0, 1)
