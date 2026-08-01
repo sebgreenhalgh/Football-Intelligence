@@ -11,29 +11,50 @@ Football Observation Reasoner
 Latest completed audited stage:
 
 ```text
-M5_5G7B_K1_SUPERVISED_MULTITASK_AND_HIERARCHICAL_OBSERVATION_SELECTION_v1
+G7E_B_TEMPORAL_REVIEWER_AND_TRANCHE_SYSTEM_v1
 ```
 
-Latest reported repository commit:
+G7E-B authorized baseline:
 
 ```text
-c169406a1b178a65a8fe8049cde23d9aadd75bfa
+4f6e3a9a4e7402411b644e088ee440daf937c70c
 ```
 
 Current final decision:
 
 ```text
-COLLECT_CROSS_MATCH_AND_GOALKEEPER_GOLD_BEFORE_FURTHER_MODELING
+PASS_G7E_B_TEMPORAL_REVIEWER_AND_TRANCHE_SYSTEM_READY_FOR_HUMAN_REVIEW
 ```
 
 Current safety state:
 
 ```text
 VISUAL_ONLY_NOT_METRIC
-SINGLE_MATCH_GROUPED_DEVELOPMENT_ONLY
+TRAIN_DEVELOPMENT_ONLY
+BURST_LOCAL_CONTINUITY_ONLY
+NO_PERMANENT_IDENTITY
 production_ready=false
 component_promoted=false
 ```
+
+## Current G7E-B handoff
+
+G7E-A froze 120 temporal bursts across the six `TRAIN_DEVELOPMENT` matches,
+with nine exact source-frame references per burst. G7E-B now provides:
+
+- six deterministic, independently completable 20-burst tranches;
+- exact class, match, half, perspective, low-light, and Tranche 1 seed balance;
+- 1,080 browser review references bound to exact source-frame pixel hashes;
+- a polished blind-first reviewer on port `8818`;
+- isolated three-case practice mode;
+- server-backed drafts after every valid answer;
+- immutable burst events and acknowledgement receipts;
+- current tranche receipts and one current global receipt;
+- explicit tranche unlocking and read-only completion restoration;
+- real Microsoft Edge acceptance at the required viewports and DPR values.
+
+No real temporal annotations have been collected. The next action is human
+review of Tranche 1 only, followed by independent receipt validation.
 
 ## What has been built
 

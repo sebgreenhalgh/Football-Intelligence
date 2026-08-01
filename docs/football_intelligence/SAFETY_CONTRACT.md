@@ -43,6 +43,29 @@ Do not:
 
 Keep evaluator truth separate from runtime inputs.
 
+## Temporal burst review
+
+Temporal review remains visual-only and development-only. Use only burst-local
+subject tokens:
+
+```text
+SUBJECT_A
+SUBJECT_B
+SUBJECT_C
+```
+
+These tokens reset every burst. Never create permanent identity, cross-burst
+identity, track IDs, shirt-number identity, or cross-match identity from the
+temporal review. Team classification is intentionally excluded from the first
+temporal wave.
+
+Practice and browser-acceptance decisions must use roots separate from human
+truth and must not enter tranche or global completion receipts. A valid final
+human event is acknowledged only after its exact bytes are persisted and
+hashed. Tranche and global completion status must resolve from the exact latest
+acknowledged event set. Superseding edits are append-only and refresh affected
+current receipts.
+
 ## Match-local team semantics
 
 `TEAM_1` and `TEAM_2` are match-local identifiers.

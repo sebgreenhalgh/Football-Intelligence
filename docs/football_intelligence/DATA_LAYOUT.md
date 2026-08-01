@@ -30,6 +30,27 @@ SoccerTrack-v2\
 
 The repository must not contain large match data or model weights.
 
+## G7E temporal review workspace
+
+The bounded G7E-B reviewer and its generated browser assets remain outside Git:
+
+```text
+experiments\football_observation_reasoner\part 7\
+â””â”€â”€ G7E_B_TEMPORAL_REVIEWER_AND_TRANCHE_SYSTEM_v1\
+    â”œâ”€â”€ 00_INPUT_CLOSURE\
+    â”œâ”€â”€ 01_TRANCHE_CONTRACT\
+    â”œâ”€â”€ 02_REVIEW_ASSET_PACKAGE\
+    â”œâ”€â”€ 03_TEMPORAL_REVIEWER\
+    â”œâ”€â”€ 04_BROWSER_ACCEPTANCE\
+    â”œâ”€â”€ 05_VISUAL_QA\
+    â”œâ”€â”€ 06_TESTS_AND_LOGS\
+    â””â”€â”€ 07_REVIEW_PACK\
+```
+
+Real human decisions, practice decisions, and temporary browser-acceptance
+decisions use separate roots. The 1,080 review references use bounded panorama
+and focus derivatives; no new full-resolution source-frame archive is retained.
+
 ## Per-match layout
 
 Each match should use:

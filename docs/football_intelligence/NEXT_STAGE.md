@@ -3,196 +3,75 @@
 ## Stage name
 
 ```text
-G7C_DATASET_INVENTORY_AND_SPLIT_v1
+G7E_B_TRANCHE_1_HUMAN_REVIEW
 ```
 
 ## Objective
 
-Create the canonical ten-match dataset inventory and a proposed match-level 6/2/2 split without running inference, generating annotations, training models, or reorganizing historical data.
+Use the completed G7E-B reviewer to annotate exactly the 20 bursts in Tranche
+1. Stop at the independently verifiable Tranche 1 completion receipt.
 
-This is an inventory-only phase.
+This is human visual review, not model inference or metric generation.
 
-## Model and budget intention
+## Reviewer
 
-Preferred model:
-
-```text
-GPT-5.6 Luna or GPT-5.6 Terra
-```
-
-Do not use Sol unless a concrete filesystem or provenance problem cannot be resolved.
-
-Target consumption:
-
-- one bounded task;
-- no open-ended research;
-- no full model replay;
-- no full training;
-- no large review pack;
-- no more than one compact summary.
-
-## Authorized roots
-
-Project root:
+External workspace:
 
 ```text
-C:\Users\sebgr\Documents\football-intelligence
+C:\Users\sebgr\Documents\football-intelligence\experiments\football_observation_reasoner\part 7\G7E_B_TEMPORAL_REVIEWER_AND_TRANCHE_SYSTEM_v1
 ```
 
-Repository:
+Launcher and URL:
 
 ```text
-C:\Users\sebgr\Documents\football-intelligence\SoccerTrack-v2
+launch_temporal_burst_review.ps1
+http://127.0.0.1:8818/
 ```
 
-Match root:
+## Procedure
 
-```text
-C:\Users\sebgr\Documents\football-intelligence\matches
-```
+1. Optionally complete and reset the isolated three-burst practice mode.
+2. Start Tranche 1.
+3. Review all nine frames in each burst.
+4. Use only burst-local `SUBJECT_A`, `SUBJECT_B`, and `SUBJECT_C` tokens.
+5. Use `Not sure` whenever the visual evidence does not support confidence.
+6. Confirm every immutable save reaches `SAVED â€” SERVER ACKNOWLEDGED`.
+7. At `TRANCHE 1 COMPLETE`, record the tranche receipt and last event ID
+   separately.
+8. Stop at `PAUSE HERE â€” YOU MAY STOP SAFELY`.
 
-Dataset root:
+Do not unlock Tranche 2 during the first quality-review round.
 
-```text
-C:\Users\sebgr\Documents\football-intelligence\datasets\soccertrack_v2
-```
-
-Experiment root:
-
-```text
-C:\Users\sebgr\Documents\football-intelligence\experiments\football_observation_reasoner
-```
-
-## Required reading
-
-Read only:
-
-```text
-SoccerTrack-v2\AGENTS.md
-SoccerTrack-v2\docs\football_intelligence\CURRENT_STATE.md
-SoccerTrack-v2\docs\football_intelligence\SAFETY_CONTRACT.md
-SoccerTrack-v2\docs\football_intelligence\DATA_LAYOUT.md
-SoccerTrack-v2\docs\football_intelligence\ONTOLOGY.md
-SoccerTrack-v2\docs\football_intelligence\NEXT_STAGE.md
-datasets\soccertrack_v2\README.md
-experiments\football_observation_reasoner\CURRENT_ITERATION.md
-```
-
-Do not inspect historical review packs unless a path or hash inconsistency requires it.
-
-## Authorized work
-
-1. Discover the ten match directories.
-2. Inventory the expected per-match folders:
-   - `source\bas`
-   - `source\videos`
-   - `source\raw`
-   - `source\gsr`
-3. Record files, sizes, media types, and SHA-256 hashes.
-4. Create or update:
-   - `match_registry.json`
-   - `dataset_manifest.json`
-   - `condition_inventory.json`
-   - per-match source manifests.
-5. Inventory extra legacy content under `matches\128058`.
-6. Do not move or delete any `128058` content.
-7. Propose a 6/2/2 split based on broad conditions and source completeness.
-8. Require human approval before marking the split frozen.
-9. Create a compact experiment-registry entry for G7C.
-10. Add focused schema/path/hash tests.
-
-## Split rules
-
-- `128058` must be training/development.
-- No frame-level random split.
-- Two validation matches support model selection and calibration.
-- Two holdout matches remain sealed.
-- Condition diversity should be spread across the three sets.
-- Do not deeply inspect holdout football content.
-- Broad metadata such as day/night, rain/dry, source quality, and kit-colour combination is allowed for split planning.
-
-## Required outputs
-
-Dataset-level:
-
-```text
-datasets\soccertrack_v2\match_registry.json
-datasets\soccertrack_v2\dataset_manifest.json
-datasets\soccertrack_v2\condition_inventory.json
-datasets\soccertrack_v2\splits\split_v1\proposed_split.json
-datasets\soccertrack_v2\splits\split_v1\split_contract.json
-```
-
-Per match:
-
-```text
-matches\<match_id>\manifests\match_manifest.json
-matches\<match_id>\manifests\source_file_manifest.json
-matches\<match_id>\manifests\source_file_hashes.json
-```
-
-For `128058`:
-
-```text
-matches\128058\manifests\legacy_content_inventory.json
-```
-
-Experiment:
-
-```text
-experiments\football_observation_reasoner\G7C_DATASET_INVENTORY_AND_SPLIT\
-```
-
-## Explicitly forbidden
+## Safety boundaries
 
 Do not:
 
-- download replacement data;
-- move source files;
-- rename historical folders;
-- run player detection;
-- run segmentation;
-- build embeddings;
-- generate annotation cases;
-- train or calibrate a model;
-- inspect sealed holdout errors;
-- run the entire historical test suite;
-- create more than one visual;
-- create more than eight review files;
-- continue into G7D.
+- create permanent or cross-burst identity;
+- assign shirt numbers or track IDs;
+- ask for team classification;
+- infer missing human answers;
+- alter the frozen burst, frame, tranche, or asset manifests;
+- run detector, crop-feature, semantic-fold, tracking, or temporal inference;
+- calculate football, tactical, physical, or identity metrics;
+- access validation or sealed-holdout media;
+- activate nested suppression or change the C3A6 pitch-gate policy;
+- begin G7E-C before Tranche 1 truth and its receipt are independently validated.
 
-## Tests
+## Completion evidence
 
-Run only focused tests for:
+Require exactly:
 
-- expected paths;
-- manifest schema;
-- SHA-256 generation;
-- duplicate-file detection;
-- match-ID uniqueness;
-- split disjointness;
-- `128058` assigned to training/development;
-- 6/2/2 counts;
-- no source mutation;
-- no legacy movement.
+```text
+20 latest immutable burst events
+20 matching acknowledgement receipts
+1 current Tranche 1 completion receipt
+all_tranche_cases_complete=true
+```
 
-Do not run the full repository test suite unless a repository code change makes it necessary.
-
-## Success criteria
-
-- ten unique match IDs registered;
-- all discovered source files represented;
-- zero source-file mutation;
-- zero source-file movement;
-- legacy `128058` content inventoried;
-- proposed split contains 6 train, 2 validation, and 2 holdout matches;
-- no match appears in more than one split;
-- proposed split is not marked frozen without human approval;
-- outputs are deterministic;
-- final response is concise.
+Earlier superseded events remain immutable historical evidence. Current truth
+always resolves from the exact latest acknowledged 20-event set.
 
 ## Stop point
 
-Stop after the inventory and proposed split are complete.
-
-Do not begin replay, annotation, or training.
+Stop after Tranche 1. Return its completion receipt for independent
+finalization and quality review before any later tranche or temporal-model work.
