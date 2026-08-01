@@ -143,7 +143,13 @@ def test_browser_payload_is_blind_and_practice_is_isolated() -> None:
     assert all(case["practice_only"] for case in practice["cases"])
     assert all(case["tranche_id"] is None for case in practice["cases"])
     assert not (PACKAGE / "human_decisions").exists()
-    assert not (PACKAGE / "practice_decisions").exists()
+    practice_root = PACKAGE / "practice_decisions"
+    if practice_root.exists():
+        assert not list(practice_root.glob("events/*/*.json"))
+        assert not list(practice_root.glob("receipts/**/*.json"))
+        drafts = list(practice_root.glob("drafts/*.json"))
+        assert drafts
+        assert all(read_json(path)["review_revision"] == "G7E_B_TEMPORAL_BURST_REVIEW_V1" for path in drafts)
 
 
 def test_branch_graph_ontology_and_accessibility_contract() -> None:

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Temporal burst review — subject-guided R1</title>
+  <link rel="stylesheet" href="/review.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">FI</span><span>Temporal review</span></div>
+    <div id="modePill" class="mode-pill">Ready to begin</div>
+    <div class="top-progress"><span id="progressText">0 of 20</span><div class="progress-track"><i id="progressFill"></i></div></div>
+    <div id="saveState" class="save-state" aria-live="polite">Server-backed</div>
+    <button id="helpButton" class="icon-button" type="button">Help</button>
+  </header>
+
+  <div id="previewBanner" class="preview-banner hidden">R1 REVIEWER PREVIEW — NO HUMAN DECISION</div>
+  <div id="practiceBanner" class="practice-banner hidden">PRACTICE — NOT HUMAN TRUTH <button id="resetPractice" type="button">Reset practice</button></div>
+  <div id="legacyDraftNotice" class="legacy-draft-notice hidden" role="status">
+    Earlier practice progress uses the old question flow and was not migrated. Reset practice to begin safely.
+    <button id="resetLegacyPractice" type="button">Reset practice</button>
+  </div>
+  <div id="blockingError" class="blocking-error hidden" role="alert"></div>
+
+  <main id="reviewShell" class="review-shell hidden">
+    <section class="evidence-column" aria-label="Nine-frame football evidence">
+      <div class="section-heading">
+        <div><p id="caseEyebrow" class="eyebrow"></p><h1 id="caseTitle">Burst review</h1></div>
+        <div class="evidence-toggles">
+          <label><input id="overlayToggle" type="checkbox" checked> Model candidate boxes</label>
+          <label><input id="subjectToggle" type="checkbox" checked> Subject markers</label>
+          <label><input id="idToggle" type="checkbox"> Box IDs</label>
+        </div>
+      </div>
+
+      <div class="semantic-legend" aria-label="Evidence legend">
+        <span class="legend-yellow"><b>Yellow</b> ORIGINAL FOCUS CANDIDATE — centre frame only</span>
+        <span class="legend-blue"><b>Blue dashed</b> CONTEXT AREA — not counted</span>
+        <span class="legend-subject"><b>A/B/C</b> HUMAN-CONFIRMED subject location</span>
+        <span class="legend-candidate"><b>White boxes</b> MODEL CANDIDATES — not identity</span>
+      </div>
+
+      <div id="evidenceCard" class="evidence-card">
+        <div class="panorama-wrap" id="panoramaWrap" tabindex="0">
+          <canvas id="panoramaCanvas" aria-label="Current panorama frame"></canvas>
+          <div id="assetState" class="asset-state">Loading football frame…</div>
+        </div>
+        <div class="evidence-toolbar" aria-label="Panorama view controls">
+          <button id="fitButton" type="button">Fit</button>
+          <button id="zoomOutButton" type="button" aria-label="Zoom out">−</button>
+          <button id="zoomInButton" type="button" aria-label="Zoom in">+</button>
+          <button id="resetViewButton" type="button">Reset</button>
+          <button id="zoomSubjectButton" type="button">Zoom to Subject A</button>
+          <button id="fullScreenButton" type="button">Full screen</button>
+          <output id="zoomPercent" class="zoom-percent">100%</output>
+          <label class="lock-view"><input id="lockViewToggle" type="checkbox" checked> Lock view across frames</label>
+          <span class="mapping-badge">Source mapping <b id="mappingState">CHECKING</b></span>
+        </div>
+
+        <div class="evidence-lower">
+          <div class="timeline-panel">
+            <div class="playback-row">
+              <button id="firstFrameButton" type="button">First</button>
+              <button id="previousFrameButton" type="button">Previous</button>
+              <button id="playButton" class="primary-compact" type="button">Play</button>
+              <button id="nextFrameButton" type="button">Next</button>
+              <button id="centreFrameButton" type="button">Centre</button>
+              <button id="lastFrameButton" type="button">Last</button>
+              <fieldset class="speed-switch"><legend>Speed</legend><button type="button" data-speed="0.5">0.5×</button><button class="active" type="button" data-speed="1">1×</button><button type="button" data-speed="2">2×</button></fieldset>
+            </div>
+            <div id="timeline" class="timeline" aria-label="Nine-frame timeline"></div>
+          </div>
+          <div class="focus-panel">
+            <div class="focus-heading"><span>Closer look</span><small>Native source detail</small></div>
+            <div id="focusWrap" class="focus-image-wrap" tabindex="0"><canvas id="focusCanvas" aria-label="Native-resolution focus detail"></canvas><div id="focusAssetState">Loading detail…</div></div>
+            <div class="focus-toolbar"><button id="focusFitButton" type="button">Fit</button><button id="focusZoomOutButton" type="button">−</button><button id="focusZoomInButton" type="button">+</button><button id="focusResetButton" type="button">Reset</button><button id="focusZoomSubjectButton" type="button">Zoom to Subject</button><output id="focusZoomPercent">100%</output></div>
+          </div>
+        </div>
+
+        <aside id="subjectReference" class="subject-reference hidden" aria-label="Pinned burst-local subject reference">
+          <div class="subject-reference-token" id="subjectReferenceToken">A</div>
+          <canvas id="subjectReferenceCanvas" width="160" height="112"></canvas>
+          <div><b id="subjectReferenceTitle">Subject A reference</b><span id="subjectReferenceMeta">Human anchor · role not asked yet</span><small>Burst-local visual memory aid only — not identity inference</small></div>
+        </aside>
+      </div>
+    </section>
+
+    <aside class="question-column" aria-live="polite">
+      <div class="question-progress"><span id="questionStep">Question</span><span id="subjectPill"></span></div>
+      <div id="questionCard" class="question-card">
+        <p id="questionKicker" class="question-kicker"></p>
+        <div id="questionLegend" class="question-legend hidden">Start with the <b>yellow original focus box</b>.<br>The <b>blue dashed area</b> is only context.</div>
+        <h2 id="questionTitle">Loading the next question…</h2>
+        <p id="questionHelp" class="question-help"></p>
+        <div id="answerArea" class="answer-area"></div>
+      </div>
+      <div class="question-actions"><button id="backButton" class="secondary" type="button">Back</button><button id="continueButton" class="primary" type="button" disabled>Continue</button></div>
+      <p class="keyboard-hint">Keys: <kbd>1–6</kbd> answer · <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> frames · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>H</kbd> help</p>
+    </aside>
+  </main>
+
+  <section id="welcomeScreen" class="welcome-screen">
+    <div class="welcome-card">
+      <span class="welcome-icon">9</span><p class="eyebrow">SUBJECT-GUIDED R1 · ONE QUESTION AT A TIME</p>
+      <h1>Follow one clearly defined person through nine nearby frames.</h1>
+      <p>Yellow is the original centre-frame candidate. Blue is context only. Your A/B/C markers—not model boxes—show the burst-local person you chose.</p>
+      <div class="welcome-actions"><button id="startRealButton" class="primary large" type="button">Start Tranche 1</button><button id="startPracticeButton" class="secondary large" type="button">Try three practice bursts</button></div>
+      <div class="welcome-safety"><b>Practice first; do not start real Tranche 1 yet.</b><span>Server-backed drafts save after each answer.</span></div>
+    </div>
+  </section>
+
+  <section id="completionScreen" class="completion-screen hidden" aria-live="polite">
+    <div class="completion-card"><div class="success-mark">✓</div><p class="eyebrow mint">SERVER-VERIFIED COMPLETION</p><h1 id="completionTitle">TRANCHE 1 COMPLETE</h1><p id="completionCount" class="completion-count">20 of 20 bursts complete</p><div class="receipt-grid"><div><span>Tranche completion receipt</span><code id="trancheReceipt">—</code></div><div><span>Last acknowledged event</span><code id="lastEvent">—</code></div><div id="globalReceiptRow" class="hidden"><span>Global completion receipt</span><code id="globalReceipt">—</code></div></div><div id="pauseMessage" class="pause-message"><b>PAUSE HERE — YOU MAY STOP SAFELY</b><span>Provide the receipt for independent validation.</span></div><div class="completion-actions"><button id="reviewCompletedButton" class="secondary" type="button">Review completed answers</button><button id="nextTrancheButton" class="primary" type="button">Start Tranche 2</button></div></div>
+  </section>
+
+  <dialog id="confirmDialog"><form method="dialog"><p class="eyebrow">EXPLICIT TRANCHE START</p><h2 id="confirmTitle">Begin the next tranche?</h2><p>The completed tranche remains immutable and read-only.</p><div><button value="cancel" class="secondary">Not yet</button><button id="confirmNext" value="confirm" class="primary">Begin next tranche</button></div></form></dialog>
+  <aside id="helpDrawer" class="help-drawer" aria-hidden="true"><button id="closeHelp" class="icon-button" type="button">Close</button><p class="eyebrow">QUICK HELP</p><h2>Use human markers to follow the same burst-local subject.</h2><ol><li>Judge the yellow original box; blue is context only.</li><li>Click Subject A in each visible frame.</li><li>Model candidate boxes are separate evidence, not identity.</li><li>Wheel to zoom around the cursor; drag to pan; Reset returns to Fit.</li><li>Not sure is always available.</li></ol><p><b>No team, permanent identity, shirt number, or track ID is requested.</b></p></aside>
+  <script src="/review.js"></script>
+</body>
+</html>

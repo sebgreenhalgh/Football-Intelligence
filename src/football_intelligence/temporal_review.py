@@ -22,6 +22,8 @@ from football_intelligence.temporal_burst_selection import CLASS_PRIORITY, MATCH
 
 REVIEW_ID = "G7E_B_TEMPORAL_BURST_REVIEW"
 REVIEW_REVISION = "G7E_B_TEMPORAL_BURST_REVIEW_V1"
+R1_REVIEW_REVISION = "G7E_B_R1_SUBJECT_GUIDANCE_AND_ZOOM_REPAIR_V1"
+SUPPORTED_REVIEW_REVISIONS = (REVIEW_REVISION, R1_REVIEW_REVISION)
 PROTOCOL_ID = "G7E_A_BURST_LOCAL_TEMPORAL_OBSERVATION_PROTOCOL_V1"
 TRANCHES = tuple(f"TRANCHE_{index}" for index in range(1, 7))
 
@@ -290,6 +292,10 @@ class TemporalReviewStore:
         self.lock = threading.RLock()
         review = read_json(self.package / "review_cases.json")
         practice = read_json(self.package / "practice_cases.json")
+        self.review_id = str(review.get("review_id", REVIEW_ID))
+        self.review_revision = str(review.get("review_revision", REVIEW_REVISION))
+        if self.review_id != REVIEW_ID or self.review_revision not in SUPPORTED_REVIEW_REVISIONS:
+            raise ValueError("unsupported temporal-review identity or revision")
         self.cases = list(review["cases"])
         self.practice_cases = list(practice["cases"])
         self.by_id = {case["burst_id"]: case for case in self.cases}
@@ -370,8 +376,8 @@ class TemporalReviewStore:
         payload = {
             "schema_version": "football_intelligence.g7e_b.tranche_completion_receipt.v1",
             "tranche_completion_receipt_id": receipt_id,
-            "review_id": REVIEW_ID,
-            "review_revision": REVIEW_REVISION,
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
             "tranche_id": tranche_id,
             "tranche_manifest_sha256": self.tranche_manifest_sha256,
             "latest_event_set_digest": digest,
@@ -416,8 +422,8 @@ class TemporalReviewStore:
         payload = {
             "schema_version": "football_intelligence.g7e_b.global_completion_receipt.v1",
             "global_completion_receipt_id": receipt_id,
-            "review_id": REVIEW_ID,
-            "review_revision": REVIEW_REVISION,
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
             "latest_event_set_digest": digest,
             "latest_acknowledged_events": event_refs,
             "current_tranche_receipts": tranche_refs,
@@ -467,9 +473,25 @@ class TemporalReviewStore:
         if not path.is_file():
             return None
         payload = read_json(path)
-        if payload.get("review_revision") != REVIEW_REVISION or payload.get("burst_id") != burst_id:
+        if payload.get("review_revision") != self.review_revision or payload.get("burst_id") != burst_id:
             return None
         return payload
+
+    def incompatible_draft(self, mode: str, burst_id: str) -> dict[str, Any] | None:
+        """Describe an older draft without migrating or modifying it."""
+        path = self._root(mode) / "drafts" / f"{burst_id}.json"
+        if not path.is_file():
+            return None
+        payload = read_json(path)
+        if payload.get("review_revision") == self.review_revision:
+            return None
+        return {
+            "burst_id": burst_id,
+            "stored_review_revision": payload.get("review_revision"),
+            "required_review_revision": self.review_revision,
+            "reset_required": True,
+            "silently_migrated": False,
+        }
 
     def save_draft(self, payload: Mapping[str, Any], mode: str) -> dict[str, Any]:
         cases = self.practice_by_id if mode == "practice" else self.by_id
@@ -478,8 +500,8 @@ class TemporalReviewStore:
             raise ValueError("unknown burst draft")
         document = {
             "schema_version": "football_intelligence.g7e_b.temporal_review_draft.v1",
-            "review_id": REVIEW_ID,
-            "review_revision": REVIEW_REVISION,
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
             "mode": mode,
             "burst_id": burst_id,
             "tranche_id": cases[burst_id].get("tranche_id"),
@@ -516,6 +538,8 @@ class TemporalReviewStore:
         if burst_id not in cases:
             raise ValueError("unknown burst event")
         case = cases[burst_id]
+        if self.review_revision == R1_REVIEW_REVISION:
+            return self._validate_r1_event(payload, mode, case)
         focus_answer = payload.get("focus_answer")
         if focus_answer not in ("ONE_PERSON", "MULTIPLE_PEOPLE", "NO_RELEVANT_PERSON", "NOT_SURE"):
             raise ValueError("invalid focus answer")
@@ -608,8 +632,8 @@ class TemporalReviewStore:
             raise ValueError("first event cannot supersede another event")
         event = {
             "schema_version": "football_intelligence.g7e_b.burst_annotation_event.v1",
-            "review_id": REVIEW_ID,
-            "review_revision": REVIEW_REVISION,
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
             "protocol_id": PROTOCOL_ID,
             "event_id": str(uuid.uuid4()),
             "mode": mode,
@@ -633,6 +657,195 @@ class TemporalReviewStore:
             raise ValueError("summary confirmation required")
         return event, case
 
+    def _validate_r1_event(
+        self, payload: Mapping[str, Any], mode: str, case: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], Mapping[str, Any]]:
+        """Validate R1 human-guided locations and frame-local candidate evidence."""
+        focus_answer = payload.get("original_focus_box_answer")
+        focus_values = (
+            "ONE_RELEVANT_MATCH_PERSON",
+            "PART_OF_ONE_RELEVANT_MATCH_PERSON",
+            "MORE_THAN_ONE_RELEVANT_PERSON",
+            "NO_RELEVANT_PERSON",
+            "NOT_SURE",
+        )
+        if focus_answer not in focus_values:
+            raise ValueError("invalid original focus box answer")
+        subjects = payload.get("subjects", [])
+        if not isinstance(subjects, list) or len(subjects) > 3:
+            raise ValueError("invalid subject count")
+        tokens = [subject.get("subject_token") for subject in subjects]
+        if tokens != list(SUBJECT_TOKENS[: len(tokens)]):
+            raise ValueError("subjects must use ordered burst-local tokens")
+        if focus_answer in ("ONE_RELEVANT_MATCH_PERSON", "PART_OF_ONE_RELEVANT_MATCH_PERSON") and not subjects:
+            raise ValueError("yellow-box person requires Subject A")
+        allowed_definition_sources = (
+            "YELLOW_ORIGINAL_FOCUS_CANDIDATE",
+            "YELLOW_MULTI_PERSON_HUMAN_SELECTION",
+            "BLUE_CONTEXT_HUMAN_SELECTION",
+            "UNCERTAIN_HUMAN_SELECTION",
+        )
+        frame_candidates = case.get("frame_candidates", [[] for _ in range(9)])
+        if len(frame_candidates) != 9:
+            raise ValueError("frame-candidate closure mismatch")
+        all_candidates = {
+            (sequence, candidate["candidate_id"]): candidate
+            for sequence, candidates in enumerate(frame_candidates)
+            for candidate in candidates
+        }
+        expected_mappings: set[tuple[str, int, str]] = set()
+        for subject in subjects:
+            if subject.get("subject_definition_source") not in allowed_definition_sources:
+                raise ValueError("invalid subject definition source")
+            if subject.get("role") not in ROLES or subject.get("participation") not in PARTICIPATION:
+                raise ValueError("invalid role or participation")
+            if subject.get("certainty") not in CERTAINTY:
+                raise ValueError("invalid certainty")
+            if subject.get("candidate_relationship") not in (*RELATIONSHIPS, "NOT_APPLICABLE"):
+                raise ValueError("invalid candidate relationship")
+            if subject.get("continuity") not in CONTINUITY:
+                raise ValueError("invalid continuity")
+            marker_review = subject.get("marker_continuity_confirmation")
+            if marker_review not in ("SAME_SUBJECT_CONFIRMED", "CANNOT_TELL"):
+                raise ValueError("marker continuity review required")
+            anchor_sequence = subject.get("anchor_frame_sequence")
+            anchor_xy = subject.get("anchor_source_xy")
+            if not isinstance(anchor_sequence, int) or not 0 <= anchor_sequence < 9:
+                raise ValueError("invalid subject anchor frame")
+            self._validate_source_xy(anchor_xy, case, "subject anchor")
+            observations = subject.get("frame_observations", [])
+            if len(observations) != 9:
+                raise ValueError("each subject requires nine frame observations")
+            for sequence, observation in enumerate(observations):
+                if observation.get("frame_reference_id") != case["frames"][sequence]["frame_reference_id"]:
+                    raise ValueError("subject location frame mismatch")
+                visibility = observation.get("visibility")
+                supply = observation.get("observation_supply")
+                if visibility not in VISIBILITY or supply not in SUPPLY:
+                    raise ValueError("invalid visibility or supply")
+                if observation.get("occlusion_phase") not in OCCLUSION_PHASES:
+                    raise ValueError("invalid occlusion phase")
+                x = observation.get("subject_location_source_x")
+                y = observation.get("subject_location_source_y")
+                has_point = isinstance(x, (int, float)) and isinstance(y, (int, float))
+                if visibility in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL"):
+                    if not has_point or observation.get("human_confirmed") is not True:
+                        raise ValueError("visible subject requires a human-confirmed location")
+                elif visibility in ("OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT") and has_point:
+                    raise ValueError("absent subject must not have a location")
+                if has_point:
+                    self._validate_source_xy([x, y], case, "frame subject location")
+                if (
+                    observation.get("approximate_hidden_location") is True
+                    and visibility != "FULLY_OCCLUDED_EXPECTED_PRESENT"
+                ):
+                    raise ValueError("approximate hidden point requires hidden visibility")
+                if visibility in ("OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT") and supply != "NOT_APPLICABLE":
+                    raise ValueError("absent frame supply must be NOT_APPLICABLE")
+                selected = observation.get("selected_candidate_ids", [])
+                if not isinstance(selected, list) or len(selected) != len(set(selected)):
+                    raise ValueError("invalid selected candidate IDs")
+                needs_selection = supply in (
+                    "ONE_USEFUL_CANDIDATE",
+                    "MULTIPLE_CANDIDATES",
+                    "MERGED_WITH_OTHER_PEOPLE",
+                    "FRAGMENT_ONLY",
+                )
+                if needs_selection and not selected:
+                    raise ValueError("candidate supply answer requires a selected box")
+                if not needs_selection and selected:
+                    raise ValueError("candidate selections do not match supply answer")
+                for candidate_id in selected:
+                    if (sequence, candidate_id) not in all_candidates:
+                        raise ValueError("selected candidate is unavailable in this frame")
+                    expected_mappings.add((str(subject["subject_token"]), sequence, str(candidate_id)))
+        candidate_mappings = payload.get("candidate_mappings", [])
+        actual_mappings: set[tuple[str, int, str]] = set()
+        for mapping in candidate_mappings:
+            sequence = mapping.get("frame_sequence")
+            key = (sequence, mapping.get("candidate_id"))
+            candidate = all_candidates.get(key)
+            if candidate is None or mapping.get("source_box_xyxy") != candidate["source_box_xyxy"]:
+                raise ValueError("candidate mapping does not bind a frozen frame-local box")
+            if mapping.get("frame_reference_id") != case["frames"][sequence]["frame_reference_id"]:
+                raise ValueError("candidate mapping frame mismatch")
+            actual_mappings.add((str(mapping.get("subject_token")), int(sequence), str(mapping.get("candidate_id"))))
+        if actual_mappings != expected_mappings:
+            raise ValueError("candidate mappings do not match frame observations")
+        self._validate_missed_people(payload, case)
+        if payload.get("source_frame_hashes") != [frame["source_frame_pixel_sha256"] for frame in case["frames"]]:
+            raise ValueError("source-frame hash mismatch")
+        latest = self.latest_events(mode)
+        burst_id = str(payload["burst_id"])
+        supersedes_event_id = payload.get("supersedes_event_id")
+        if burst_id in latest and supersedes_event_id != latest[burst_id]["event_id"]:
+            raise ValueError("superseding edit must reference the exact latest event")
+        if burst_id not in latest and supersedes_event_id is not None:
+            raise ValueError("first event cannot supersede another event")
+        normalized_focus = {
+            "ONE_RELEVANT_MATCH_PERSON": "ONE_PERSON",
+            "PART_OF_ONE_RELEVANT_MATCH_PERSON": "ONE_PERSON",
+            "MORE_THAN_ONE_RELEVANT_PERSON": "MULTIPLE_PEOPLE",
+            "NO_RELEVANT_PERSON": "NO_RELEVANT_PERSON",
+            "NOT_SURE": "NOT_SURE",
+        }[focus_answer]
+        event = {
+            "schema_version": "football_intelligence.g7e_b_r1.burst_annotation_event.v1",
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
+            "protocol_id": PROTOCOL_ID,
+            "event_id": str(uuid.uuid4()),
+            "mode": mode,
+            "tranche_id": case.get("tranche_id"),
+            "burst_id": burst_id,
+            "burst_manifest_path": case["burst_manifest_path"],
+            "burst_manifest_sha256": case["source_manifest_hashes"]["temporal_burst_manifest_sha256"],
+            "source_frame_hashes": payload["source_frame_hashes"],
+            "focus_answer": normalized_focus,
+            "original_focus_box_answer": focus_answer,
+            "context_subject_answer": payload.get("context_subject_answer", "NOT_APPLICABLE"),
+            "subjects": subjects,
+            "candidate_mappings": candidate_mappings,
+            "whole_burst_missed_person_answer": payload.get("whole_burst_missed_person_answer"),
+            "whole_burst_missed_person_marks": payload.get("whole_burst_missed_person_marks", []),
+            "summary_confirmed": payload.get("summary_confirmed") is True,
+            "supersedes_event_id": supersedes_event_id,
+            "acceptance_temporary": payload.get("acceptance_temporary") is True,
+            "created_at_utc": utc_now(),
+            "production_ready": False,
+        }
+        if not event["summary_confirmed"]:
+            raise ValueError("summary confirmation required")
+        return event, case
+
+    @staticmethod
+    def _validate_source_xy(xy: Any, case: Mapping[str, Any], label: str) -> None:
+        if (
+            not isinstance(xy, list)
+            or len(xy) != 2
+            or not all(isinstance(value, (int, float)) for value in xy)
+            or not 0 <= xy[0] <= case["source_width"]
+            or not 0 <= xy[1] <= case["source_height"]
+        ):
+            raise ValueError(f"invalid {label} source coordinate")
+
+    def _validate_missed_people(self, payload: Mapping[str, Any], case: Mapping[str, Any]) -> None:
+        answer = payload.get("whole_burst_missed_person_answer")
+        marks = payload.get("whole_burst_missed_person_marks", [])
+        if answer not in ("YES", "NO", "NOT_SURE"):
+            raise ValueError("invalid whole-burst missed-person answer")
+        if answer == "YES" and not marks:
+            raise ValueError("yes missed-person answer requires a source-coordinate mark")
+        if answer != "YES" and marks:
+            raise ValueError("missed-person marks require a yes answer")
+        for mark in marks:
+            sequence = mark.get("frame_sequence")
+            if not isinstance(sequence, int) or not 0 <= sequence < 9:
+                raise ValueError("invalid missed-person frame")
+            if mark.get("frame_reference_id") != case["frames"][sequence]["frame_reference_id"]:
+                raise ValueError("missed-person frame-reference mismatch")
+            self._validate_source_xy(mark.get("source_xy"), case, "missed-person")
+
     def save_event(self, payload: Mapping[str, Any], mode: str = "real") -> dict[str, Any]:
         with self.lock:
             event, case = self._validate_event(payload, mode)
@@ -646,8 +859,8 @@ class TemporalReviewStore:
             receipt = {
                 "schema_version": "football_intelligence.g7e_b.event_acknowledgement_receipt.v1",
                 "receipt_id": f"ack-{event['event_id']}",
-                "review_id": REVIEW_ID,
-                "review_revision": REVIEW_REVISION,
+                "review_id": self.review_id,
+                "review_revision": self.review_revision,
                 "mode": mode,
                 "tranche_id": case.get("tranche_id"),
                 "burst_id": event["burst_id"],
@@ -691,8 +904,8 @@ class TemporalReviewStore:
             latest = self.latest_events("practice")
             first = next((case for case in self.practice_cases if case["burst_id"] not in latest), None)
             return {
-                "review_id": REVIEW_ID,
-                "review_revision": REVIEW_REVISION,
+                "review_id": self.review_id,
+                "review_revision": self.review_revision,
                 "mode": "practice",
                 "practice": True,
                 "completed_count": len(latest),
@@ -700,6 +913,7 @@ class TemporalReviewStore:
                 "first_incomplete_burst_id": first["burst_id"] if first else None,
                 "all_practice_complete": len(latest) == 3,
                 "draft": self.draft("practice", first["burst_id"]) if first else None,
+                "incompatible_draft": self.incompatible_draft("practice", first["burst_id"]) if first else None,
                 "human_truth": False,
             }
         latest = self.latest_events("real")
@@ -714,8 +928,8 @@ class TemporalReviewStore:
             (latest[case["burst_id"]] for case in completed_cases), key=lambda row: row["server_sequence"], default=None
         )
         return {
-            "review_id": REVIEW_ID,
-            "review_revision": REVIEW_REVISION,
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
             "mode": "real",
             "tranche_id": tranche_id,
             "unlocked_tranches": unlocked,
@@ -723,6 +937,7 @@ class TemporalReviewStore:
             "total_count": 20,
             "first_incomplete_burst_id": first["burst_id"] if first else None,
             "draft": self.draft("real", first["burst_id"]) if first else None,
+            "incompatible_draft": self.incompatible_draft("real", first["burst_id"]) if first else None,
             "tranche_complete": receipt is not None,
             "tranche_completion_receipt_id": receipt["tranche_completion_receipt_id"] if receipt else None,
             "last_event_id": last_event["event_id"] if last_event else None,
@@ -739,6 +954,8 @@ class TemporalReviewStore:
         return {"ok": True, "practice_reset": True, "human_event_count": len(self.latest_events("real"))}
 
     def acceptance_event(self, case: Mapping[str, Any], branch: str = "simple") -> dict[str, Any]:
+        if self.review_revision == R1_REVIEW_REVISION:
+            return self._r1_acceptance_event(case, branch)
         visibility = ["VISIBLE_COMPLETE"] * 9
         supply = ["ONE_USEFUL_CANDIDATE"] * 9
         phases = ["NONE"] * 9
@@ -822,6 +1039,82 @@ class TemporalReviewStore:
             "acceptance_temporary": True,
         }
 
+    def _r1_acceptance_event(self, case: Mapping[str, Any], branch: str) -> dict[str, Any]:
+        visibility = ["VISIBLE_COMPLETE"] * 9
+        if branch == "occlusion":
+            visibility = [
+                "VISIBLE_COMPLETE",
+                "VISIBLE_COMPLETE",
+                "VISIBLE_PARTIAL",
+                "FULLY_OCCLUDED_EXPECTED_PRESENT",
+                "FULLY_OCCLUDED_EXPECTED_PRESENT",
+                "VISIBLE_PARTIAL",
+                "VISIBLE_COMPLETE",
+                "VISIBLE_COMPLETE",
+                "VISIBLE_COMPLETE",
+            ]
+        subject_count = 0 if branch == "no_focus" else (2 if branch == "multiple" else 1)
+        subjects = []
+        for subject_index in range(subject_count):
+            observations = []
+            for sequence, frame in enumerate(case["frames"]):
+                state = visibility[sequence]
+                point = [
+                    case["source_width"] * (0.48 + subject_index * 0.04),
+                    case["source_height"] * 0.5,
+                ]
+                observations.append(
+                    {
+                        "frame_reference_id": frame["frame_reference_id"],
+                        "visibility": state,
+                        "subject_location_source_x": point[0]
+                        if state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL")
+                        else None,
+                        "subject_location_source_y": point[1]
+                        if state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL")
+                        else None,
+                        "human_confirmed": state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL"),
+                        "approximate_hidden_location": False,
+                        "observation_supply": "NO_CANDIDATE",
+                        "selected_candidate_ids": [],
+                        "occlusion_phase": "OCCLUDED" if state == "FULLY_OCCLUDED_EXPECTED_PRESENT" else "NONE",
+                    }
+                )
+            subjects.append(
+                {
+                    "subject_token": SUBJECT_TOKENS[subject_index],
+                    "subject_definition_source": "YELLOW_MULTI_PERSON_HUMAN_SELECTION"
+                    if branch == "multiple"
+                    else "YELLOW_ORIGINAL_FOCUS_CANDIDATE",
+                    "anchor_frame_sequence": 4,
+                    "anchor_source_xy": [
+                        case["source_width"] * (0.48 + subject_index * 0.04),
+                        case["source_height"] * 0.5,
+                    ],
+                    "frame_observations": observations,
+                    "marker_continuity_confirmation": "SAME_SUBJECT_CONFIRMED",
+                    "candidate_relationship": "NOT_APPLICABLE",
+                    "continuity": "SAME_BURST_LOCAL_SUBJECT" if branch == "occlusion" else "NOT_APPLICABLE",
+                    "role": "OUTFIELD_PLAYER",
+                    "participation": "ACTIVE_IN_MATCH",
+                    "certainty": "PROBABLE",
+                }
+            )
+        return {
+            "burst_id": case["burst_id"],
+            "original_focus_box_answer": "NO_RELEVANT_PERSON"
+            if branch == "no_focus"
+            else ("MORE_THAN_ONE_RELEVANT_PERSON" if branch == "multiple" else "ONE_RELEVANT_MATCH_PERSON"),
+            "context_subject_answer": "NO" if branch == "no_focus" else "NOT_APPLICABLE",
+            "subjects": subjects,
+            "candidate_mappings": [],
+            "whole_burst_missed_person_answer": "NO",
+            "whole_burst_missed_person_marks": [],
+            "source_frame_hashes": [frame["source_frame_pixel_sha256"] for frame in case["frames"]],
+            "summary_confirmed": True,
+            "acceptance_temporary": True,
+        }
+
     def complete_acceptance_tranche(self, tranche_id: str) -> dict[str, Any]:
         if not self.acceptance_mode:
             raise ValueError("acceptance endpoint disabled")
@@ -854,10 +1147,12 @@ def create_server(
     package: Path,
     decisions_root: Path | None = None,
     practice_root: Path | None = None,
+    asset_root: Path | None = None,
     port: int = 8818,
     acceptance_mode: bool = False,
 ) -> ThreadingHTTPServer:
     package = package.resolve()
+    resolved_asset_root = (asset_root or package / "assets").resolve()
     store = TemporalReviewStore(package, decisions_root, practice_root, acceptance_mode)
 
     class Handler(BaseHTTPRequestHandler):
@@ -900,9 +1195,8 @@ def create_server(
                 return self.send_json(200, {"tranche_id": tranche_id, "read_only": True, "events": events})
             if route.startswith("/assets/"):
                 relative = Path(unquote(route.removeprefix("/assets/")))
-                candidate = (package / "assets" / relative).resolve()
-                asset_root = (package / "assets").resolve()
-                if asset_root not in candidate.parents or not candidate.is_file():
+                candidate = (resolved_asset_root / relative).resolve()
+                if resolved_asset_root not in candidate.parents or not candidate.is_file():
                     return self.send_json(404, {"error": "asset not found"})
                 mime = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
                 return self.send_bytes(200, candidate.read_bytes(), mime)
@@ -937,10 +1231,11 @@ def serve(
     package: Path,
     decisions_root: Path | None = None,
     practice_root: Path | None = None,
+    asset_root: Path | None = None,
     port: int = 8818,
     acceptance_mode: bool = False,
 ) -> None:
-    server = create_server(package, decisions_root, practice_root, port, acceptance_mode)
+    server = create_server(package, decisions_root, practice_root, asset_root, port, acceptance_mode)
     print(f"G7E-B temporal reviewer: http://127.0.0.1:{server.server_port}/", flush=True)
     server.serve_forever()
 
@@ -950,10 +1245,11 @@ def main() -> None:
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--decisions-root", type=Path)
     parser.add_argument("--practice-root", type=Path)
+    parser.add_argument("--asset-root", type=Path)
     parser.add_argument("--port", type=int, default=8818)
     parser.add_argument("--acceptance-mode", action="store_true")
     args = parser.parse_args()
-    serve(args.package, args.decisions_root, args.practice_root, args.port, args.acceptance_mode)
+    serve(args.package, args.decisions_root, args.practice_root, args.asset_root, args.port, args.acceptance_mode)
 
 
 if __name__ == "__main__":
