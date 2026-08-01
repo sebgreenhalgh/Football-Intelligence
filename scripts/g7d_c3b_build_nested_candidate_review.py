@@ -181,6 +181,27 @@ def atomic(path,data):
  path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp"); tmp.write_text(json.dumps(data,sort_keys=True,indent=2)+"\n",encoding="utf-8"); os.replace(tmp,path)
 class Handler(SimpleHTTPRequestHandler):
  def translate_path(self,path): return str(ROOT/path.lstrip("/"))
+ def do_GET(self):
+  if self.path!="/api/review-state": return super().do_GET()
+  cases=json.loads((ROOT/"cases.json").read_text())["cases"]; case_ids=[c["case_id"] for c in cases]
+  latest={}
+  for p in (DECISIONS/"events").glob("*.json"):
+   e=json.loads(p.read_text()); latest[e["case_id"]]=(e,p)
+  completions=[]
+  for p in (DECISIONS/"completion").glob("*.json"):
+   c=json.loads(p.read_text()); expected=sorted([cid,e[0]["event_id"],hashlib.sha256(e[1].read_bytes()).hexdigest()] for cid,e in latest.items())
+   if c.get("all_cases_complete") is True and c.get("latest_event_set")==expected: completions.append(c)
+  if len(completions)>1: return self.reply({"error":"AMBIGUOUS_CURRENT_COMPLETION"},409)
+  if completions:
+   c=completions[0]; last=max(latest.items(),key=lambda item:case_ids.index(item[0]))[1][0]
+   return self.reply({"revision":"G7D_C3B1_COMPLETION_RESTORATION_V1","completed":True,"completed_count":48,"total_count":48,"all_cases_complete":True,"completion_receipt_id":c["completion_receipt_id"],"last_event_id":last["event_id"],"editable":False})
+  first=next((cid for cid in case_ids if cid not in latest),None); draft=None
+  if first:
+   p=DECISIONS/"drafts"/f"{first}.json"
+   if p.is_file():
+    candidate=json.loads(p.read_text()); valid=set(candidate.get("answers",{})).issubset({str(i) for i in range(6)}) and candidate.get("case_id")==first
+    if valid: draft=candidate
+  return self.reply({"revision":"G7D_C3B1_COMPLETION_RESTORATION_V1","completed":False,"completed_count":len(latest),"total_count":48,"all_cases_complete":False,"first_incomplete_case_id":first,"draft":draft,"editable":True})
  def do_POST(self):
   n=int(self.headers.get("Content-Length",0)); body=json.loads(self.rfile.read(n)); case=body.get("case_id")
   if self.path=="/api/draft": atomic(DECISIONS/"drafts"/f"{case}.json",body); return self.reply({"saved":True})
@@ -211,7 +232,8 @@ JS = r"""let cases=[],i=0,q=0,answers={};const progressEl=document.getElementByI
 function draw(canvas,img,c){canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;let x=canvas.getContext('2d');x.drawImage(img,0,0);x.lineWidth=Math.max(4,img.naturalWidth/700);for(let [b,col] of [[c.outer_box,'#23d5e6'],[c.inner_box,'#ffd128']]){x.strokeStyle=col;x.strokeRect(b[0],b[1],b[2]-b[0],b[3]-b[1]);}}
 function drawContext(canvas,img,c){let b=c.outer_box,p=Math.max(80,(b[2]-b[0])*2),x1=Math.max(0,b[0]-p),y1=Math.max(0,b[1]-p),x2=Math.min(img.naturalWidth,b[2]+p),y2=Math.min(img.naturalHeight,b[3]+p);canvas.width=x2-x1;canvas.height=y2-y1;let x=canvas.getContext('2d');x.drawImage(img,x1,y1,x2-x1,y2-y1,0,0,x2-x1,y2-y1);x.lineWidth=Math.max(3,canvas.width/120);for(let [box,col] of [[c.outer_box,'#23d5e6'],[c.inner_box,'#ffd128']]){x.strokeStyle=col;x.strokeRect(box[0]-x1,box[1]-y1,box[2]-box[0],box[3]-box[1]);}}
 function render(){let c=cases[i];progressEl.textContent=`Case ${i+1} of 48 · ${c.match_id}`;let img=new Image();img.onload=()=>{draw(wholeEl,img,c);drawContext(contextEl,img,c)};img.onerror=()=>statusEl.textContent='BLOCKING ASSET ERROR';img.src=c.asset_url;questionEl.innerHTML=`<h2>${questions[q][0]}</h2><p>Question ${q+1} of 6</p>`;answersEl.innerHTML='';questions[q][1].forEach(a=>{let b=document.createElement('button');b.className='answer'+(answers[q]===a?' selected':'');b.textContent=a;b.onclick=()=>{answers[q]=a;fetch('/api/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:c.case_id,answers})});render()};answersEl.appendChild(b)});nextBtn.disabled=!answers[q];nextBtn.textContent=q===5?'Save this review':'Continue'}
-nextBtn.onclick=async()=>{if(q<5){q++;render();return}let c=cases[i],r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:c.case_id,answers})}),j=await r.json();statusEl.textContent=`SAVED — SERVER ACKNOWLEDGED · ${j.event_id}`;if(i<47){i++;q=0;answers={};render()}else if(j.all_cases_complete)statusEl.textContent+=` · ALL CASES COMPLETE · ${j.completion_receipt_id}`};backBtn.onclick=()=>{if(q){q--;render()}};fetch('/cases.json').then(r=>r.json()).then(x=>{cases=x.cases;render()});"""
+function renderComplete(s){progressEl.textContent='48 of 48 complete';questionEl.innerHTML='<h2>ALL CASES COMPLETE</h2><p>Completion receipt: '+s.completion_receipt_id+'</p><p>Last acknowledged event: '+s.last_event_id+'</p>';answersEl.innerHTML='';nextBtn.disabled=true;backBtn.disabled=true;statusEl.textContent='Review is complete and read-only. No new event will be created.'}
+nextBtn.onclick=async()=>{if(q<5){q++;render();return}let c=cases[i],r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:c.case_id,answers})}),j=await r.json();statusEl.textContent=`SAVED — SERVER ACKNOWLEDGED · ${j.event_id}`;if(i<47){i++;q=0;answers={};render()}else if(j.all_cases_complete)statusEl.textContent+=` · ALL CASES COMPLETE · ${j.completion_receipt_id}`};backBtn.onclick=()=>{if(q){q--;render()}};Promise.all([fetch('/cases.json').then(r=>r.json()),fetch('/api/review-state').then(r=>r.json())]).then(([x,s])=>{cases=x.cases;if(s.completed){renderComplete(s);return}i=Math.max(0,cases.findIndex(c=>c.case_id===s.first_incomplete_case_id));answers=(s.draft&&s.draft.answers)||{};q=Object.keys(answers).length?Math.min(Object.keys(answers).length,5):0;render()}).catch(e=>{statusEl.textContent='RESTORATION ERROR — '+e;nextBtn.disabled=true;backBtn.disabled=true});"""
 
 
 def build():
