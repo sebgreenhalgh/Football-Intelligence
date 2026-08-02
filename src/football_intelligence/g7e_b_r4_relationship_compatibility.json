@@ -1,0 +1,131 @@
+{
+  "schema_version": "football_intelligence.g7e_b_r4.relationship_compatibility.v1",
+  "review_revision": "G7E_B_R4_CANDIDATE_RELATIONSHIP_BRANCH_INTEGRITY_V1",
+  "legacy_supply_aliases": {
+    "NO_USEFUL_BOX": "NO_CANDIDATE",
+    "NOT_SURE": "UNCERTAIN"
+  },
+  "supply_states": {
+    "ONE_USEFUL_CANDIDATE": {
+      "minimum_selected_count": 1,
+      "maximum_selected_count": 1,
+      "relationship_applicable": false,
+      "canonical_relationship": "NOT_APPLICABLE",
+      "question_family": null
+    },
+    "MULTIPLE_CANDIDATES": {
+      "minimum_selected_count": 2,
+      "maximum_selected_count": null,
+      "relationship_applicable": true,
+      "canonical_relationship": null,
+      "question_family": "MULTIPLE_BOX_RELATIONSHIP"
+    },
+    "MERGED_WITH_OTHER_PEOPLE": {
+      "minimum_selected_count": 1,
+      "maximum_selected_count": 1,
+      "relationship_applicable": true,
+      "canonical_relationship": null,
+      "question_family": "SINGLE_MERGED_BOX_CONFIRMATION"
+    },
+    "FRAGMENT_ONLY": {
+      "minimum_selected_count": 1,
+      "maximum_selected_count": null,
+      "relationship_applicable": true,
+      "canonical_relationship": null,
+      "question_family": "FRAGMENT_MEANING"
+    },
+    "NO_CANDIDATE": {
+      "minimum_selected_count": 0,
+      "maximum_selected_count": 0,
+      "relationship_applicable": false,
+      "canonical_relationship": "NOT_APPLICABLE",
+      "question_family": null
+    },
+    "UNCERTAIN": {
+      "minimum_selected_count": 0,
+      "maximum_selected_count": 0,
+      "relationship_applicable": false,
+      "canonical_relationship": "NOT_APPLICABLE",
+      "question_family": null
+    },
+    "NOT_APPLICABLE": {
+      "minimum_selected_count": 0,
+      "maximum_selected_count": 0,
+      "relationship_applicable": false,
+      "canonical_relationship": "NOT_APPLICABLE",
+      "question_family": null
+    }
+  },
+  "question_families": {
+    "MULTIPLE_BOX_RELATIONSHIP": {
+      "question": "How do these selected boxes relate to Subject {subject} in this frame?",
+      "help": "This question concerns only the boxes you selected in this frame.",
+      "allowed_relationships": [
+        "SAME_PERSON_DUPLICATES",
+        "SAME_PERSON_FRAGMENTS",
+        "DIFFERENT_PEOPLE",
+        "CORRECT_INNER_BAD_OUTER",
+        "OBJECT_OR_BACKGROUND",
+        "MERGED_MULTI_PERSON",
+        "UNCERTAIN"
+      ],
+      "options": [
+        ["SAME_PERSON_DUPLICATES", "Duplicate boxes for Subject {subject}"],
+        ["SAME_PERSON_FRAGMENTS", "Main person box plus body-fragment boxes"],
+        ["DIFFERENT_PEOPLE", "The boxes belong to different people"],
+        ["CORRECT_INNER_BAD_OUTER", "The smaller box is the correct person; the larger box is poor"],
+        ["OBJECT_OR_BACKGROUND", "One selected box is object or background rather than a person"],
+        ["MERGED_MULTI_PERSON", "One selected box merges Subject {subject} with another person"],
+        ["UNCERTAIN", "Not sure"]
+      ]
+    },
+    "SINGLE_MERGED_BOX_CONFIRMATION": {
+      "question": "Does this one box cover Subject {subject} and at least one other person?",
+      "help": "This question concerns only the box you selected in this frame.",
+      "allowed_relationships": ["MERGED_MULTI_PERSON", "UNCERTAIN"],
+      "options": [
+        ["MERGED_MULTI_PERSON", "Yes — several people are merged into this box"],
+        ["BRANCH_CORRECTION", "No — return to the previous box-evidence question"],
+        ["UNCERTAIN", "Not sure"]
+      ]
+    },
+    "FRAGMENT_MEANING": {
+      "question": "What does the selected fragment box represent?",
+      "help": "This question concerns only the box or boxes you selected in this frame.",
+      "allowed_relationships": [
+        "SUBJECT_BODY_FRAGMENT",
+        "OBJECT_OR_BACKGROUND",
+        "CORRECT_INNER_BAD_OUTER",
+        "UNCERTAIN"
+      ],
+      "options": [
+        ["SUBJECT_BODY_FRAGMENT", "A body fragment of Subject {subject}"],
+        ["OBJECT_OR_BACKGROUND", "An object or background fragment"],
+        ["CORRECT_INNER_BAD_OUTER", "A smaller correct person box inside a poor larger box"],
+        ["UNCERTAIN", "Not sure"]
+      ]
+    }
+  },
+  "relationship_states": {
+    "SAME_PERSON_DUPLICATES": {"minimum_selected_count": 2},
+    "SAME_PERSON_FRAGMENTS": {"minimum_selected_count": 2},
+    "DIFFERENT_PEOPLE": {"minimum_selected_count": 2},
+    "CORRECT_INNER_BAD_OUTER": {"minimum_selected_count": 2},
+    "MERGED_MULTI_PERSON": {"minimum_selected_count": 1},
+    "SUBJECT_BODY_FRAGMENT": {"minimum_selected_count": 1},
+    "OBJECT_OR_BACKGROUND": {"minimum_selected_count": 1},
+    "UNCERTAIN": {"minimum_selected_count": 1},
+    "NOT_APPLICABLE": {"minimum_selected_count": 0}
+  },
+  "invalidation_triggers": [
+    "candidate_supply_state",
+    "selected_candidate_ids",
+    "selected_candidate_count",
+    "subject_token",
+    "frame",
+    "visibility_state"
+  ],
+  "silent_genuine_human_answer_rewrite_forbidden": true,
+  "non_applicable_clear_allowed": true,
+  "production_ready": false
+}

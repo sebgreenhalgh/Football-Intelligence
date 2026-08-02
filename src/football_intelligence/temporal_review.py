@@ -25,11 +25,13 @@ REVIEW_REVISION = "G7E_B_TEMPORAL_BURST_REVIEW_V1"
 R1_REVIEW_REVISION = "G7E_B_R1_SUBJECT_GUIDANCE_AND_ZOOM_REPAIR_V1"
 R2_REVIEW_REVISION = "G7E_B_R2_FULL_TEMPORAL_CANDIDATE_CLOSURE_V1"
 R3_REVIEW_REVISION = "G7E_B_R3_FRAME_BINDING_AND_ATOMIC_FINAL_SAVE_V1"
+R4_REVIEW_REVISION = "G7E_B_R4_CANDIDATE_RELATIONSHIP_BRANCH_INTEGRITY_V1"
 SUPPORTED_REVIEW_REVISIONS = (
     REVIEW_REVISION,
     R1_REVIEW_REVISION,
     R2_REVIEW_REVISION,
     R3_REVIEW_REVISION,
+    R4_REVIEW_REVISION,
 )
 PROTOCOL_ID = "G7E_A_BURST_LOCAL_TEMPORAL_OBSERVATION_PROTOCOL_V1"
 TRANCHES = tuple(f"TRANCHE_{index}" for index in range(1, 7))
@@ -67,6 +69,7 @@ RELATIONSHIPS = (
     "CORRECT_INNER_BAD_OUTER",
     "MERGED_MULTI_PERSON",
     "OBJECT_OR_BACKGROUND",
+    "SUBJECT_BODY_FRAGMENT",
     "UNCERTAIN",
 )
 OCCLUSION_PHASES = ("NONE", "ENTERING_OCCLUSION", "OCCLUDED", "EXITING_OCCLUSION", "UNCERTAIN")
@@ -337,6 +340,16 @@ class TemporalReviewStore:
         candidate_state_path = self.package / "candidate_states_by_reference.json"
         candidate_state_rows = read_json(candidate_state_path) if candidate_state_path.is_file() else {"frames": {}}
         self.candidate_states_by_reference = dict(candidate_state_rows.get("frames", {}))
+        relationship_path = self.package / "relationship_compatibility.json"
+        self.relationship_contract = read_json(relationship_path) if relationship_path.is_file() else None
+        if self.review_revision == R4_REVIEW_REVISION:
+            if not isinstance(self.relationship_contract, Mapping):
+                raise ValueError("R4 relationship-compatibility contract is missing")
+            if self.relationship_contract.get("review_revision") != R4_REVIEW_REVISION:
+                raise ValueError("R4 relationship-compatibility revision mismatch")
+            self.relationship_compatibility_sha256 = sha256_file(relationship_path)
+        else:
+            self.relationship_compatibility_sha256 = None
         self.by_id = {case["burst_id"]: case for case in self.cases}
         self.practice_by_id = {case["burst_id"]: case for case in self.practice_cases}
         self.by_tranche = {
@@ -384,6 +397,188 @@ class TemporalReviewStore:
             "message": message,
             "suggested_correction_route": question_id,
         }
+
+    def relationship_compatibility(
+        self,
+        *,
+        case: Mapping[str, Any],
+        subject_token: str,
+        subject_index: int,
+        sequence: int,
+        observation: Mapping[str, Any],
+        final: bool,
+    ) -> dict[str, Any]:
+        """Evaluate one frame against the package's single canonical R4 matrix."""
+        if self.review_revision != R4_REVIEW_REVISION or not isinstance(self.relationship_contract, Mapping):
+            raise ValueError("R4 relationship compatibility is unavailable")
+        aliases = self.relationship_contract.get("legacy_supply_aliases", {})
+        raw_supply = observation.get("observation_supply")
+        supply = aliases.get(raw_supply, raw_supply)
+        states = self.relationship_contract["supply_states"]
+        state = states.get(supply)
+        expected = self._frame_identity(case, sequence)
+        supply_question = f"subject_{subject_index}_supply_{sequence}"
+        relationship_question = f"subject_{subject_index}_relationship_{sequence}"
+        selected = observation.get("selected_candidate_ids", [])
+        selected = list(selected) if isinstance(selected, list) else []
+        relationship = observation.get("candidate_relationship")
+        errors: list[dict[str, Any]] = []
+
+        def add_error(code: str, field: str, message: str, route: str) -> None:
+            errors.append(
+                {
+                    **self._structured_error(
+                        code=code,
+                        field=field,
+                        message=message,
+                        subject_token=subject_token,
+                        question_id=route,
+                        expected=expected,
+                        array_location=f"subjects[{subject_index}].frame_observations[{sequence}]",
+                    ),
+                    "candidate_supply_state": supply,
+                    "selected_candidate_count": len(selected),
+                    "selected_candidate_ids": selected,
+                    "stored_relationship": relationship,
+                    "allowed_relationships": (
+                        self.relationship_contract["question_families"]
+                        .get(state.get("question_family") if state else "", {})
+                        .get("allowed_relationships", [])
+                    ),
+                    "correction_route": route,
+                }
+            )
+
+        if state is None:
+            add_error(
+                "UNKNOWN_CANDIDATE_SUPPLY_STATE",
+                "observation_supply",
+                f"{raw_supply!r} is not a supported candidate-supply answer.",
+                supply_question,
+            )
+            return {
+                "supply_state": supply,
+                "selected_candidate_count": len(selected),
+                "selected_candidate_ids": selected,
+                "relationship_applicable": False,
+                "question_family": None,
+                "relationship_question_id": None,
+                "allowed_relationships": [],
+                "next_valid_question": supply_question,
+                "errors": errors,
+            }
+
+        minimum = int(state["minimum_selected_count"])
+        maximum = state.get("maximum_selected_count")
+        if maximum is not None and len(selected) > int(maximum):
+            add_error(
+                "CANDIDATE_CARDINALITY_MISMATCH",
+                "selected_candidate_ids",
+                f"{supply.replace('_', ' ').title()} permits at most {maximum} selected box(es).",
+                supply_question,
+            )
+        if final and len(selected) < minimum:
+            add_error(
+                "CANDIDATE_CARDINALITY_MISMATCH",
+                "selected_candidate_ids",
+                f"{supply.replace('_', ' ').title()} requires at least {minimum} selected box(es).",
+                supply_question,
+            )
+        applicable = bool(state["relationship_applicable"])
+        family = state.get("question_family")
+        family_contract = self.relationship_contract["question_families"].get(family, {})
+        allowed = list(family_contract.get("allowed_relationships", []))
+        if not applicable:
+            if relationship != state["canonical_relationship"]:
+                add_error(
+                    "RELATIONSHIP_NOT_ALLOWED_FOR_SUPPLY_BRANCH",
+                    "candidate_relationship",
+                    "This frame does not use a relationship follow-up; the stored value must be NOT_APPLICABLE.",
+                    supply_question,
+                )
+            if (
+                observation.get("relationship_question_id") is not None
+                or observation.get("relationship_branch_family") is not None
+            ):
+                add_error(
+                    "STALE_HIDDEN_RELATIONSHIP_BRANCH",
+                    "relationship_question_id",
+                    "A hidden relationship branch remained after the upstream answer changed.",
+                    supply_question,
+                )
+        else:
+            if (
+                observation.get("relationship_question_id") != relationship_question
+                or observation.get("relationship_branch_family") != family
+            ):
+                add_error(
+                    "RELATIONSHIP_BRANCH_BINDING_MISMATCH",
+                    "relationship_question_id",
+                    "The relationship answer is not bound to this exact subject, frame, and branch.",
+                    relationship_question,
+                )
+            if relationship is None:
+                if final:
+                    add_error(
+                        "RELATIONSHIP_REQUIRED_BUT_MISSING",
+                        "candidate_relationship",
+                        "This candidate-supply answer requires one frame-specific relationship follow-up.",
+                        relationship_question,
+                    )
+            elif relationship not in allowed:
+                add_error(
+                    "RELATIONSHIP_INCOMPATIBLE_WITH_BRANCH",
+                    "candidate_relationship",
+                    "The stored relationship does not belong to the active frame-specific branch.",
+                    relationship_question,
+                )
+            else:
+                relationship_rule = self.relationship_contract["relationship_states"].get(relationship)
+                relationship_minimum = int(relationship_rule["minimum_selected_count"])
+                if len(selected) < relationship_minimum:
+                    add_error(
+                        "RELATIONSHIP_CANDIDATE_CARDINALITY_MISMATCH",
+                        "candidate_relationship",
+                        f"{relationship.replace('_', ' ').title()} requires at least "
+                        f"{relationship_minimum} selected boxes.",
+                        relationship_question,
+                    )
+        next_question = relationship_question if applicable and not errors else supply_question
+        return {
+            "supply_state": supply,
+            "selected_candidate_count": len(selected),
+            "selected_candidate_ids": selected,
+            "relationship_applicable": applicable,
+            "minimum_selected_count": minimum,
+            "maximum_selected_count": maximum,
+            "canonical_relationship": state.get("canonical_relationship"),
+            "question_family": family,
+            "relationship_question_id": relationship_question if applicable else None,
+            "allowed_relationships": allowed,
+            "plain_english_question": family_contract.get("question"),
+            "next_valid_question": next_question,
+            "errors": errors,
+        }
+
+    def _validate_r4_relationships(
+        self, payload: Mapping[str, Any], case: Mapping[str, Any], *, final: bool
+    ) -> list[dict[str, Any]]:
+        errors: list[dict[str, Any]] = []
+        for subject_index, subject in enumerate(payload.get("subjects", [])):
+            token = str(subject.get("subject_token", ""))
+            for sequence, observation in enumerate(subject.get("frame_observations", [])):
+                result = self.relationship_compatibility(
+                    case=case,
+                    subject_token=token,
+                    subject_index=subject_index,
+                    sequence=sequence,
+                    observation=observation,
+                    final=final,
+                )
+                errors.extend(result["errors"])
+        if errors:
+            raise ReviewValidationError(errors, "CANDIDATE_RELATIONSHIP_VALIDATION_FAILED")
+        return errors
 
     def _validate_r3_frame_bindings(
         self,
@@ -670,6 +865,36 @@ class TemporalReviewStore:
                 latest[burst_id] = event
         return latest
 
+    def acknowledged_event(self, mode: str, event_id: str) -> dict[str, Any]:
+        """Return one hash-verified immutable event for read-only restoration."""
+        root = self._root(mode)
+        matches = [path for path in self._event_paths(mode) if path.stem == event_id]
+        if len(matches) != 1:
+            raise ValueError("acknowledged event not found")
+        event_path = matches[0]
+        event = read_json(event_path)
+        ack_path = self._ack_path(root, event_id)
+        if not ack_path.is_file():
+            raise ValueError("event is not acknowledged")
+        acknowledgement = read_json(ack_path)
+        if (
+            acknowledgement.get("event_id") != event_id
+            or acknowledgement.get("event_sha256") != sha256_file(event_path)
+            or acknowledgement.get("server_validated") is not True
+        ):
+            raise ValueError("acknowledgement linkage failure")
+        case = (self.practice_by_id if mode == "practice" else self.by_id).get(str(event.get("burst_id")))
+        if case is None:
+            raise ValueError("acknowledged event case is unavailable")
+        return {
+            "ok": True,
+            "read_only": True,
+            "event": event,
+            "acknowledgement": acknowledgement,
+            "case": case,
+            "production_ready": False,
+        }
+
     def _event_reference(self, event: Mapping[str, Any]) -> dict[str, Any]:
         root = self.decisions
         event_path = root / "events" / str(event["tranche_id"]) / f"{event['event_id']}.json"
@@ -825,7 +1050,7 @@ class TemporalReviewStore:
         burst_id = str(payload.get("burst_id", ""))
         if burst_id not in cases:
             raise ValueError("unknown burst draft")
-        if self.review_revision == R3_REVIEW_REVISION:
+        if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
             return self._save_r3_draft(payload, mode, cases[burst_id])
         document = {
             "schema_version": "football_intelligence.g7e_b.temporal_review_draft.v1",
@@ -889,7 +1114,11 @@ class TemporalReviewStore:
                 "STALE_DRAFT_VERSION",
             )
         document = {
-            "schema_version": "football_intelligence.g7e_b_r3.temporal_review_draft.v1",
+            "schema_version": (
+                "football_intelligence.g7e_b_r4.temporal_review_draft.v1"
+                if self.review_revision == R4_REVIEW_REVISION
+                else "football_intelligence.g7e_b_r3.temporal_review_draft.v1"
+            ),
             "review_id": self.review_id,
             "review_revision": self.review_revision,
             "mode": mode,
@@ -906,6 +1135,7 @@ class TemporalReviewStore:
             "action_journal": payload.get("action_journal", []),
             "prior_final_save_error": payload.get("prior_final_save_error"),
             "targeted_correction": payload.get("targeted_correction"),
+            "real_draft_recovery": payload.get("real_draft_recovery"),
             "source_manifest_hashes": case["source_manifest_hashes"],
             "candidate_runtime_contract": case["candidate_runtime_contract"],
             "unique_frame_candidate_status": case["unique_frame_candidate_status"],
@@ -916,6 +1146,8 @@ class TemporalReviewStore:
         }
         self._validate_draft(document)
         self._validate_r3_frame_bindings(document, case, final=False)
+        if self.review_revision == R4_REVIEW_REVISION:
+            self._validate_r4_relationships(document, case, final=False)
         document["draft_content_sha256"] = canonical_digest(document)
         document["optimistic_lock_token"] = canonical_digest(
             {
@@ -947,8 +1179,10 @@ class TemporalReviewStore:
         if burst_id not in cases:
             raise ValueError("unknown burst event")
         case = cases[burst_id]
-        if self.review_revision == R3_REVIEW_REVISION:
+        if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
             self._validate_r3_frame_bindings(payload, case, final=True)
+            if self.review_revision == R4_REVIEW_REVISION:
+                self._validate_r4_relationships(payload, case, final=True)
             return self._validate_r1_event(payload, mode, case)
         if self.review_revision in (R1_REVIEW_REVISION, R2_REVIEW_REVISION):
             return self._validate_r1_event(payload, mode, case)
@@ -1107,7 +1341,7 @@ class TemporalReviewStore:
         }
         expected_mappings: set[tuple[str, int, str]] = set()
         frame_states = case.get("per_frame_candidate_states", [])
-        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION):
+        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION, R4_REVIEW_REVISION):
             if len(frame_states) != 9:
                 raise ValueError("R2 candidate-state closure mismatch")
             if any(row.get("candidate_status") == "CANDIDATE_DATA_UNAVAILABLE" for row in frame_states):
@@ -1130,7 +1364,10 @@ class TemporalReviewStore:
                 raise ValueError("invalid role or participation")
             if subject.get("certainty") not in CERTAINTY:
                 raise ValueError("invalid certainty")
-            if subject.get("candidate_relationship") not in (*RELATIONSHIPS, "NOT_APPLICABLE"):
+            if self.review_revision != R4_REVIEW_REVISION and subject.get("candidate_relationship") not in (
+                *RELATIONSHIPS,
+                "NOT_APPLICABLE",
+            ):
                 raise ValueError("invalid candidate relationship")
             if subject.get("continuity") not in CONTINUITY:
                 raise ValueError("invalid continuity")
@@ -1172,10 +1409,15 @@ class TemporalReviewStore:
                 if visibility in ("OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT") and supply != "NOT_APPLICABLE":
                     raise ValueError("absent frame supply must be NOT_APPLICABLE")
                 if (
-                    self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION)
+                    self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION, R4_REVIEW_REVISION)
                     and relevant_visibility_for_supply(visibility)
                     and frame_states[sequence]["candidate_status"] == "VERIFIED_ZERO_CANDIDATES"
-                    and supply not in ("NO_USEFUL_BOX", "NOT_SURE")
+                    and supply
+                    not in (
+                        ("NO_CANDIDATE", "UNCERTAIN")
+                        if self.review_revision == R4_REVIEW_REVISION
+                        else ("NO_USEFUL_BOX", "NOT_SURE")
+                    )
                 ):
                     raise ValueError("verified-zero frame permits only no useful box or not sure")
                 selected = observation.get("selected_candidate_ids", [])
@@ -1250,13 +1492,17 @@ class TemporalReviewStore:
             "created_at_utc": utc_now(),
             "production_ready": False,
         }
-        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION):
+        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION, R4_REVIEW_REVISION):
             event.update(
                 {
                     "schema_version": (
-                        "football_intelligence.g7e_b_r3.burst_annotation_event.v1"
-                        if self.review_revision == R3_REVIEW_REVISION
-                        else "football_intelligence.g7e_b_r2.burst_annotation_event.v1"
+                        "football_intelligence.g7e_b_r4.burst_annotation_event.v1"
+                        if self.review_revision == R4_REVIEW_REVISION
+                        else (
+                            "football_intelligence.g7e_b_r3.burst_annotation_event.v1"
+                            if self.review_revision == R3_REVIEW_REVISION
+                            else "football_intelligence.g7e_b_r2.burst_annotation_event.v1"
+                        )
                     ),
                     "candidate_runtime_contract": case["candidate_runtime_contract"],
                     "unique_frame_candidate_status": case["unique_frame_candidate_status"],
@@ -1280,13 +1526,20 @@ class TemporalReviewStore:
                     ],
                 }
             )
-        if self.review_revision == R3_REVIEW_REVISION:
+        if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
             event.update(
                 {
                     "draft_version": payload.get("draft_version"),
                     "draft_content_sha256": payload.get("draft_content_sha256"),
                     "click_transactions": payload.get("click_transactions", []),
                     "frame_binding_validation": "PASSED",
+                }
+            )
+        if self.review_revision == R4_REVIEW_REVISION:
+            event.update(
+                {
+                    "relationship_compatibility_sha256": self.relationship_compatibility_sha256,
+                    "relationship_branch_validation": "PASSED",
                 }
             )
         if not event["summary_confirmed"]:
@@ -1439,14 +1692,18 @@ class TemporalReviewStore:
         return self._root(mode) / "status" / f"final_save_error_{burst_id}.json"
 
     def final_save_preflight(self, payload: Mapping[str, Any], mode: str) -> dict[str, Any]:
-        if self.review_revision != R3_REVIEW_REVISION:
-            raise ValueError("final-save preflight requires the R3 reviewer")
+        if self.review_revision not in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
+            raise ValueError("final-save preflight requires the R3 or R4 reviewer")
         try:
             _, _, inputs = self._r3_preflight_inputs(payload, mode)
         except ReviewValidationError as exc:
             burst_id = str(payload.get("burst_id", "unknown"))
             error_state = {
-                "schema_version": "football_intelligence.g7e_b_r3.final_save_error.v1",
+                "schema_version": (
+                    "football_intelligence.g7e_b_r4.final_save_error.v1"
+                    if self.review_revision == R4_REVIEW_REVISION
+                    else "football_intelligence.g7e_b_r3.final_save_error.v1"
+                ),
                 "review_revision": self.review_revision,
                 "burst_id": burst_id,
                 "mode": mode,
@@ -1474,7 +1731,11 @@ class TemporalReviewStore:
         case: Mapping[str, Any],
     ) -> dict[str, Any]:
         receipt = {
-            "schema_version": "football_intelligence.g7e_b_r3.event_acknowledgement_receipt.v1",
+            "schema_version": (
+                "football_intelligence.g7e_b_r4.event_acknowledgement_receipt.v1"
+                if self.review_revision == R4_REVIEW_REVISION
+                else "football_intelligence.g7e_b_r3.event_acknowledgement_receipt.v1"
+            ),
             "receipt_id": f"ack-{event['event_id']}",
             "review_id": self.review_id,
             "review_revision": self.review_revision,
@@ -1591,7 +1852,11 @@ class TemporalReviewStore:
             event["created_at_utc"] = utc_now()
             atomic_write(event_path, canonical_bytes(event))
         ledger = {
-            "schema_version": "football_intelligence.g7e_b_r3.idempotency_record.v1",
+            "schema_version": (
+                "football_intelligence.g7e_b_r4.idempotency_record.v1"
+                if self.review_revision == R4_REVIEW_REVISION
+                else "football_intelligence.g7e_b_r3.idempotency_record.v1"
+            ),
             "idempotency_key": inputs["idempotency_key"],
             "event_id": event["event_id"],
             "event_relative_path": str(event_path.relative_to(root)).replace("\\", "/"),
@@ -1632,7 +1897,7 @@ class TemporalReviewStore:
 
     def save_event(self, payload: Mapping[str, Any], mode: str = "real") -> dict[str, Any]:
         with self.lock:
-            if self.review_revision == R3_REVIEW_REVISION:
+            if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
                 return self._save_r3_event(payload, mode)
             event, case = self._validate_event(payload, mode)
             root = self._root(mode)
@@ -1686,8 +1951,8 @@ class TemporalReviewStore:
             }
 
     def final_save_status(self, mode: str, idempotency_key: str) -> dict[str, Any]:
-        if self.review_revision != R3_REVIEW_REVISION:
-            raise ValueError("final-save status requires the R3 reviewer")
+        if self.review_revision not in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
+            raise ValueError("final-save status requires the R3 or R4 reviewer")
         if len(idempotency_key) != 64 or any(character not in "0123456789abcdef" for character in idempotency_key):
             raise ValueError("invalid idempotency key")
         path = self._root(mode) / "idempotency" / f"{idempotency_key}.json"
@@ -1709,7 +1974,7 @@ class TemporalReviewStore:
             first = next((case for case in self.practice_cases if case["burst_id"] not in latest), None)
             final_error_path = (
                 self._r3_error_path(mode, first["burst_id"])
-                if first and self.review_revision == R3_REVIEW_REVISION
+                if first and self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION)
                 else None
             )
             return {
@@ -1738,7 +2003,7 @@ class TemporalReviewStore:
         first = next((case for case in cases if case["burst_id"] not in latest), None)
         final_error_path = (
             self._r3_error_path(mode, first["burst_id"])
-            if first and self.review_revision == R3_REVIEW_REVISION
+            if first and self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION)
             else None
         )
         last_event = max(
@@ -2085,7 +2350,15 @@ def create_server(
                 mode = query.get("mode", ["real"])[0]
                 tranche_id = query.get("tranche", [None])[0]
                 cases = store.practice_cases if mode == "practice" else store.cases
-                return self.send_json(200, {"cases": cases, "state": store.state(mode, tranche_id)})
+                return self.send_json(
+                    200,
+                    {
+                        "cases": cases,
+                        "state": store.state(mode, tranche_id),
+                        "relationship_compatibility": store.relationship_contract,
+                        "relationship_compatibility_sha256": store.relationship_compatibility_sha256,
+                    },
+                )
             if route == "/api/review-state":
                 mode = query.get("mode", ["real"])[0]
                 tranche_id = query.get("tranche", [None])[0]
@@ -2099,6 +2372,10 @@ def create_server(
                 mode = query.get("mode", ["real"])[0]
                 key = query.get("idempotency_key", [""])[0]
                 return self.send_json(200, store.final_save_status(mode, key))
+            if route == "/api/acknowledged-event":
+                mode = query.get("mode", ["real"])[0]
+                event_id = query.get("event_id", [""])[0]
+                return self.send_json(200, store.acknowledged_event(mode, event_id))
             if route == "/api/completed":
                 tranche_id = query.get("tranche", [""])[0]
                 if tranche_id not in TRANCHES or store.current_tranche_receipt(tranche_id, create=False) is None:
@@ -2127,6 +2404,20 @@ def create_server(
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 route = urlparse(self.path).path
                 mode = str(payload.get("mode", "real"))
+                if route == "/api/relationship-compatibility":
+                    cases = store.practice_by_id if mode == "practice" else store.by_id
+                    case = cases.get(str(payload.get("burst_id", "")))
+                    if case is None:
+                        raise ValueError("unknown burst relationship check")
+                    result = store.relationship_compatibility(
+                        case=case,
+                        subject_token=str(payload.get("subject_token", "")),
+                        subject_index=int(payload.get("subject_index", -1)),
+                        sequence=int(payload.get("frame_sequence", -1)),
+                        observation=payload.get("observation", {}),
+                        final=payload.get("final") is True,
+                    )
+                    return self.send_json(200, {"ok": not result["errors"], **result})
                 if route == "/api/draft":
                     draft = store.save_draft(payload, mode)
                     print(

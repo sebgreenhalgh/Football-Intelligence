@@ -20,8 +20,10 @@ for (const id of [
 
 const R2_REVISION = "G7E_B_R2_FULL_TEMPORAL_CANDIDATE_CLOSURE_V1";
 const R3_REVISION = "G7E_B_R3_FRAME_BINDING_AND_ATOMIC_FINAL_SAVE_V1";
+const R4_REVISION = "G7E_B_R4_CANDIDATE_RELATIONSHIP_BRANCH_INTEGRITY_V1";
 const REVISION = document.documentElement.dataset.reviewRevision || R2_REVISION;
-const IS_R3 = REVISION === R3_REVISION;
+const IS_R4 = REVISION === R4_REVISION;
+const IS_R3 = [R3_REVISION, R4_REVISION].includes(REVISION);
 const SUBJECT_COLOURS = ["#2cc9a0", "#9a72e8", "#e7a51a"];
 const LOCATION_VALUES = [
   ["VISIBLE_COMPLETE", "Visible — click the person"],
@@ -31,7 +33,7 @@ const LOCATION_VALUES = [
   ["NOT_PRESENT", "Not present"],
   ["UNCERTAIN", "Not sure"],
 ];
-const SUPPLY_VALUES = [
+const LEGACY_SUPPLY_VALUES = [
   ["ONE_USEFUL_CANDIDATE", "One useful box"],
   ["MULTIPLE_CANDIDATES", "More than one box for this same person"],
   ["MERGED_WITH_OTHER_PEOPLE", "One box covers several people"],
@@ -39,7 +41,16 @@ const SUPPLY_VALUES = [
   ["NO_USEFUL_BOX", "No useful box"],
   ["NOT_SURE", "Not sure"],
 ];
-const LABELS = Object.fromEntries([...LOCATION_VALUES, ...SUPPLY_VALUES]);
+const R4_SUPPLY_VALUES = [
+  ["ONE_USEFUL_CANDIDATE", "One useful box"],
+  ["MULTIPLE_CANDIDATES", "More than one box for this same person"],
+  ["MERGED_WITH_OTHER_PEOPLE", "One box covers several people"],
+  ["FRAGMENT_ONLY", "Only a body fragment has a box"],
+  ["NO_CANDIDATE", "No useful box"],
+  ["UNCERTAIN", "Not sure"],
+];
+const SUPPLY_VALUES = IS_R4 ? R4_SUPPLY_VALUES : LEGACY_SUPPLY_VALUES;
+const LABELS = Object.fromEntries([...LOCATION_VALUES, ...LEGACY_SUPPLY_VALUES, ...R4_SUPPLY_VALUES]);
 
 const app = {
   mode: null,
@@ -72,6 +83,9 @@ const app = {
   optimisticLockToken: null,
   draftContentSha256: null,
   finalSavePending: false,
+  relationshipCompatibility: null,
+  relationshipCompatibilitySha256: null,
+  branchInvalidationMessage: null,
 };
 
 function canonicalFrameIdentity(sequence) {
@@ -103,24 +117,30 @@ function observation(sequence, subjectIndex) {
     row.canonical_frame_identity = canonicalFrameIdentity(sequence);
     row.candidate_selection_binding = candidateBinding(sequence, subjectIndex);
   }
+  if (IS_R4) {
+    row.candidate_relationship = null;
+    row.relationship_question_id = null;
+    row.relationship_branch_family = null;
+  }
   return row;
 }
 
 function newSubject(index, source) {
-  return {
+  const subject = {
     subject_token: `SUBJECT_${"ABC"[index]}`,
     subject_definition_source: source,
     anchor_frame_sequence: null,
     anchor_source_xy: null,
     frame_observations: Array.from({ length: 9 }, (_, sequence) => observation(sequence, index)),
     marker_continuity_confirmation: null,
-    candidate_relationship: null,
     occlusion_confirmed: false,
     continuity: null,
     role: null,
     participation: null,
     certainty: null,
   };
+  if (!IS_R4) subject.candidate_relationship = null;
+  return subject;
 }
 
 function blankData(caseRow) {
@@ -141,6 +161,7 @@ function blankData(caseRow) {
     draft_content_sha256: null,
     prior_final_save_error: null,
     targeted_correction: null,
+    real_draft_recovery: null,
   };
 }
 
@@ -161,6 +182,99 @@ function selectionRequired(value) {
   return ["ONE_USEFUL_CANDIDATE", "MULTIPLE_CANDIDATES", "MERGED_WITH_OTHER_PEOPLE", "FRAGMENT_ONLY"].includes(value);
 }
 function frameCandidates(index = app.frame) { return app.current?.frame_candidates?.[index] || []; }
+function canonicalSupply(value) {
+  if (!IS_R4) return value;
+  return app.relationshipCompatibility?.legacy_supply_aliases?.[value] || value;
+}
+function relationshipCompatibility(subjectIndex, sequence, final = false) {
+  if (!IS_R4) return null;
+  const row = app.data.subjects[subjectIndex].frame_observations[sequence];
+  const supply = canonicalSupply(row.observation_supply);
+  const state = app.relationshipCompatibility?.supply_states?.[supply];
+  const selected = row.selected_candidate_ids || [];
+  const errors = [];
+  const supplyQuestion = `subject_${subjectIndex}_supply_${sequence}`;
+  const relationshipQuestion = `subject_${subjectIndex}_relationship_${sequence}`;
+  if (!state) return { errors: row.observation_supply ? [`Unsupported candidate-supply answer: ${row.observation_supply}`] : [], nextValidQuestion: supplyQuestion };
+  const minimum = Number(state.minimum_selected_count);
+  const maximum = state.maximum_selected_count === null ? null : Number(state.maximum_selected_count);
+  if (maximum !== null && selected.length > maximum) errors.push(`${LABELS[supply]} permits at most ${maximum} selected box${maximum === 1 ? "" : "es"}.`);
+  if (final && selected.length < minimum) errors.push(`${LABELS[supply]} requires at least ${minimum} selected box${minimum === 1 ? "" : "es"}.`);
+  const family = state.question_family;
+  const familyContract = app.relationshipCompatibility.question_families?.[family] || {};
+  const allowed = familyContract.allowed_relationships || [];
+  if (!state.relationship_applicable) {
+    if (row.candidate_relationship !== state.canonical_relationship) errors.push("This frame does not use a relationship follow-up.");
+    if (row.relationship_question_id !== null || row.relationship_branch_family !== null) errors.push("A hidden relationship branch is stale.");
+  } else {
+    if (row.relationship_question_id !== relationshipQuestion || row.relationship_branch_family !== family) errors.push("The relationship branch is not bound to this exact frame.");
+    if (final && !row.candidate_relationship) errors.push("This frame needs one relationship follow-up.");
+    if (row.candidate_relationship && !allowed.includes(row.candidate_relationship)) errors.push("The stored relationship does not match this branch.");
+    const relationRule = app.relationshipCompatibility.relationship_states?.[row.candidate_relationship];
+    if (relationRule && selected.length < Number(relationRule.minimum_selected_count)) errors.push(`${row.candidate_relationship.replaceAll("_", " ")} needs more selected boxes.`);
+  }
+  return {
+    supplyState: supply,
+    state,
+    selectedCount: selected.length,
+    selectedIds: [...selected],
+    relationshipApplicable: Boolean(state.relationship_applicable),
+    questionFamily: family,
+    relationshipQuestionId: state.relationship_applicable ? relationshipQuestion : null,
+    allowedRelationships: allowed,
+    errors,
+    nextValidQuestion: state.relationship_applicable && !errors.length ? relationshipQuestion : supplyQuestion,
+  };
+}
+function appendBranchInvalidation(subjectIndex, sequence, previousValue, reason, upstreamChange) {
+  const row = app.data.subjects[subjectIndex].frame_observations[sequence];
+  app.data.action_journal.push({
+    action: "RELATIONSHIP_BRANCH_INVALIDATED",
+    subject_token: app.data.subjects[subjectIndex].subject_token,
+    frame_reference_id: row.frame_reference_id,
+    frame_sequence: sequence,
+    previous_value: previousValue,
+    reason,
+    upstream_change: upstreamChange,
+    question_id: `subject_${subjectIndex}_relationship_${sequence}`,
+    created_at_utc: new Date().toISOString(),
+  });
+  app.branchInvalidationMessage = "A follow-up answer was cleared because it no longer applies.";
+}
+function invalidateRelationship(subjectIndex, sequence, reason, upstreamChange, forceApplicableClear = false) {
+  if (!IS_R4) return false;
+  const row = app.data.subjects[subjectIndex].frame_observations[sequence];
+  row.observation_supply = canonicalSupply(row.observation_supply);
+  const state = app.relationshipCompatibility?.supply_states?.[row.observation_supply];
+  if (!state) return false;
+  const previous = row.candidate_relationship;
+  const previousQuestion = row.relationship_question_id;
+  const previousFamily = row.relationship_branch_family;
+  if (!state.relationship_applicable) {
+    row.candidate_relationship = state.canonical_relationship;
+    row.relationship_question_id = null;
+    row.relationship_branch_family = null;
+  } else {
+    row.relationship_question_id = `subject_${subjectIndex}_relationship_${sequence}`;
+    row.relationship_branch_family = state.question_family;
+    const allowed = app.relationshipCompatibility.question_families[state.question_family].allowed_relationships;
+    if (forceApplicableClear || (row.candidate_relationship && !allowed.includes(row.candidate_relationship))) row.candidate_relationship = null;
+  }
+  const changed = previous !== row.candidate_relationship || previousQuestion !== row.relationship_question_id || previousFamily !== row.relationship_branch_family;
+  if (changed) appendBranchInvalidation(subjectIndex, sequence, previous, reason, upstreamChange);
+  return changed;
+}
+function ensureR4Relationships() {
+  if (!IS_R4 || !app.current || !app.data || !app.relationshipCompatibility) return;
+  app.data.action_journal ||= [];
+  app.data.subjects.forEach((subject, subjectIndex) => {
+    delete subject.candidate_relationship;
+    subject.frame_observations.forEach((row, sequence) => {
+      if (!row.observation_supply) return;
+      invalidateRelationship(subjectIndex, sequence, "RESTORE_BRANCH_REBIND", "SERVER_BACKED_DRAFT_RESTORATION");
+    });
+  });
+}
 function ensureR3Bindings() {
   if (!IS_R3 || !app.current || !app.data) return;
   app.data.click_transactions ||= [];
@@ -185,6 +299,7 @@ function ensureR3Bindings() {
       source_xy: [...mark.source_xy],
     };
   });
+  ensureR4Relationships();
 }
 
 function validateR3FrameBindings(final = false) {
@@ -229,6 +344,23 @@ function validateR3FrameBindings(final = false) {
       || JSON.stringify(mark.mark_binding?.canonical_frame_identity) !== JSON.stringify(identity)) {
       errors.push(`Missed-person mark ${index + 1}: frame identity mismatch`);
     }
+  });
+  return errors;
+}
+
+function validateR4Relationships(final = false) {
+  if (!IS_R4) return [];
+  const errors = [];
+  app.data.subjects.forEach((subject, subjectIndex) => {
+    subject.frame_observations.forEach((_row, sequence) => {
+      const result = relationshipCompatibility(subjectIndex, sequence, final);
+      result?.errors?.forEach((message) => errors.push({
+        subject_token: subject.subject_token,
+        frame_id: canonicalFrameIdentity(sequence)?.frame_id,
+        question_id: result.nextValidQuestion,
+        message,
+      }));
+    });
   });
   return errors;
 }
@@ -317,9 +449,12 @@ function questionSequence() {
     for (let frame = 0; frame < 9; frame += 1) q.push(`subject_${index}_location_${frame}`);
     q.push(`subject_${index}_marker_review`);
     for (let frame = 0; frame < 9; frame += 1) {
-      if (relevantVisibility(app.data.subjects[index].frame_observations[frame].visibility)) q.push(`subject_${index}_supply_${frame}`);
+      if (relevantVisibility(app.data.subjects[index].frame_observations[frame].visibility)) {
+        q.push(`subject_${index}_supply_${frame}`);
+        if (IS_R4 && relationshipCompatibility(index, frame)?.relationshipApplicable) q.push(`subject_${index}_relationship_${frame}`);
+      }
     }
-    if (needsRelationship(app.data.subjects[index])) q.push(`subject_${index}_relationship`);
+    if (!IS_R4 && needsRelationship(app.data.subjects[index])) q.push(`subject_${index}_relationship`);
     if (needsOcclusion(app.data.subjects[index])) q.push(`subject_${index}_occlusion`);
     if (needsContinuity(app.data.subjects[index])) q.push(`subject_${index}_continuity`);
     q.push(`subject_${index}_role`, `subject_${index}_participation`, `subject_${index}_certainty`);
@@ -332,7 +467,7 @@ function questionSequence() {
 }
 
 function parseQuestion(key) {
-  const match = key.match(/^subject_(\d+)_(location|supply)_(\d+)$/);
+  const match = key.match(/^subject_(\d+)_(location|supply|relationship)_(\d+)$/);
   if (match) return { subject: Number(match[1]), kind: match[2], frame: Number(match[3]) };
   const simple = key.match(/^subject_(\d+)_(.+)$/);
   return simple ? { subject: Number(simple[1]), kind: simple[2], frame: null } : { subject: null, kind: key, frame: null };
@@ -477,7 +612,7 @@ function renderQuestion() {
   if (part.kind === "location") { renderLocation(part.subject, part.frame); return; }
   if (part.kind === "marker_review") { renderMarkerReview(part.subject); return; }
   if (part.kind === "supply") { renderSupply(part.subject, part.frame); return; }
-  if (part.kind === "relationship") { renderRelationship(part.subject); return; }
+  if (part.kind === "relationship") { renderRelationship(part.subject, part.frame); return; }
   if (part.kind === "occlusion") { renderOcclusion(part.subject); return; }
   if (part.kind === "continuity") { renderContinuity(part.subject); return; }
   if (["role", "participation", "certainty"].includes(part.kind)) { renderSubjectSingle(part.subject, part.kind); return; }
@@ -505,6 +640,7 @@ function renderLocation(index, frame) {
   const row = subject.frame_observations[frame];
   setQuestion(`Where is Subject ${subjectLetter(index)} in Frame ${frame + 1}?`, frame === 4 ? "The yellow original box is visible only on this centre frame. Use your pinned subject reference." : `The original yellow box exists only on the centre frame. Follow the human-confirmed Subject ${subjectLetter(index)} marker in this frame.`, `FRAME ${frame + 1} OF 9 · HUMAN SUBJECT LOCATION`);
   answerCards(LOCATION_VALUES, row.visibility, async (value) => {
+    const previousRelationship = row.candidate_relationship;
     row.visibility = value;
     row.subject_location_source_x = null;
     row.subject_location_source_y = null;
@@ -514,6 +650,15 @@ function renderLocation(index, frame) {
     row.observation_supply = ["OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT"].includes(value) ? "NOT_APPLICABLE" : null;
     row.selected_candidate_ids = [];
     if (IS_R3) row.candidate_selection_binding = candidateBinding(frame, index);
+    if (IS_R4) {
+      if (row.observation_supply === "NOT_APPLICABLE") invalidateRelationship(index, frame, "VISIBILITY_STATE_CHANGED", value);
+      else {
+        row.candidate_relationship = null;
+        row.relationship_question_id = null;
+        row.relationship_branch_family = null;
+        if (previousRelationship) appendBranchInvalidation(index, frame, previousRelationship, "VISIBILITY_STATE_CHANGED", value);
+      }
+    }
     await saveDraft(); renderQuestion(); drawAll();
   });
   if (IS_R3 && app.lastFrameCommit?.frame_id === canonicalFrameIdentity(frame)?.frame_id) {
@@ -582,16 +727,19 @@ function renderSupply(index, frame) {
     return;
   }
   const options = state.candidate_status === "VERIFIED_ZERO_CANDIDATES"
-    ? SUPPLY_VALUES.filter(([value]) => ["NO_USEFUL_BOX", "NOT_SURE"].includes(value))
+    ? SUPPLY_VALUES.filter(([value]) => (IS_R4 ? ["NO_CANDIDATE", "UNCERTAIN"] : ["NO_USEFUL_BOX", "NOT_SURE"]).includes(value))
     : SUPPLY_VALUES;
-  if (state.candidate_status === "VERIFIED_ZERO_CANDIDATES" && !["NO_USEFUL_BOX", "NOT_SURE", null].includes(row.observation_supply)) {
+  const zeroAllowed = IS_R4 ? ["NO_CANDIDATE", "UNCERTAIN", null] : ["NO_USEFUL_BOX", "NOT_SURE", null];
+  if (state.candidate_status === "VERIFIED_ZERO_CANDIDATES" && !zeroAllowed.includes(row.observation_supply)) {
     row.observation_supply = null;
     row.selected_candidate_ids = [];
   }
   answerCards(options, row.observation_supply, async (value) => {
-    row.observation_supply = value;
+    const previousSupply = row.observation_supply;
+    row.observation_supply = canonicalSupply(value);
     row.selected_candidate_ids = [];
     if (IS_R3) row.candidate_selection_binding = candidateBinding(frame, index);
+    if (IS_R4) invalidateRelationship(index, frame, "CANDIDATE_SUPPLY_CHANGED", `${previousSupply || "UNANSWERED"} -> ${row.observation_supply}`, true);
     await saveDraft(); renderQuestion(); drawAll();
   });
   const candidates = frameCandidates(frame);
@@ -599,11 +747,64 @@ function renderSupply(index, frame) {
   status.className = candidates.length ? "selection-status" : "candidate-empty";
   status.textContent = candidates.length ? `${row.selected_candidate_ids.length} of ${candidates.length} exact frame-local post-gate boxes selected for Subject ${subjectLetter(index)}.` : "This exact frame was processed successfully. No model box is available to select. Choose No useful box or Not sure.";
   ui.answerArea.appendChild(status);
+  if (IS_R4 && app.branchInvalidationMessage) {
+    const notice = document.createElement("div");
+    notice.className = "click-required";
+    notice.textContent = app.branchInvalidationMessage;
+    ui.answerArea.appendChild(notice);
+    app.branchInvalidationMessage = null;
+  }
   app.inputMode = "candidate";
-  ui.continueButton.disabled = !row.observation_supply || (selectionRequired(row.observation_supply) && row.selected_candidate_ids.length === 0);
+  if (IS_R4 && row.observation_supply) {
+    const branch = app.relationshipCompatibility.supply_states[canonicalSupply(row.observation_supply)];
+    const count = row.selected_candidate_ids.length;
+    ui.continueButton.disabled = !branch || count < Number(branch.minimum_selected_count)
+      || (branch.maximum_selected_count !== null && count > Number(branch.maximum_selected_count));
+  } else ui.continueButton.disabled = !row.observation_supply || (selectionRequired(row.observation_supply) && row.selected_candidate_ids.length === 0);
 }
 
-function renderRelationship(index) {
+function renderRelationship(index, frame = null) {
+  if (IS_R4) {
+    setFrameForQuestion(frame);
+    const subject = currentSubject(index);
+    const row = subject.frame_observations[frame];
+    const compatibility = relationshipCompatibility(index, frame);
+    const family = app.relationshipCompatibility.question_families[compatibility.questionFamily];
+    const letter = subjectLetter(index);
+    setQuestion(
+      family.question.replaceAll("{subject}", letter),
+      `${family.help.replaceAll("{subject}", letter)} Selected box count: ${compatibility.selectedCount}. Candidate-supply answer: ${LABELS[compatibility.supplyState]}.`,
+      `FRAME ${frame + 1} OF 9 · SUBJECT ${letter} · ${compatibility.questionFamily.replaceAll("_", " ")}`,
+    );
+    const options = family.options.map(([value, label]) => [value, label.replaceAll("{subject}", letter)]);
+    answerCards(options, row.candidate_relationship, async (value) => {
+      if (value === "BRANCH_CORRECTION") {
+        row.candidate_relationship = null;
+        app.history.push(app.questionKey);
+        app.questionKey = `subject_${index}_supply_${frame}`;
+        app.data.current_question = app.questionKey;
+        await saveDraft(); renderQuestion();
+        return;
+      }
+      row.candidate_relationship = value;
+      row.relationship_question_id = `subject_${index}_relationship_${frame}`;
+      row.relationship_branch_family = compatibility.questionFamily;
+      const checked = relationshipCompatibility(index, frame, true);
+      if (checked.errors.length) {
+        app.branchInvalidationMessage = checked.errors[0];
+        renderQuestion();
+        return;
+      }
+      await saveDraft(); renderQuestion();
+    });
+    const context = document.createElement("div");
+    context.className = "selection-status";
+    context.innerHTML = `<b>${row.frame_reference_id} · Subject ${letter}</b><br>${compatibility.selectedCount} selected box${compatibility.selectedCount === 1 ? "" : "es"} · ${LABELS[compatibility.supplyState]}`;
+    ui.answerArea.prepend(context);
+    app.inputMode = "pan";
+    ui.continueButton.disabled = !row.candidate_relationship || relationshipCompatibility(index, frame, true).errors.length > 0;
+    return;
+  }
   const subject = currentSubject(index);
   setQuestion("How are the selected boxes related?", `This conditional question uses Subject ${subjectLetter(index)} markers and only the boxes you selected.`, "CONDITIONAL BOX RELATIONSHIP");
   const options = [["SAME_PERSON_DUPLICATES", "Duplicate boxes for the same person"], ["SAME_PERSON_FRAGMENTS", "Main box plus body fragments"], ["DIFFERENT_PEOPLE", "Different people"], ["CORRECT_INNER_BAD_OUTER", "Correct inner person inside a poor outer box"], ["MERGED_MULTI_PERSON", "One merged box covers several people"], ["OBJECT_OR_BACKGROUND", "Object or background fragment"], ["UNCERTAIN", "Not sure"]];
@@ -689,6 +890,12 @@ function renderSummary() {
   setQuestion("Review this burst before saving", "Only the server acknowledgement makes the immutable event complete.", "PLAIN-LANGUAGE SUMMARY");
   const subjectRows = app.data.subjects.map((subject) => `<li><b>Subject ${subject.subject_token.slice(-1)}</b>: nine frame locations reviewed · ${subject.role?.replaceAll("_", " ") || "role not set"} · ${subject.certainty?.replaceAll("_", " ") || "certainty not set"}</li>`).join("");
   ui.answerArea.innerHTML = `<ul class="summary-list"><li><b>Yellow box:</b> ${app.data.answers.original_focus_box_answer?.replaceAll("_", " ")}</li>${subjectRows || "<li>No burst-local subject was followed.</li>"}<li><b>Whole-burst missed-person check:</b> ${app.data.answers.missed_check}</li><li><b>Missed-person marks:</b> ${app.data.missed_person_marks.length}</li></ul>`;
+  if (IS_R4 && app.data.real_draft_recovery) {
+    const recovered = document.createElement("div");
+    recovered.className = "click-required";
+    recovered.innerHTML = "<b>Real draft recovered — ready for you to resume</b><br>The non-applicable relationship metadata was repaired. All human answers, exact candidate selections, subject markers, coordinates, roles, participation, certainty, and missed-person marks were preserved. No immutable real event has been created.";
+    ui.answerArea.prepend(recovered);
+  }
   if (IS_R3 && app.data.prior_final_save_error) {
     const recovered = document.createElement("div");
     recovered.className = "click-required";
@@ -720,7 +927,7 @@ async function api(path, payload) {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const body = await response.json();
   if (!response.ok || body.ok === false) {
-    const error = new Error(body.error || `HTTP ${response.status}`);
+    const error = new Error(body.error || body.errors?.[0]?.message || `HTTP ${response.status}`);
     error.payload = body;
     error.httpStatus = response.status;
     throw error;
@@ -731,7 +938,9 @@ function draftPayload() {
   ensureR3Bindings();
   const errors = validateR3FrameBindings(false);
   if (errors.length) throw new Error(errors[0]);
-  return { mode: app.mode, burst_id: app.current.burst_id, current_question: app.questionKey, current_frame_sequence: app.frame, playback_speed: app.speed, answers: app.data.answers, subjects: app.data.subjects, candidate_mappings: candidateMappings(), missed_person_marks: app.data.missed_person_marks, candidate_runtime_contract: app.current.candidate_runtime_contract, unique_frame_candidate_status: app.current.unique_frame_candidate_status, per_frame_candidate_states: app.current.per_frame_candidate_states, draft_version: app.draftVersion, optimistic_lock_token: app.optimisticLockToken, click_transactions: app.data.click_transactions || [], action_journal: app.data.action_journal || [], prior_final_save_error: app.data.prior_final_save_error || null, targeted_correction: app.data.targeted_correction || null };
+  const relationshipErrors = validateR4Relationships(false);
+  if (relationshipErrors.length) throw new Error(relationshipErrors[0].message);
+  return { mode: app.mode, burst_id: app.current.burst_id, current_question: app.questionKey, current_frame_sequence: app.frame, playback_speed: app.speed, answers: app.data.answers, subjects: app.data.subjects, candidate_mappings: candidateMappings(), missed_person_marks: app.data.missed_person_marks, candidate_runtime_contract: app.current.candidate_runtime_contract, unique_frame_candidate_status: app.current.unique_frame_candidate_status, per_frame_candidate_states: app.current.per_frame_candidate_states, draft_version: app.draftVersion, optimistic_lock_token: app.optimisticLockToken, click_transactions: app.data.click_transactions || [], action_journal: app.data.action_journal || [], prior_final_save_error: app.data.prior_final_save_error || null, targeted_correction: app.data.targeted_correction || null, real_draft_recovery: app.data.real_draft_recovery || null };
 }
 async function saveDraft() {
   if (app.readOnly) return;
@@ -766,16 +975,19 @@ function eventPayload() {
   return { mode: app.mode, burst_id: app.current.burst_id, original_focus_box_answer: app.data.answers.original_focus_box_answer, context_subject_answer: app.data.answers.context_subject_answer || "NOT_APPLICABLE", subjects: app.data.subjects, candidate_mappings: candidateMappings(), whole_burst_missed_person_answer: app.data.answers.missed_check, whole_burst_missed_person_marks: app.data.missed_person_marks, source_frame_hashes: app.current.frames.map((frame) => frame.source_frame_pixel_sha256), candidate_runtime_contract: app.current.candidate_runtime_contract, unique_frame_candidate_status: app.current.unique_frame_candidate_status, per_frame_candidate_states: app.current.per_frame_candidate_states, summary_confirmed: true, draft_version: app.draftVersion, draft_content_sha256: app.draftContentSha256, optimistic_lock_token: app.optimisticLockToken, click_transactions: app.data.click_transactions || [] };
 }
 function showFinalSaveError(error) {
-  const detail = error.payload?.errors?.[0] || null;
+  const details = error.payload?.errors || [];
+  const detail = details[0] || null;
+  const affected = [...new Map(details.filter((row) => row.question_id).map((row) => [row.question_id, row])).values()];
   app.data.prior_final_save_error = {
     error_code: error.payload?.error_code || "FINAL_SAVE_ERROR",
     message: error.message,
     field: detail?.field || null,
-    question_id: detail?.question_id || null,
+    question_id: detail?.correction_route || detail?.question_id || null,
     observation_frame_id: detail?.observation_frame_id || null,
+    affected_relationship_errors: details,
   };
   app.data.targeted_correction = detail ? {
-    question_id: detail.question_id,
+    question_id: detail.correction_route || detail.question_id,
     frame_id: detail.observation_frame_id,
     field: detail.field,
   } : null;
@@ -786,15 +998,21 @@ function showFinalSaveError(error) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "targeted-correction-button";
-    button.textContent = `Review affected frame · ${detail.observation_frame_id || detail.question_id}`;
+    const legacySingleFrameLabel = "Review affected frame";
+    button.textContent = affected.length === 1 ? "Review 1 affected frame" : `Review ${affected.length} affected frames`;
+    button.setAttribute("aria-label", affected.length === 1 ? `${legacySingleFrameLabel} 1` : button.textContent);
     button.onclick = async () => {
       app.history.push("summary");
-      app.questionKey = detail.question_id;
-      const part = parseQuestion(detail.question_id);
+      app.questionKey = detail.correction_route || detail.question_id;
+      const part = parseQuestion(app.questionKey);
       if (Number.isInteger(part.frame)) await loadFrame(part.frame);
       renderQuestion();
     };
     ui.answerArea.prepend(button);
+    const list = document.createElement("div");
+    list.className = "click-required";
+    list.innerHTML = details.map((row) => `<b>${row.observation_frame_id || "Burst"} · ${row.subject_token || "Subject"}</b><br>${row.message}`).join("<hr>");
+    ui.answerArea.prepend(list);
   }
 }
 
@@ -991,6 +1209,15 @@ function drawOverlays(context, target) {
   drawBox(context, app.current.focus_crop_source_xyxy, "#55a9ff", [10, 7], "CONTEXT AREA", target);
   if (app.frame === 4) app.current.candidates.filter((candidate) => visible(candidate.source_box_xyxy)).forEach((candidate) => drawBox(context, candidate.source_box_xyxy, "#ffd329", [], "ORIGINAL FOCUS CANDIDATE", target));
   if (ui.overlayToggle.checked) frameCandidates().filter((candidate) => visible(candidate.source_box_xyxy)).forEach((candidate) => drawBox(context, candidate.source_box_xyxy, "#f7f9ff", [], ui.idToggle.checked ? candidate.candidate_id : "", target, 2));
+  if (IS_R4 && app.data) {
+    const part = parseQuestion(app.questionKey);
+    const subject = Number.isInteger(part.subject) ? app.data.subjects[part.subject] : null;
+    const row = subject?.frame_observations?.[app.frame];
+    (row?.selected_candidate_ids || []).forEach((candidateId, selectedIndex) => {
+      const candidate = frameCandidates().find((item) => item.candidate_id === candidateId);
+      if (candidate && visible(candidate.source_box_xyxy)) drawBox(context, candidate.source_box_xyxy, "#ffd329", [], `SELECTED ${selectedIndex + 1}`, target, 6);
+    });
+  }
   if (ui.subjectToggle.checked && app.data) app.data.subjects.forEach((subject, index) => { const row = subject.frame_observations[app.frame]; if (Number.isFinite(row.subject_location_source_x)) drawSubjectMarker(context, [row.subject_location_source_x, row.subject_location_source_y], index, row.approximate_hidden_location, target); });
   if (target === "panorama") app.data?.missed_person_marks.filter((mark) => mark.frame_sequence === app.frame).forEach((mark, index) => drawNumberMark(context, mark.source_xy, index + 1, target));
 }
@@ -1094,6 +1321,17 @@ async function toggleCandidate(source, subjectIndex) {
   if (!hits.length) return;
   if (!IS_R3) { const row = currentSubject(subjectIndex).frame_observations[app.frame]; const id = hits[0].candidate_id; const position = row.selected_candidate_ids.indexOf(id); if (position >= 0) row.selected_candidate_ids.splice(position, 1); else row.selected_candidate_ids.push(id); await saveDraft(); renderQuestion(); drawAll(); return; }
   const sequence = app.frame;
+  if (IS_R4) {
+    const row = currentSubject(subjectIndex).frame_observations[sequence];
+    const currentlySelected = row.selected_candidate_ids.includes(hits[0].candidate_id);
+    const nextCount = row.selected_candidate_ids.length + (currentlySelected ? -1 : 1);
+    const branch = app.relationshipCompatibility.supply_states[canonicalSupply(row.observation_supply)];
+    if (branch?.maximum_selected_count !== null && nextCount > Number(branch.maximum_selected_count)) {
+      app.branchInvalidationMessage = `${LABELS[row.observation_supply]} permits only ${branch.maximum_selected_count} selected box.`;
+      renderQuestion();
+      return;
+    }
+  }
   const transaction = captureFrameTransaction("CANDIDATE_SELECTION", `subject_${subjectIndex}_supply_${sequence}`, source, { subject_token: currentSubject(subjectIndex).subject_token, candidate_id: hits[0].candidate_id });
   await commitFrameTransaction(transaction, (captured) => {
     const row = currentSubject(subjectIndex).frame_observations[captured.captured_frame_sequence];
@@ -1107,6 +1345,7 @@ async function toggleCandidate(source, subjectIndex) {
       selected_candidate_ids: [...row.selected_candidate_ids],
       transaction_id: captured.transaction_id,
     };
+    if (IS_R4) invalidateRelationship(subjectIndex, captured.captured_frame_sequence, "CANDIDATE_SELECTION_CHANGED", captured.candidate_id, true);
   });
   renderQuestion(); drawAll();
 }
@@ -1139,6 +1378,11 @@ async function loadCase(caseRow, draft = null) {
 async function loadMode(mode, tranche = null) {
   app.mode = mode; stopPlayback(); ui.saveState.textContent = "Loading server state…";
   const response = await fetch(`/api/bootstrap?mode=${mode}${tranche ? `&tranche=${tranche}` : ""}`); const payload = await response.json(); if (!response.ok) throw new Error(payload.error || "bootstrap failed");
+  if (IS_R4) {
+    if (payload.relationship_compatibility?.review_revision !== R4_REVISION || !payload.relationship_compatibility_sha256) throw new Error("relationship-compatibility contract is unavailable");
+    app.relationshipCompatibility = payload.relationship_compatibility;
+    app.relationshipCompatibilitySha256 = payload.relationship_compatibility_sha256;
+  }
   if (IS_R3) {
     const stateResponse = await fetch(`/api/review-state?mode=${mode}${tranche ? `&tranche=${tranche}` : ""}`, { cache: "no-store" });
     const state = await stateResponse.json();
@@ -1153,6 +1397,43 @@ async function loadMode(mode, tranche = null) {
   if (mode === "practice" && payload.state.all_practice_complete) { renderPracticeComplete(); return; }
   app.cases = mode === "practice" ? payload.cases : payload.cases.filter((item) => item.tranche_id === payload.state.tranche_id);
   const id = payload.state.first_incomplete_burst_id || app.cases[0].burst_id; const row = app.cases.find((item) => item.burst_id === id); await loadCase(row, payload.state.draft); ui.saveState.textContent = payload.state.draft ? "Draft restored from server" : "Ready · server-backed";
+}
+async function loadAcknowledgedEvent(mode, eventId) {
+  const response = await fetch(`/api/acknowledged-event?mode=${encodeURIComponent(mode)}&event_id=${encodeURIComponent(eventId)}`, { cache: "no-store" });
+  const payload = await response.json();
+  if (!response.ok || payload.read_only !== true || payload.event?.event_id !== eventId) throw new Error(payload.error || "acknowledged event is unavailable");
+  const event = payload.event;
+  app.mode = mode;
+  app.serverState = { completed_count: 1, total_count: mode === "practice" ? 3 : 20 };
+  const restored = {
+    current_question: "summary",
+    current_frame_sequence: 8,
+    playback_speed: 1,
+    answers: {
+      original_focus_box_answer: event.original_focus_box_answer,
+      context_subject_answer: event.context_subject_answer,
+      additional_subject: "CONTINUE",
+      missed_check: event.whole_burst_missed_person_answer,
+    },
+    subjects: event.subjects,
+    candidate_mappings: event.candidate_mappings,
+    missed_person_marks: event.whole_burst_missed_person_marks,
+    click_transactions: event.click_transactions || [],
+    action_journal: [],
+    draft_version: event.draft_version,
+    optimistic_lock_token: null,
+    draft_content_sha256: event.draft_content_sha256,
+    real_draft_recovery: null,
+  };
+  await loadCase(payload.case, restored);
+  app.readOnly = true;
+  app.questionKey = "summary";
+  renderQuestion();
+  ui.continueButton.disabled = true;
+  ui.continueButton.textContent = "Saved · read only";
+  ui.backButton.disabled = true;
+  ui.saveState.textContent = `READ ONLY — SERVER ACKNOWLEDGED · ${eventId}`;
+  return payload;
 }
 function updateProgress() { const state = app.serverState, done = state?.completed_count || 0, total = state?.total_count || (app.mode === "practice" ? 3 : 20); ui.progressText.textContent = `${done} of ${total}`; ui.progressFill.style.width = `${100 * done / total}%`; }
 function renderCompletion(state) { ui.reviewShell.classList.add("hidden"); ui.welcomeScreen.classList.add("hidden"); ui.completionScreen.classList.remove("hidden"); const number = Number(state.tranche_id.split("_")[1]); ui.modePill.textContent = `Tranche ${number} complete`; ui.progressText.textContent = "20 of 20"; ui.progressFill.style.width = "100%"; ui.completionTitle.textContent = `TRANCHE ${number} COMPLETE`; ui.trancheReceipt.textContent = state.tranche_completion_receipt_id; ui.lastEvent.textContent = state.last_event_id; ui.globalReceiptRow.classList.toggle("hidden", !state.all_cases_complete); ui.globalReceipt.textContent = state.global_completion_receipt_id || "—"; ui.nextTrancheButton.classList.toggle("hidden", number === 6); ui.nextTrancheButton.textContent = `Start Tranche ${number + 1}`; ui.saveState.textContent = "Completion restored from server"; }
@@ -1183,6 +1464,7 @@ document.addEventListener("keydown", (event) => {
   const number = Number(event.key); if (number >= 1 && number <= 9) { const button = ui.answerArea.querySelector(`[data-shortcut="${number}"]`); if (button) button.click(); }
 });
 
-window.__G7E_B_R2__ = { app, loadMode, loadCase, loadFrame, renderQuestion, continueQuestion, saveDraft, saveFinalR3, sourceToDisplay, displayToSource, setZoom, zoomToSubject, resetViews, verifyMapping, validateR3FrameBindings, eventPayload, draftPayload, frameCandidates, handleSourceClick, toggleCandidate, updateSubjectReference, requestDraw, questionSequence, chooseOriginalFocus, chooseContext, chooseUncertainPath, renderCandidateStatus };
+window.__G7E_B_R2__ = { app, loadMode, loadAcknowledgedEvent, loadCase, loadFrame, renderQuestion, continueQuestion, saveDraft, saveFinalR3, sourceToDisplay, displayToSource, setZoom, zoomToSubject, resetViews, verifyMapping, validateR3FrameBindings, validateR4Relationships, relationshipCompatibility, invalidateRelationship, ensureR4Relationships, showFinalSaveError, eventPayload, draftPayload, frameCandidates, handleSourceClick, toggleCandidate, updateSubjectReference, requestDraw, questionSequence, chooseOriginalFocus, chooseContext, chooseUncertainPath, renderCandidateStatus };
 window.__G7E_B_R3__ = IS_R3 ? window.__G7E_B_R2__ : null;
-const params = new URLSearchParams(location.search); if (params.get("preview") === "1") ui.previewBanner.classList.remove("hidden"); if (params.get("autostart") === "1") loadMode(params.get("mode") || "practice").catch((error) => block(`BOOT_ERROR — ${error.message}`));
+window.__G7E_B_R4__ = IS_R4 ? window.__G7E_B_R2__ : null;
+const params = new URLSearchParams(location.search); if (params.get("preview") === "1") ui.previewBanner.classList.remove("hidden"); if (params.get("readonlyEvent")) loadAcknowledgedEvent(params.get("mode") || "real", params.get("readonlyEvent")).catch((error) => block(`READ_ONLY_RESTORE_ERROR — ${error.message}`)); else if (params.get("autostart") === "1") loadMode(params.get("mode") || "practice").catch((error) => block(`BOOT_ERROR — ${error.message}`));
