@@ -23,7 +23,8 @@ from football_intelligence.temporal_burst_selection import CLASS_PRIORITY, MATCH
 REVIEW_ID = "G7E_B_TEMPORAL_BURST_REVIEW"
 REVIEW_REVISION = "G7E_B_TEMPORAL_BURST_REVIEW_V1"
 R1_REVIEW_REVISION = "G7E_B_R1_SUBJECT_GUIDANCE_AND_ZOOM_REPAIR_V1"
-SUPPORTED_REVIEW_REVISIONS = (REVIEW_REVISION, R1_REVIEW_REVISION)
+R2_REVIEW_REVISION = "G7E_B_R2_FULL_TEMPORAL_CANDIDATE_CLOSURE_V1"
+SUPPORTED_REVIEW_REVISIONS = (REVIEW_REVISION, R1_REVIEW_REVISION, R2_REVIEW_REVISION)
 PROTOCOL_ID = "G7E_A_BURST_LOCAL_TEMPORAL_OBSERVATION_PROTOCOL_V1"
 TRANCHES = tuple(f"TRANCHE_{index}" for index in range(1, 7))
 
@@ -68,6 +69,10 @@ ROLES = ("OUTFIELD_PLAYER", "GOALKEEPER", "RELEVANT_OFFICIAL", "OTHER_PERSON", "
 PARTICIPATION = ("ACTIVE_IN_MATCH", "WARMING_OR_INACTIVE", "NOT_PLAYER_OR_OFFICIAL", "UNKNOWN_PARTICIPATION")
 CERTAINTY = ("CERTAIN", "PROBABLE", "NOT_SURE")
 SUBJECT_TOKENS = ("SUBJECT_A", "SUBJECT_B", "SUBJECT_C")
+
+
+def relevant_visibility_for_supply(value: Any) -> bool:
+    return value in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL", "FULLY_OCCLUDED_EXPECTED_PRESENT", "UNCERTAIN")
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -298,6 +303,9 @@ class TemporalReviewStore:
             raise ValueError("unsupported temporal-review identity or revision")
         self.cases = list(review["cases"])
         self.practice_cases = list(practice["cases"])
+        candidate_state_path = self.package / "candidate_states_by_reference.json"
+        candidate_state_rows = read_json(candidate_state_path) if candidate_state_path.is_file() else {"frames": {}}
+        self.candidate_states_by_reference = dict(candidate_state_rows.get("frames", {}))
         self.by_id = {case["burst_id"]: case for case in self.cases}
         self.practice_by_id = {case["burst_id"]: case for case in self.practice_cases}
         self.by_tranche = {
@@ -516,6 +524,20 @@ class TemporalReviewStore:
             "updated_at_utc": utc_now(),
             "production_ready": False,
         }
+        if self.review_revision == R2_REVIEW_REVISION:
+            case = cases[burst_id]
+            if any(
+                state.get("candidate_status") == "CANDIDATE_DATA_UNAVAILABLE"
+                for state in case["per_frame_candidate_states"]
+            ):
+                raise ValueError("candidate data unavailable for an exact frame")
+            document.update(
+                {
+                    "candidate_runtime_contract": case["candidate_runtime_contract"],
+                    "unique_frame_candidate_status": case["unique_frame_candidate_status"],
+                    "per_frame_candidate_states": case["per_frame_candidate_states"],
+                }
+            )
         self._validate_draft(document)
         atomic_write(self._root(mode) / "drafts" / f"{burst_id}.json", canonical_bytes(document))
         return document
@@ -538,7 +560,7 @@ class TemporalReviewStore:
         if burst_id not in cases:
             raise ValueError("unknown burst event")
         case = cases[burst_id]
-        if self.review_revision == R1_REVIEW_REVISION:
+        if self.review_revision in (R1_REVIEW_REVISION, R2_REVIEW_REVISION):
             return self._validate_r1_event(payload, mode, case)
         focus_answer = payload.get("focus_answer")
         if focus_answer not in ("ONE_PERSON", "MULTIPLE_PEOPLE", "NO_RELEVANT_PERSON", "NOT_SURE"):
@@ -694,6 +716,21 @@ class TemporalReviewStore:
             for candidate in candidates
         }
         expected_mappings: set[tuple[str, int, str]] = set()
+        frame_states = case.get("per_frame_candidate_states", [])
+        if self.review_revision == R2_REVIEW_REVISION:
+            if len(frame_states) != 9:
+                raise ValueError("R2 candidate-state closure mismatch")
+            if any(row.get("candidate_status") == "CANDIDATE_DATA_UNAVAILABLE" for row in frame_states):
+                raise ValueError("candidate data unavailable for an exact frame")
+            if payload.get("candidate_runtime_contract") != case.get("candidate_runtime_contract"):
+                raise ValueError("candidate runtime contract mismatch")
+            if payload.get("unique_frame_candidate_status") != case.get("unique_frame_candidate_status"):
+                raise ValueError("unique-frame candidate-status mismatch")
+            if payload.get("per_frame_candidate_states") != frame_states:
+                raise ValueError("per-frame candidate-state mismatch")
+        allowed_supply = (
+            (*SUPPLY, "NO_USEFUL_BOX", "NOT_SURE") if self.review_revision == R2_REVIEW_REVISION else SUPPLY
+        )
         for subject in subjects:
             if subject.get("subject_definition_source") not in allowed_definition_sources:
                 raise ValueError("invalid subject definition source")
@@ -721,7 +758,7 @@ class TemporalReviewStore:
                     raise ValueError("subject location frame mismatch")
                 visibility = observation.get("visibility")
                 supply = observation.get("observation_supply")
-                if visibility not in VISIBILITY or supply not in SUPPLY:
+                if visibility not in VISIBILITY or supply not in allowed_supply:
                     raise ValueError("invalid visibility or supply")
                 if observation.get("occlusion_phase") not in OCCLUSION_PHASES:
                     raise ValueError("invalid occlusion phase")
@@ -742,6 +779,13 @@ class TemporalReviewStore:
                     raise ValueError("approximate hidden point requires hidden visibility")
                 if visibility in ("OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT") and supply != "NOT_APPLICABLE":
                     raise ValueError("absent frame supply must be NOT_APPLICABLE")
+                if (
+                    self.review_revision == R2_REVIEW_REVISION
+                    and relevant_visibility_for_supply(visibility)
+                    and frame_states[sequence]["candidate_status"] == "VERIFIED_ZERO_CANDIDATES"
+                    and supply not in ("NO_USEFUL_BOX", "NOT_SURE")
+                ):
+                    raise ValueError("verified-zero frame permits only no useful box or not sure")
                 selected = observation.get("selected_candidate_ids", [])
                 if not isinstance(selected, list) or len(selected) != len(set(selected)):
                     raise ValueError("invalid selected candidate IDs")
@@ -814,6 +858,32 @@ class TemporalReviewStore:
             "created_at_utc": utc_now(),
             "production_ready": False,
         }
+        if self.review_revision == R2_REVIEW_REVISION:
+            event.update(
+                {
+                    "schema_version": "football_intelligence.g7e_b_r2.burst_annotation_event.v1",
+                    "candidate_runtime_contract": case["candidate_runtime_contract"],
+                    "unique_frame_candidate_status": case["unique_frame_candidate_status"],
+                    "per_frame_candidate_states": case["per_frame_candidate_states"],
+                    "candidate_supply_interpretation": [
+                        {
+                            "frame_reference_id": state["frame_reference_id"],
+                            "candidate_status": state["candidate_status"],
+                            "available_candidate_count": state["post_gate_candidate_count"],
+                            "selected_candidate_ids": sorted(
+                                {
+                                    candidate_id
+                                    for subject in subjects
+                                    for observation in subject["frame_observations"]
+                                    if observation["frame_reference_id"] == state["frame_reference_id"]
+                                    for candidate_id in observation.get("selected_candidate_ids", [])
+                                }
+                            ),
+                        }
+                        for state in frame_states
+                    ],
+                }
+            )
         if not event["summary_confirmed"]:
             raise ValueError("summary confirmation required")
         return event, case
@@ -954,7 +1024,7 @@ class TemporalReviewStore:
         return {"ok": True, "practice_reset": True, "human_event_count": len(self.latest_events("real"))}
 
     def acceptance_event(self, case: Mapping[str, Any], branch: str = "simple") -> dict[str, Any]:
-        if self.review_revision == R1_REVIEW_REVISION:
+        if self.review_revision in (R1_REVIEW_REVISION, R2_REVIEW_REVISION):
             return self._r1_acceptance_event(case, branch)
         visibility = ["VISIBLE_COMPLETE"] * 9
         supply = ["ONE_USEFUL_CANDIDATE"] * 9
@@ -1075,7 +1145,9 @@ class TemporalReviewStore:
                         else None,
                         "human_confirmed": state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL"),
                         "approximate_hidden_location": False,
-                        "observation_supply": "NO_CANDIDATE",
+                        "observation_supply": (
+                            "NO_USEFUL_BOX" if self.review_revision == R2_REVIEW_REVISION else "NO_CANDIDATE"
+                        ),
                         "selected_candidate_ids": [],
                         "occlusion_phase": "OCCLUDED" if state == "FULLY_OCCLUDED_EXPECTED_PRESENT" else "NONE",
                     }
@@ -1100,7 +1172,7 @@ class TemporalReviewStore:
                     "certainty": "PROBABLE",
                 }
             )
-        return {
+        payload = {
             "burst_id": case["burst_id"],
             "original_focus_box_answer": "NO_RELEVANT_PERSON"
             if branch == "no_focus"
@@ -1114,6 +1186,15 @@ class TemporalReviewStore:
             "summary_confirmed": True,
             "acceptance_temporary": True,
         }
+        if self.review_revision == R2_REVIEW_REVISION:
+            payload.update(
+                {
+                    "candidate_runtime_contract": case["candidate_runtime_contract"],
+                    "unique_frame_candidate_status": case["unique_frame_candidate_status"],
+                    "per_frame_candidate_states": case["per_frame_candidate_states"],
+                }
+            )
+        return payload
 
     def complete_acceptance_tranche(self, tranche_id: str) -> dict[str, Any]:
         if not self.acceptance_mode:
@@ -1193,6 +1274,12 @@ def create_server(
                 latest = store.latest_events("real")
                 events = [latest[case["burst_id"]] for case in store.by_tranche[tranche_id]]
                 return self.send_json(200, {"tranche_id": tranche_id, "read_only": True, "events": events})
+            if route.startswith("/api/candidate-state/"):
+                frame_reference_id = unquote(route.removeprefix("/api/candidate-state/"))
+                state = store.candidate_states_by_reference.get(frame_reference_id)
+                if state is None:
+                    return self.send_json(404, {"error": "candidate state not found"})
+                return self.send_json(200, state)
             if route.startswith("/assets/"):
                 relative = Path(unquote(route.removeprefix("/assets/")))
                 candidate = (resolved_asset_root / relative).resolve()
