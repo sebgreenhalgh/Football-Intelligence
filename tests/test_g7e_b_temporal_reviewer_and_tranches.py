@@ -45,6 +45,12 @@ def read_jsonl(path: Path) -> list[dict]:
 def test_expected_baseline_and_exact_g7e_a_closure() -> None:
     closure = read_json(STAGE / "00_INPUT_CLOSURE/input_closure.json")
     assert closure["repository_head"] == EXPECTED_HEAD
+    assert (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", EXPECTED_HEAD, "HEAD"], cwd=REPOSITORY, check=False
+        ).returncode
+        == 0
+    )
     assert closure["classification"] == "PASS_G7E_B_INPUT_PROVENANCE"
     burst_path = G7E_A / "02_BURST_SELECTION/temporal_burst_manifest.jsonl"
     frame_path = G7E_A / "02_BURST_SELECTION/temporal_frame_manifest.jsonl"

@@ -24,7 +24,13 @@ REVIEW_ID = "G7E_B_TEMPORAL_BURST_REVIEW"
 REVIEW_REVISION = "G7E_B_TEMPORAL_BURST_REVIEW_V1"
 R1_REVIEW_REVISION = "G7E_B_R1_SUBJECT_GUIDANCE_AND_ZOOM_REPAIR_V1"
 R2_REVIEW_REVISION = "G7E_B_R2_FULL_TEMPORAL_CANDIDATE_CLOSURE_V1"
-SUPPORTED_REVIEW_REVISIONS = (REVIEW_REVISION, R1_REVIEW_REVISION, R2_REVIEW_REVISION)
+R3_REVIEW_REVISION = "G7E_B_R3_FRAME_BINDING_AND_ATOMIC_FINAL_SAVE_V1"
+SUPPORTED_REVIEW_REVISIONS = (
+    REVIEW_REVISION,
+    R1_REVIEW_REVISION,
+    R2_REVIEW_REVISION,
+    R3_REVIEW_REVISION,
+)
 PROTOCOL_ID = "G7E_A_BURST_LOCAL_TEMPORAL_OBSERVATION_PROTOCOL_V1"
 TRANCHES = tuple(f"TRANCHE_{index}" for index in range(1, 7))
 
@@ -69,6 +75,31 @@ ROLES = ("OUTFIELD_PLAYER", "GOALKEEPER", "RELEVANT_OFFICIAL", "OTHER_PERSON", "
 PARTICIPATION = ("ACTIVE_IN_MATCH", "WARMING_OR_INACTIVE", "NOT_PLAYER_OR_OFFICIAL", "UNKNOWN_PARTICIPATION")
 CERTAINTY = ("CERTAIN", "PROBABLE", "NOT_SURE")
 SUBJECT_TOKENS = ("SUBJECT_A", "SUBJECT_B", "SUBJECT_C")
+FRAME_LOCAL_ACTION_TYPES = (
+    "SUBJECT_LOCATION",
+    "APPROXIMATE_HIDDEN_LOCATION",
+    "CANDIDATE_SELECTION",
+    "MISSED_PERSON_MARK",
+)
+
+
+class ReviewValidationError(ValueError):
+    """Structured, field-level validation failure safe for the review UI."""
+
+    def __init__(self, errors: list[dict[str, Any]], error_code: str = "FRAME_BINDING_VALIDATION_FAILED"):
+        if not errors:
+            raise ValueError("structured validation requires at least one error")
+        self.errors = errors
+        self.error_code = error_code
+        super().__init__(str(errors[0]["message"]))
+
+
+class InterruptedAcknowledgement(RuntimeError):
+    """Acceptance-only interruption after event persistence and before acknowledgement."""
+
+    def __init__(self, event_id: str):
+        self.event_id = event_id
+        super().__init__("event persisted; acknowledgement intentionally interrupted")
 
 
 def relevant_visibility_for_supply(value: Any) -> bool:
@@ -321,6 +352,294 @@ class TemporalReviewStore:
             raise ValueError("practice-case cardinality mismatch")
         self.tranche_manifest_sha256 = sha256_file(self.package / "tranche_manifest.jsonl")
 
+    @staticmethod
+    def _frame_identity(case: Mapping[str, Any], sequence: int) -> dict[str, Any]:
+        frame = case["frames"][sequence]
+        identity = frame.get("canonical_frame_identity")
+        if not isinstance(identity, Mapping):
+            raise ValueError("canonical frame identity is unavailable")
+        return dict(identity)
+
+    @staticmethod
+    def _structured_error(
+        *,
+        code: str,
+        field: str,
+        message: str,
+        subject_token: str | None = None,
+        question_id: str | None = None,
+        expected: Mapping[str, Any] | None = None,
+        observed: Mapping[str, Any] | None = None,
+        array_location: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "error_code": code,
+            "field": field,
+            "subject_token": subject_token,
+            "question_id": question_id,
+            "observation_frame_id": expected.get("frame_id") if expected else None,
+            "record_frame_id": observed.get("frame_id") if observed else None,
+            "unique_frame_id": expected.get("unique_frame_id") if expected else None,
+            "array_location": array_location,
+            "message": message,
+            "suggested_correction_route": question_id,
+        }
+
+    def _validate_r3_frame_bindings(
+        self,
+        payload: Mapping[str, Any],
+        case: Mapping[str, Any],
+        *,
+        final: bool,
+    ) -> None:
+        errors: list[dict[str, Any]] = []
+        candidates = {
+            candidate["candidate_id"]: candidate for rows in case.get("frame_candidates", []) for candidate in rows
+        }
+        candidate_frames = {
+            candidate["candidate_id"]: sequence
+            for sequence, rows in enumerate(case.get("frame_candidates", []))
+            for candidate in rows
+        }
+        subjects = payload.get("subjects", [])
+        for subject_index, subject in enumerate(subjects):
+            token = subject.get("subject_token")
+            observations = subject.get("frame_observations", [])
+            if len(observations) != 9:
+                errors.append(
+                    self._structured_error(
+                        code="FRAME_OBSERVATION_CARDINALITY",
+                        field="frame_observations",
+                        message="Each subject must have exactly nine frame observations.",
+                        subject_token=token,
+                        array_location=f"subjects[{subject_index}].frame_observations",
+                    )
+                )
+                continue
+            for sequence, observation in enumerate(observations):
+                expected = self._frame_identity(case, sequence)
+                observed = observation.get("canonical_frame_identity")
+                question_id = f"subject_{subject_index}_location_{sequence}"
+                location = f"subjects[{subject_index}].frame_observations[{sequence}]"
+                if observed != expected or observation.get("frame_reference_id") != expected["frame_id"]:
+                    errors.append(
+                        self._structured_error(
+                            code="SUBJECT_LOCATION_FRAME_MISMATCH",
+                            field="canonical_frame_identity",
+                            message=f"Subject {token} frame {sequence + 1} is not bound to its exact source frame.",
+                            subject_token=token,
+                            question_id=question_id,
+                            expected=expected,
+                            observed=observed if isinstance(observed, Mapping) else None,
+                            array_location=location,
+                        )
+                    )
+                visibility = observation.get("visibility")
+                x = observation.get("subject_location_source_x")
+                y = observation.get("subject_location_source_y")
+                has_location = isinstance(x, (int, float)) and isinstance(y, (int, float))
+                binding = observation.get("location_binding")
+                if has_location:
+                    if not 0 <= x <= case["source_width"] or not 0 <= y <= case["source_height"]:
+                        errors.append(
+                            self._structured_error(
+                                code="SOURCE_COORDINATE_OUT_OF_BOUNDS",
+                                field="subject_location_source_xy",
+                                message="The subject point is outside the source frame.",
+                                subject_token=token,
+                                question_id=question_id,
+                                expected=expected,
+                                array_location=location,
+                            )
+                        )
+                    expected_action = (
+                        "APPROXIMATE_HIDDEN_LOCATION"
+                        if observation.get("approximate_hidden_location")
+                        else "SUBJECT_LOCATION"
+                    )
+                    if (
+                        not isinstance(binding, Mapping)
+                        or binding.get("action_type") != expected_action
+                        or binding.get("canonical_frame_identity") != expected
+                        or binding.get("question_id") != question_id
+                        or binding.get("source_xy") != [x, y]
+                    ):
+                        errors.append(
+                            self._structured_error(
+                                code="LOCATION_BINDING_MISMATCH",
+                                field="location_binding",
+                                message=(
+                                    "The stored subject point is not bound to the frame and question "
+                                    "that created it."
+                                ),
+                                subject_token=token,
+                                question_id=question_id,
+                                expected=expected,
+                                observed=binding.get("canonical_frame_identity")
+                                if isinstance(binding, Mapping)
+                                else None,
+                                array_location=location,
+                            )
+                        )
+                if final and visibility in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL") and not has_location:
+                    errors.append(
+                        self._structured_error(
+                            code="MISSING_REQUIRED_LOCATION",
+                            field="subject_location_source_xy",
+                            message="A visible or partly visible subject needs one confirmed point.",
+                            subject_token=token,
+                            question_id=question_id,
+                            expected=expected,
+                            array_location=location,
+                        )
+                    )
+                if visibility in ("OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT") and has_location:
+                    errors.append(
+                        self._structured_error(
+                            code="LOCATION_NOT_ALLOWED_FOR_VISIBILITY",
+                            field="subject_location_source_xy",
+                            message="A subject marked absent or out of frame cannot retain a location.",
+                            subject_token=token,
+                            question_id=question_id,
+                            expected=expected,
+                            array_location=location,
+                        )
+                    )
+                selected = observation.get("selected_candidate_ids", [])
+                supply_question = f"subject_{subject_index}_supply_{sequence}"
+                selection_binding = observation.get("candidate_selection_binding")
+                if (
+                    not isinstance(selection_binding, Mapping)
+                    or selection_binding.get("action_type") != "CANDIDATE_SELECTION"
+                    or selection_binding.get("canonical_frame_identity") != expected
+                    or selection_binding.get("question_id") != supply_question
+                    or selection_binding.get("selected_candidate_ids") != selected
+                ):
+                    errors.append(
+                        self._structured_error(
+                            code="CANDIDATE_SELECTION_FRAME_MISMATCH",
+                            field="candidate_selection_binding",
+                            message="Candidate selections must be bound to the exact frame where those boxes exist.",
+                            subject_token=token,
+                            question_id=supply_question,
+                            expected=expected,
+                            observed=selection_binding.get("canonical_frame_identity")
+                            if isinstance(selection_binding, Mapping)
+                            else None,
+                            array_location=location,
+                        )
+                    )
+                if len(selected) != len(set(selected)):
+                    errors.append(
+                        self._structured_error(
+                            code="DUPLICATE_CANDIDATE_SELECTION",
+                            field="selected_candidate_ids",
+                            message="The same candidate box cannot be selected twice.",
+                            subject_token=token,
+                            question_id=supply_question,
+                            expected=expected,
+                            array_location=location,
+                        )
+                    )
+                for candidate_id in selected:
+                    if candidate_id not in candidates or candidate_frames[candidate_id] != sequence:
+                        errors.append(
+                            self._structured_error(
+                                code="CANDIDATE_NOT_IN_EXACT_FRAME",
+                                field="selected_candidate_ids",
+                                message=f"Candidate {candidate_id} does not belong to this exact frame.",
+                                subject_token=token,
+                                question_id=supply_question,
+                                expected=expected,
+                                array_location=location,
+                            )
+                        )
+                requires_selection = observation.get("observation_supply") in (
+                    "ONE_USEFUL_CANDIDATE",
+                    "MULTIPLE_CANDIDATES",
+                    "MERGED_WITH_OTHER_PEOPLE",
+                    "FRAGMENT_ONLY",
+                )
+                if final and requires_selection and not selected:
+                    errors.append(
+                        self._structured_error(
+                            code="CANDIDATE_CARDINALITY_MISMATCH",
+                            field="selected_candidate_ids",
+                            message="This answer requires at least one selected candidate box.",
+                            subject_token=token,
+                            question_id=supply_question,
+                            expected=expected,
+                            array_location=location,
+                        )
+                    )
+        for mapping_index, mapping in enumerate(payload.get("candidate_mappings", [])):
+            sequence = mapping.get("frame_sequence")
+            expected = self._frame_identity(case, sequence) if isinstance(sequence, int) and 0 <= sequence < 9 else None
+            observed = mapping.get("canonical_frame_identity")
+            candidate_id = mapping.get("candidate_id")
+            if (
+                expected is None
+                or observed != expected
+                or mapping.get("frame_reference_id") != expected["frame_id"]
+                or candidate_id not in candidates
+                or candidate_frames[candidate_id] != sequence
+            ):
+                errors.append(
+                    self._structured_error(
+                        code="CANDIDATE_MAPPING_FRAME_MISMATCH",
+                        field="canonical_frame_identity",
+                        message="Candidate mapping does not bind the selected box to its exact source frame.",
+                        subject_token=mapping.get("subject_token"),
+                        question_id=(
+                            f"subject_{SUBJECT_TOKENS.index(mapping['subject_token'])}_supply_{sequence}"
+                            if mapping.get("subject_token") in SUBJECT_TOKENS and isinstance(sequence, int)
+                            else None
+                        ),
+                        expected=expected,
+                        observed=observed if isinstance(observed, Mapping) else None,
+                        array_location=f"candidate_mappings[{mapping_index}]",
+                    )
+                )
+        for mark_index, mark in enumerate(
+            payload.get("whole_burst_missed_person_marks", payload.get("missed_person_marks", []))
+        ):
+            sequence = mark.get("frame_sequence")
+            expected = self._frame_identity(case, sequence) if isinstance(sequence, int) and 0 <= sequence < 9 else None
+            observed = mark.get("canonical_frame_identity")
+            if expected is None or observed != expected or mark.get("frame_reference_id") != expected["frame_id"]:
+                errors.append(
+                    self._structured_error(
+                        code="MISSED_PERSON_MARK_FRAME_MISMATCH",
+                        field="canonical_frame_identity",
+                        message="The missed-person mark is not bound to the exact frame where it was placed.",
+                        question_id="missed_mark",
+                        expected=expected,
+                        observed=observed if isinstance(observed, Mapping) else None,
+                        array_location=f"missed_person_marks[{mark_index}]",
+                    )
+                )
+            binding = mark.get("mark_binding")
+            if expected and (
+                not isinstance(binding, Mapping)
+                or binding.get("action_type") != "MISSED_PERSON_MARK"
+                or binding.get("canonical_frame_identity") != expected
+                or binding.get("question_id") != "missed_mark"
+                or binding.get("source_xy") != mark.get("source_xy")
+            ):
+                errors.append(
+                    self._structured_error(
+                        code="MISSED_PERSON_MARK_BINDING_MISMATCH",
+                        field="mark_binding",
+                        message="The missed-person mark is missing its immutable click-frame binding.",
+                        question_id="missed_mark",
+                        expected=expected,
+                        observed=binding.get("canonical_frame_identity") if isinstance(binding, Mapping) else None,
+                        array_location=f"missed_person_marks[{mark_index}]",
+                    )
+                )
+        if errors:
+            raise ReviewValidationError(errors)
+
     def _root(self, mode: str) -> Path:
         if mode == "practice":
             return self.practice
@@ -506,6 +825,8 @@ class TemporalReviewStore:
         burst_id = str(payload.get("burst_id", ""))
         if burst_id not in cases:
             raise ValueError("unknown burst draft")
+        if self.review_revision == R3_REVIEW_REVISION:
+            return self._save_r3_draft(payload, mode, cases[burst_id])
         document = {
             "schema_version": "football_intelligence.g7e_b.temporal_review_draft.v1",
             "review_id": self.review_id,
@@ -542,6 +863,72 @@ class TemporalReviewStore:
         atomic_write(self._root(mode) / "drafts" / f"{burst_id}.json", canonical_bytes(document))
         return document
 
+    def _save_r3_draft(
+        self,
+        payload: Mapping[str, Any],
+        mode: str,
+        case: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        burst_id = str(payload["burst_id"])
+        path = self._root(mode) / "drafts" / f"{burst_id}.json"
+        current = read_json(path) if path.is_file() else None
+        expected_version = int(current.get("draft_version", 0)) if current else 0
+        expected_token = current.get("optimistic_lock_token") if current else None
+        supplied_version = int(payload.get("draft_version", 0))
+        supplied_token = payload.get("optimistic_lock_token")
+        if supplied_version != expected_version or supplied_token != expected_token:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="STALE_DRAFT_VERSION",
+                        field="optimistic_lock_token",
+                        message="A newer server-backed draft exists. Reload before saving this answer.",
+                        question_id=str(payload.get("current_question", "")),
+                    )
+                ],
+                "STALE_DRAFT_VERSION",
+            )
+        document = {
+            "schema_version": "football_intelligence.g7e_b_r3.temporal_review_draft.v1",
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
+            "mode": mode,
+            "burst_id": burst_id,
+            "tranche_id": case.get("tranche_id"),
+            "current_question": str(payload.get("current_question", "original_focus")),
+            "current_frame_sequence": int(payload.get("current_frame_sequence", 4)),
+            "playback_speed": float(payload.get("playback_speed", 1.0)),
+            "answers": payload.get("answers", {}),
+            "subjects": payload.get("subjects", []),
+            "candidate_mappings": payload.get("candidate_mappings", []),
+            "missed_person_marks": payload.get("missed_person_marks", []),
+            "click_transactions": payload.get("click_transactions", []),
+            "action_journal": payload.get("action_journal", []),
+            "prior_final_save_error": payload.get("prior_final_save_error"),
+            "targeted_correction": payload.get("targeted_correction"),
+            "source_manifest_hashes": case["source_manifest_hashes"],
+            "candidate_runtime_contract": case["candidate_runtime_contract"],
+            "unique_frame_candidate_status": case["unique_frame_candidate_status"],
+            "per_frame_candidate_states": case["per_frame_candidate_states"],
+            "draft_version": expected_version + 1,
+            "updated_at_utc": utc_now(),
+            "production_ready": False,
+        }
+        self._validate_draft(document)
+        self._validate_r3_frame_bindings(document, case, final=False)
+        document["draft_content_sha256"] = canonical_digest(document)
+        document["optimistic_lock_token"] = canonical_digest(
+            {
+                "review_revision": self.review_revision,
+                "burst_id": burst_id,
+                "draft_version": document["draft_version"],
+                "draft_content_sha256": document["draft_content_sha256"],
+            }
+        )
+        atomic_write(path, canonical_bytes(document))
+        document["server_file_sha256"] = sha256_file(path)
+        return document
+
     def _validate_draft(self, draft: Mapping[str, Any]) -> None:
         subjects = draft.get("subjects", [])
         if not isinstance(subjects, list) or len(subjects) > 3:
@@ -560,6 +947,9 @@ class TemporalReviewStore:
         if burst_id not in cases:
             raise ValueError("unknown burst event")
         case = cases[burst_id]
+        if self.review_revision == R3_REVIEW_REVISION:
+            self._validate_r3_frame_bindings(payload, case, final=True)
+            return self._validate_r1_event(payload, mode, case)
         if self.review_revision in (R1_REVIEW_REVISION, R2_REVIEW_REVISION):
             return self._validate_r1_event(payload, mode, case)
         focus_answer = payload.get("focus_answer")
@@ -717,7 +1107,7 @@ class TemporalReviewStore:
         }
         expected_mappings: set[tuple[str, int, str]] = set()
         frame_states = case.get("per_frame_candidate_states", [])
-        if self.review_revision == R2_REVIEW_REVISION:
+        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION):
             if len(frame_states) != 9:
                 raise ValueError("R2 candidate-state closure mismatch")
             if any(row.get("candidate_status") == "CANDIDATE_DATA_UNAVAILABLE" for row in frame_states):
@@ -729,7 +1119,9 @@ class TemporalReviewStore:
             if payload.get("per_frame_candidate_states") != frame_states:
                 raise ValueError("per-frame candidate-state mismatch")
         allowed_supply = (
-            (*SUPPLY, "NO_USEFUL_BOX", "NOT_SURE") if self.review_revision == R2_REVIEW_REVISION else SUPPLY
+            (*SUPPLY, "NO_USEFUL_BOX", "NOT_SURE")
+            if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION)
+            else SUPPLY
         )
         for subject in subjects:
             if subject.get("subject_definition_source") not in allowed_definition_sources:
@@ -780,7 +1172,7 @@ class TemporalReviewStore:
                 if visibility in ("OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT") and supply != "NOT_APPLICABLE":
                     raise ValueError("absent frame supply must be NOT_APPLICABLE")
                 if (
-                    self.review_revision == R2_REVIEW_REVISION
+                    self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION)
                     and relevant_visibility_for_supply(visibility)
                     and frame_states[sequence]["candidate_status"] == "VERIFIED_ZERO_CANDIDATES"
                     and supply not in ("NO_USEFUL_BOX", "NOT_SURE")
@@ -858,10 +1250,14 @@ class TemporalReviewStore:
             "created_at_utc": utc_now(),
             "production_ready": False,
         }
-        if self.review_revision == R2_REVIEW_REVISION:
+        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION):
             event.update(
                 {
-                    "schema_version": "football_intelligence.g7e_b_r2.burst_annotation_event.v1",
+                    "schema_version": (
+                        "football_intelligence.g7e_b_r3.burst_annotation_event.v1"
+                        if self.review_revision == R3_REVIEW_REVISION
+                        else "football_intelligence.g7e_b_r2.burst_annotation_event.v1"
+                    ),
                     "candidate_runtime_contract": case["candidate_runtime_contract"],
                     "unique_frame_candidate_status": case["unique_frame_candidate_status"],
                     "per_frame_candidate_states": case["per_frame_candidate_states"],
@@ -882,6 +1278,15 @@ class TemporalReviewStore:
                         }
                         for state in frame_states
                     ],
+                }
+            )
+        if self.review_revision == R3_REVIEW_REVISION:
+            event.update(
+                {
+                    "draft_version": payload.get("draft_version"),
+                    "draft_content_sha256": payload.get("draft_content_sha256"),
+                    "click_transactions": payload.get("click_transactions", []),
+                    "frame_binding_validation": "PASSED",
                 }
             )
         if not event["summary_confirmed"]:
@@ -916,8 +1321,319 @@ class TemporalReviewStore:
                 raise ValueError("missed-person frame-reference mismatch")
             self._validate_source_xy(mark.get("source_xy"), case, "missed-person")
 
+    def _r3_draft_reference(
+        self,
+        payload: Mapping[str, Any],
+        mode: str,
+        case: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        path = self._root(mode) / "drafts" / f"{case['burst_id']}.json"
+        if not path.is_file():
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="SERVER_BACKED_DRAFT_REQUIRED",
+                        field="draft",
+                        message="The server-backed draft is missing. Restore the draft before final save.",
+                        question_id="summary",
+                    )
+                ],
+                "SERVER_BACKED_DRAFT_REQUIRED",
+            )
+        draft = read_json(path)
+        supplied = (
+            payload.get("draft_version"),
+            payload.get("draft_content_sha256"),
+            payload.get("optimistic_lock_token"),
+        )
+        expected = (
+            draft.get("draft_version"),
+            draft.get("draft_content_sha256"),
+            draft.get("optimistic_lock_token"),
+        )
+        if supplied != expected:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="STALE_FINAL_SAVE_DRAFT",
+                        field="draft_version",
+                        message="Final save does not reference the latest acknowledged draft.",
+                        question_id="summary",
+                    )
+                ],
+                "STALE_FINAL_SAVE_DRAFT",
+            )
+        comparisons = (
+            (payload.get("subjects", []), draft.get("subjects", []), "subjects"),
+            (payload.get("candidate_mappings", []), draft.get("candidate_mappings", []), "candidate_mappings"),
+            (
+                payload.get("whole_burst_missed_person_marks", []),
+                draft.get("missed_person_marks", []),
+                "whole_burst_missed_person_marks",
+            ),
+            (
+                payload.get("original_focus_box_answer"),
+                draft.get("answers", {}).get("original_focus_box_answer"),
+                "original_focus_box_answer",
+            ),
+            (
+                payload.get("whole_burst_missed_person_answer"),
+                draft.get("answers", {}).get("missed_check"),
+                "whole_burst_missed_person_answer",
+            ),
+        )
+        mismatch = next(
+            (field for supplied_value, stored_value, field in comparisons if supplied_value != stored_value), None
+        )
+        if mismatch:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="FINAL_EVENT_DIFFERS_FROM_DRAFT",
+                        field=mismatch,
+                        message="Final save differs from the latest acknowledged server draft.",
+                        question_id="summary",
+                    )
+                ],
+                "FINAL_EVENT_DIFFERS_FROM_DRAFT",
+            )
+        return draft
+
+    def _r3_preflight_inputs(
+        self,
+        payload: Mapping[str, Any],
+        mode: str,
+    ) -> tuple[dict[str, Any], Mapping[str, Any], dict[str, Any]]:
+        cases = self.practice_by_id if mode == "practice" else self.by_id
+        burst_id = str(payload.get("burst_id", ""))
+        if burst_id not in cases:
+            raise ValueError("unknown burst event")
+        case = cases[burst_id]
+        event, _ = self._validate_event(payload, mode)
+        draft = self._r3_draft_reference(payload, mode, case)
+        identity_inputs = {
+            "review_revision": self.review_revision,
+            "burst_id": burst_id,
+            "draft_version": draft["draft_version"],
+            "draft_content_sha256": draft["draft_content_sha256"],
+        }
+        base_digest = canonical_digest(identity_inputs)
+        proposed_event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.review_revision}:{base_digest}"))
+        idempotency_key = canonical_digest({**identity_inputs, "proposed_event_id": proposed_event_id})
+        event["event_id"] = proposed_event_id
+        event["idempotency_key"] = idempotency_key
+        event["draft_version"] = draft["draft_version"]
+        event["draft_content_sha256"] = draft["draft_content_sha256"]
+        return (
+            event,
+            case,
+            {
+                "proposed_event_id": proposed_event_id,
+                "idempotency_key": idempotency_key,
+                "draft_version": draft["draft_version"],
+                "draft_content_sha256": draft["draft_content_sha256"],
+            },
+        )
+
+    def _r3_error_path(self, mode: str, burst_id: str) -> Path:
+        return self._root(mode) / "status" / f"final_save_error_{burst_id}.json"
+
+    def final_save_preflight(self, payload: Mapping[str, Any], mode: str) -> dict[str, Any]:
+        if self.review_revision != R3_REVIEW_REVISION:
+            raise ValueError("final-save preflight requires the R3 reviewer")
+        try:
+            _, _, inputs = self._r3_preflight_inputs(payload, mode)
+        except ReviewValidationError as exc:
+            burst_id = str(payload.get("burst_id", "unknown"))
+            error_state = {
+                "schema_version": "football_intelligence.g7e_b_r3.final_save_error.v1",
+                "review_revision": self.review_revision,
+                "burst_id": burst_id,
+                "mode": mode,
+                "error_code": exc.error_code,
+                "errors": exc.errors,
+                "created_at_utc": utc_now(),
+                "production_ready": False,
+            }
+            atomic_write(self._r3_error_path(mode, burst_id), canonical_bytes(error_state))
+            return {"ok": False, "status": "FINAL_SAVE_ERROR", **error_state}
+        return {
+            "ok": True,
+            "status": "READY_TO_PERSIST",
+            **inputs,
+            "validation_error_count": 0,
+            "production_ready": False,
+        }
+
+    def _r3_acknowledge_event(
+        self,
+        *,
+        root: Path,
+        event: Mapping[str, Any],
+        event_path: Path,
+        case: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        receipt = {
+            "schema_version": "football_intelligence.g7e_b_r3.event_acknowledgement_receipt.v1",
+            "receipt_id": f"ack-{event['event_id']}",
+            "review_id": self.review_id,
+            "review_revision": self.review_revision,
+            "mode": event["mode"],
+            "tranche_id": case.get("tranche_id"),
+            "burst_id": event["burst_id"],
+            "event_id": event["event_id"],
+            "idempotency_key": event["idempotency_key"],
+            "event_relative_path": str(event_path.relative_to(root)).replace("\\", "/"),
+            "event_byte_size": event_path.stat().st_size,
+            "event_sha256": sha256_file(event_path),
+            "server_validated": True,
+            "case_complete": True,
+            "created_at_utc": utc_now(),
+            "production_ready": False,
+        }
+        ack_path = self._ack_path(root, str(event["event_id"]))
+        if ack_path.is_file():
+            existing = read_json(ack_path)
+            if (
+                existing.get("event_sha256") != receipt["event_sha256"]
+                or existing.get("idempotency_key") != receipt["idempotency_key"]
+            ):
+                raise ValueError("existing acknowledgement does not bind the exact event")
+            return existing
+        atomic_write(ack_path, canonical_bytes(receipt))
+        if read_json(ack_path).get("event_sha256") != sha256_file(event_path):
+            raise ValueError("acknowledgement hash verification failed")
+        return receipt
+
+    def _save_r3_event(self, payload: Mapping[str, Any], mode: str) -> dict[str, Any]:
+        supplied_key = str(payload.get("idempotency_key", ""))
+        if supplied_key and (
+            len(supplied_key) != 64 or any(character not in "0123456789abcdef" for character in supplied_key)
+        ):
+            raise ValueError("invalid idempotency key")
+        root = self._root(mode)
+        existing_ledger_path = root / "idempotency" / f"{supplied_key}.json"
+        if supplied_key and existing_ledger_path.is_file():
+            ledger = read_json(existing_ledger_path)
+            if ledger.get("idempotency_key") != supplied_key or ledger.get("event_id") != payload.get(
+                "proposed_event_id"
+            ):
+                raise ValueError("idempotency record does not match this final-save request")
+            event_path = root / str(ledger["event_relative_path"])
+            if not event_path.is_file() or sha256_file(event_path) != ledger.get("event_sha256"):
+                raise ValueError("persisted idempotent event failed hash validation")
+            event = read_json(event_path)
+            cases = self.practice_by_id if mode == "practice" else self.by_id
+            case = cases.get(str(event.get("burst_id")))
+            if case is None:
+                raise ValueError("persisted event references an unknown burst")
+            receipt = self._r3_acknowledge_event(root=root, event=event, event_path=event_path, case=case)
+            ledger.update(
+                {
+                    "status": "SERVER_ACKNOWLEDGED",
+                    "acknowledgement_receipt_id": receipt["receipt_id"],
+                    "acknowledgement_receipt_sha256": sha256_file(self._ack_path(root, str(event["event_id"]))),
+                    "updated_at_utc": utc_now(),
+                }
+            )
+            atomic_write(existing_ledger_path, canonical_bytes(ledger))
+            draft_path = root / "drafts" / f"{event['burst_id']}.json"
+            if draft_path.is_file():
+                draft_path.unlink()
+            return {
+                "ok": True,
+                "saved": True,
+                "status": "SERVER_ACKNOWLEDGED",
+                "event_id": event["event_id"],
+                "acknowledgement_receipt_id": receipt["receipt_id"],
+                "idempotency_key": supplied_key,
+                "recovered_existing_event": True,
+                "duplicate_event_created": False,
+                "production_ready": False,
+            }
+        event, case, inputs = self._r3_preflight_inputs(payload, mode)
+        if payload.get("proposed_event_id") != inputs["proposed_event_id"]:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="PROPOSED_EVENT_ID_MISMATCH",
+                        field="proposed_event_id",
+                        message="Final save must use the event ID returned by preflight.",
+                        question_id="summary",
+                    )
+                ],
+                "PROPOSED_EVENT_ID_MISMATCH",
+            )
+        if payload.get("idempotency_key") != inputs["idempotency_key"]:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="IDEMPOTENCY_KEY_MISMATCH",
+                        field="idempotency_key",
+                        message="Final save must use the idempotency key returned by preflight.",
+                        question_id="summary",
+                    )
+                ],
+                "IDEMPOTENCY_KEY_MISMATCH",
+            )
+        if mode == "real" and case["tranche_id"] not in self._unlocked():
+            raise ValueError("tranche is locked")
+        tranche_dir = str(case.get("tranche_id") or "PRACTICE")
+        event_path = root / "events" / tranche_dir / f"{event['event_id']}.json"
+        ledger_path = root / "idempotency" / f"{inputs['idempotency_key']}.json"
+        recovered = event_path.is_file()
+        if recovered:
+            event = read_json(event_path)
+            if event.get("idempotency_key") != inputs["idempotency_key"]:
+                raise ValueError("proposed event ID is already bound to another request")
+        else:
+            event["server_sequence"] = _latest_sequence(self._event_paths(mode)) + 1
+            event["created_at_utc"] = utc_now()
+            atomic_write(event_path, canonical_bytes(event))
+        ledger = {
+            "schema_version": "football_intelligence.g7e_b_r3.idempotency_record.v1",
+            "idempotency_key": inputs["idempotency_key"],
+            "event_id": event["event_id"],
+            "event_relative_path": str(event_path.relative_to(root)).replace("\\", "/"),
+            "event_sha256": sha256_file(event_path),
+            "status": "EVENT_PERSISTED",
+            "updated_at_utc": utc_now(),
+            "production_ready": False,
+        }
+        atomic_write(ledger_path, canonical_bytes(ledger))
+        if payload.get("simulate_interrupt_after_event") is True:
+            if not self.acceptance_mode:
+                raise ValueError("interruption simulation is acceptance-only")
+            raise InterruptedAcknowledgement(str(event["event_id"]))
+        receipt = self._r3_acknowledge_event(root=root, event=event, event_path=event_path, case=case)
+        ledger.update(
+            {
+                "status": "SERVER_ACKNOWLEDGED",
+                "acknowledgement_receipt_id": receipt["receipt_id"],
+                "acknowledgement_receipt_sha256": sha256_file(self._ack_path(root, str(event["event_id"]))),
+                "updated_at_utc": utc_now(),
+            }
+        )
+        atomic_write(ledger_path, canonical_bytes(ledger))
+        draft_path = root / "drafts" / f"{event['burst_id']}.json"
+        if draft_path.is_file():
+            draft_path.unlink()
+        return {
+            "ok": True,
+            "saved": True,
+            "status": "SERVER_ACKNOWLEDGED",
+            "event_id": event["event_id"],
+            "acknowledgement_receipt_id": receipt["receipt_id"],
+            "idempotency_key": inputs["idempotency_key"],
+            "recovered_existing_event": recovered,
+            "duplicate_event_created": False,
+            "production_ready": False,
+        }
+
     def save_event(self, payload: Mapping[str, Any], mode: str = "real") -> dict[str, Any]:
         with self.lock:
+            if self.review_revision == R3_REVIEW_REVISION:
+                return self._save_r3_event(payload, mode)
             event, case = self._validate_event(payload, mode)
             root = self._root(mode)
             if mode == "real" and case["tranche_id"] not in self._unlocked():
@@ -969,10 +1685,33 @@ class TemporalReviewStore:
                 ),
             }
 
+    def final_save_status(self, mode: str, idempotency_key: str) -> dict[str, Any]:
+        if self.review_revision != R3_REVIEW_REVISION:
+            raise ValueError("final-save status requires the R3 reviewer")
+        if len(idempotency_key) != 64 or any(character not in "0123456789abcdef" for character in idempotency_key):
+            raise ValueError("invalid idempotency key")
+        path = self._root(mode) / "idempotency" / f"{idempotency_key}.json"
+        if not path.is_file():
+            return {"ok": True, "status": "NOT_PERSISTED", "idempotency_key": idempotency_key}
+        ledger = read_json(path)
+        return {
+            "ok": True,
+            "status": ledger["status"],
+            "idempotency_key": idempotency_key,
+            "event_id": ledger.get("event_id"),
+            "acknowledgement_receipt_id": ledger.get("acknowledgement_receipt_id"),
+            "production_ready": False,
+        }
+
     def state(self, mode: str = "real", requested_tranche: str | None = None) -> dict[str, Any]:
         if mode == "practice":
             latest = self.latest_events("practice")
             first = next((case for case in self.practice_cases if case["burst_id"] not in latest), None)
+            final_error_path = (
+                self._r3_error_path(mode, first["burst_id"])
+                if first and self.review_revision == R3_REVIEW_REVISION
+                else None
+            )
             return {
                 "review_id": self.review_id,
                 "review_revision": self.review_revision,
@@ -984,6 +1723,9 @@ class TemporalReviewStore:
                 "all_practice_complete": len(latest) == 3,
                 "draft": self.draft("practice", first["burst_id"]) if first else None,
                 "incompatible_draft": self.incompatible_draft("practice", first["burst_id"]) if first else None,
+                "final_save_error": (
+                    read_json(final_error_path) if final_error_path is not None and final_error_path.is_file() else None
+                ),
                 "human_truth": False,
             }
         latest = self.latest_events("real")
@@ -994,6 +1736,11 @@ class TemporalReviewStore:
         receipt = self.current_tranche_receipt(tranche_id, create=False)
         global_receipt = self.current_global_receipt(create=False)
         first = next((case for case in cases if case["burst_id"] not in latest), None)
+        final_error_path = (
+            self._r3_error_path(mode, first["burst_id"])
+            if first and self.review_revision == R3_REVIEW_REVISION
+            else None
+        )
         last_event = max(
             (latest[case["burst_id"]] for case in completed_cases), key=lambda row: row["server_sequence"], default=None
         )
@@ -1008,6 +1755,9 @@ class TemporalReviewStore:
             "first_incomplete_burst_id": first["burst_id"] if first else None,
             "draft": self.draft("real", first["burst_id"]) if first else None,
             "incompatible_draft": self.incompatible_draft("real", first["burst_id"]) if first else None,
+            "final_save_error": (
+                read_json(final_error_path) if final_error_path is not None and final_error_path.is_file() else None
+            ),
             "tranche_complete": receipt is not None,
             "tranche_completion_receipt_id": receipt["tranche_completion_receipt_id"] if receipt else None,
             "last_event_id": last_event["event_id"] if last_event else None,
@@ -1024,7 +1774,7 @@ class TemporalReviewStore:
         return {"ok": True, "practice_reset": True, "human_event_count": len(self.latest_events("real"))}
 
     def acceptance_event(self, case: Mapping[str, Any], branch: str = "simple") -> dict[str, Any]:
-        if self.review_revision in (R1_REVIEW_REVISION, R2_REVIEW_REVISION):
+        if self.review_revision in (R1_REVIEW_REVISION, R2_REVIEW_REVISION, R3_REVIEW_REVISION):
             return self._r1_acceptance_event(case, branch)
         visibility = ["VISIBLE_COMPLETE"] * 9
         supply = ["ONE_USEFUL_CANDIDATE"] * 9
@@ -1133,25 +1883,46 @@ class TemporalReviewStore:
                     case["source_width"] * (0.48 + subject_index * 0.04),
                     case["source_height"] * 0.5,
                 ]
-                observations.append(
-                    {
-                        "frame_reference_id": frame["frame_reference_id"],
-                        "visibility": state,
-                        "subject_location_source_x": point[0]
-                        if state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL")
-                        else None,
-                        "subject_location_source_y": point[1]
-                        if state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL")
-                        else None,
-                        "human_confirmed": state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL"),
-                        "approximate_hidden_location": False,
-                        "observation_supply": (
-                            "NO_USEFUL_BOX" if self.review_revision == R2_REVIEW_REVISION else "NO_CANDIDATE"
-                        ),
+                observation = {
+                    "frame_reference_id": frame["frame_reference_id"],
+                    "visibility": state,
+                    "subject_location_source_x": point[0] if state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL") else None,
+                    "subject_location_source_y": point[1] if state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL") else None,
+                    "human_confirmed": state in ("VISIBLE_COMPLETE", "VISIBLE_PARTIAL"),
+                    "approximate_hidden_location": False,
+                    "observation_supply": (
+                        "NO_USEFUL_BOX"
+                        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION)
+                        else "NO_CANDIDATE"
+                    ),
+                    "selected_candidate_ids": [],
+                    "occlusion_phase": "OCCLUDED" if state == "FULLY_OCCLUDED_EXPECTED_PRESENT" else "NONE",
+                }
+                if self.review_revision == R3_REVIEW_REVISION:
+                    identity = self._frame_identity(case, sequence)
+                    observation["canonical_frame_identity"] = identity
+                    observation["candidate_selection_binding"] = {
+                        "action_type": "CANDIDATE_SELECTION",
+                        "canonical_frame_identity": identity,
+                        "question_id": f"subject_{subject_index}_supply_{sequence}",
                         "selected_candidate_ids": [],
-                        "occlusion_phase": "OCCLUDED" if state == "FULLY_OCCLUDED_EXPECTED_PRESENT" else "NONE",
                     }
-                )
+                    if observation["subject_location_source_x"] is not None:
+                        observation["location_binding"] = {
+                            "action_type": (
+                                "APPROXIMATE_HIDDEN_LOCATION"
+                                if observation["approximate_hidden_location"]
+                                else "SUBJECT_LOCATION"
+                            ),
+                            "canonical_frame_identity": identity,
+                            "question_id": f"subject_{subject_index}_location_{sequence}",
+                            "source_xy": [
+                                observation["subject_location_source_x"],
+                                observation["subject_location_source_y"],
+                            ],
+                            "binding_provenance": "ACCEPTANCE_TEMPORARY",
+                        }
+                observations.append(observation)
             subjects.append(
                 {
                     "subject_token": SUBJECT_TOKENS[subject_index],
@@ -1186,7 +1957,7 @@ class TemporalReviewStore:
             "summary_confirmed": True,
             "acceptance_temporary": True,
         }
-        if self.review_revision == R2_REVIEW_REVISION:
+        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION):
             payload.update(
                 {
                     "candidate_runtime_contract": case["candidate_runtime_contract"],
@@ -1202,7 +1973,10 @@ class TemporalReviewStore:
         for index, case in enumerate(self.by_tranche[tranche_id]):
             if case["burst_id"] not in self.latest_events("real"):
                 branch = ("no_focus", "simple", "occlusion", "multiple")[index % 4]
-                self.save_event(self.acceptance_event(case, branch), "real")
+                if self.review_revision == R3_REVIEW_REVISION:
+                    self._save_r3_acceptance_event(case, branch, "real")
+                else:
+                    self.save_event(self.acceptance_event(case, branch), "real")
         receipt = self.current_tranche_receipt(tranche_id, create=False)
         return {
             "ok": receipt is not None,
@@ -1216,12 +1990,57 @@ class TemporalReviewStore:
         branches = ("simple", "occlusion", "multiple")
         for case, branch in zip(self.practice_cases, branches, strict=True):
             if case["burst_id"] not in self.latest_events("practice"):
-                self.save_event(self.acceptance_event(case, branch), "practice")
+                if self.review_revision == R3_REVIEW_REVISION:
+                    self._save_r3_acceptance_event(case, branch, "practice")
+                else:
+                    self.save_event(self.acceptance_event(case, branch), "practice")
         return {
             "ok": True,
             "practice_event_count": len(self.latest_events("practice")),
             "human_event_count": len(self.latest_events("real")),
         }
+
+    def _save_r3_acceptance_event(self, case: Mapping[str, Any], branch: str, mode: str) -> dict[str, Any]:
+        if not self.acceptance_mode or self.review_revision != R3_REVIEW_REVISION:
+            raise ValueError("R3 acceptance event helper is disabled")
+        event = self.acceptance_event(case, branch)
+        event["mode"] = mode
+        draft = self.save_draft(
+            {
+                "mode": mode,
+                "burst_id": case["burst_id"],
+                "current_question": "summary",
+                "current_frame_sequence": 4,
+                "playback_speed": 1.0,
+                "answers": {
+                    "original_focus_box_answer": event["original_focus_box_answer"],
+                    "context_subject_answer": event["context_subject_answer"],
+                    "missed_check": event["whole_burst_missed_person_answer"],
+                },
+                "subjects": event["subjects"],
+                "candidate_mappings": event["candidate_mappings"],
+                "missed_person_marks": event["whole_burst_missed_person_marks"],
+                "click_transactions": [],
+                "action_journal": [{"action": "ACCEPTANCE_TEMPORARY_EVENT"}],
+                "draft_version": 0,
+                "optimistic_lock_token": None,
+            },
+            mode,
+        )
+        event.update(
+            {
+                "draft_version": draft["draft_version"],
+                "draft_content_sha256": draft["draft_content_sha256"],
+                "optimistic_lock_token": draft["optimistic_lock_token"],
+                "click_transactions": [],
+            }
+        )
+        preflight = self.final_save_preflight(event, mode)
+        if preflight.get("status") != "READY_TO_PERSIST":
+            raise ValueError("R3 acceptance event preflight failed")
+        event["proposed_event_id"] = preflight["proposed_event_id"]
+        event["idempotency_key"] = preflight["idempotency_key"]
+        return self.save_event(event, mode)
 
 
 def create_server(
@@ -1267,6 +2086,19 @@ def create_server(
                 tranche_id = query.get("tranche", [None])[0]
                 cases = store.practice_cases if mode == "practice" else store.cases
                 return self.send_json(200, {"cases": cases, "state": store.state(mode, tranche_id)})
+            if route == "/api/review-state":
+                mode = query.get("mode", ["real"])[0]
+                tranche_id = query.get("tranche", [None])[0]
+                state = store.state(mode, tranche_id)
+                print(
+                    f"GET /api/review-state HTTP 200 mode={mode} burst={state.get('first_incomplete_burst_id')}",
+                    flush=True,
+                )
+                return self.send_json(200, state)
+            if route == "/api/final-save-status":
+                mode = query.get("mode", ["real"])[0]
+                key = query.get("idempotency_key", [""])[0]
+                return self.send_json(200, store.final_save_status(mode, key))
             if route == "/api/completed":
                 tranche_id = query.get("tranche", [""])[0]
                 if tranche_id not in TRANCHES or store.current_tranche_receipt(tranche_id, create=False) is None:
@@ -1296,9 +2128,34 @@ def create_server(
                 route = urlparse(self.path).path
                 mode = str(payload.get("mode", "real"))
                 if route == "/api/draft":
-                    return self.send_json(200, {"ok": True, "draft": store.save_draft(payload, mode)})
+                    draft = store.save_draft(payload, mode)
+                    print(
+                        "POST /api/draft HTTP 200 "
+                        f"mode={mode} burst={draft['burst_id']} draft_revision={draft.get('draft_version')}",
+                        flush=True,
+                    )
+                    return self.send_json(200, {"ok": True, "draft": draft})
+                if route == "/api/final-save-preflight":
+                    result = store.final_save_preflight(payload, mode)
+                    status = 200 if result.get("ok") else 422
+                    print(
+                        "POST /api/final-save-preflight "
+                        f"HTTP {status} mode={mode} burst={payload.get('burst_id')} "
+                        f"draft_revision={payload.get('draft_version')} "
+                        f"error_code={result.get('error_code')}",
+                        flush=True,
+                    )
+                    return self.send_json(status, result)
                 if route == "/api/save":
-                    return self.send_json(200, store.save_event(payload, mode))
+                    result = store.save_event(payload, mode)
+                    print(
+                        "POST /api/save HTTP 200 "
+                        f"mode={mode} burst={payload.get('burst_id')} "
+                        f"draft_revision={payload.get('draft_version')} event_id={result.get('event_id')} "
+                        f"acknowledgement_id={result.get('acknowledgement_receipt_id')}",
+                        flush=True,
+                    )
+                    return self.send_json(200, result)
                 if route == "/api/practice/reset":
                     return self.send_json(200, store.reset_practice())
                 if route == "/api/tranche/start-next":
@@ -1308,6 +2165,35 @@ def create_server(
                 if route == "/api/acceptance/complete-practice":
                     return self.send_json(200, store.complete_acceptance_practice())
                 return self.send_json(404, {"error": "not found"})
+            except InterruptedAcknowledgement as exc:
+                print(
+                    f"POST /api/save HTTP 503 event_id={exc.event_id} error_code=ACKNOWLEDGEMENT_INTERRUPTED",
+                    flush=True,
+                )
+                return self.send_json(
+                    503,
+                    {
+                        "ok": False,
+                        "error_code": "ACKNOWLEDGEMENT_INTERRUPTED",
+                        "error": str(exc),
+                        "event_id": exc.event_id,
+                        "retry_same_idempotency_key": True,
+                    },
+                )
+            except ReviewValidationError as exc:
+                print(
+                    f"POST {urlparse(self.path).path} HTTP 409 error_code={exc.error_code}",
+                    flush=True,
+                )
+                return self.send_json(
+                    409,
+                    {
+                        "ok": False,
+                        "error_code": exc.error_code,
+                        "error": str(exc),
+                        "errors": exc.errors,
+                    },
+                )
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
                 return self.send_json(400, {"ok": False, "error": str(exc)})
 
