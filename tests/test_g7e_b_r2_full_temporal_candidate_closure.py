@@ -71,7 +71,13 @@ def test_expected_head_and_exact_runtime_resolution() -> None:
     }
     assert event["practice_draft_policy"] == "INCOMPATIBLE_PRE_R2_DRAFT_REQUIRES_VISIBLE_RESET"
     assert event["practice_file_count"] == len(event["practice_files"])
-    assert all((PROJECT / row["project_relative_path"]).is_file() for row in event["practice_files"])
+    # These paths describe the exact pre-R2 closure. Later authorized practice
+    # resets may remove them; retained files must still match the frozen hash.
+    assert all(
+        not (PROJECT / row["project_relative_path"]).is_file()
+        or sha256_file(PROJECT / row["project_relative_path"]) == row["sha256"]
+        for row in event["practice_files"]
+    )
     assert all(len(row["sha256"]) == 64 and row["byte_size"] > 0 for row in event["practice_files"])
 
 

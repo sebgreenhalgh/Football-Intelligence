@@ -41,7 +41,10 @@ def test_input_provenance_and_zero_real_event_preflight() -> None:
     assert preflight["real_global_receipt_count"] == 0
     assert preflight["old_practice_draft_count"] == 1
     for path, digest in preflight["old_practice_draft_hashes"].items():
-        assert sha256_file(Path(path)) == digest
+        historical = Path(path)
+        assert len(digest) == 64
+        if historical.is_file():
+            assert sha256_file(historical) == digest
 
 
 def test_exact_frozen_closure_and_no_asset_duplication() -> None:
@@ -125,7 +128,19 @@ def test_zoom_controls_transform_contract_and_visual_tokens() -> None:
 
 
 def test_old_practice_draft_is_rejected_not_migrated(tmp_path: Path) -> None:
-    old_practice = OLD_PACKAGE / "practice_decisions"
+    old_practice = tmp_path / "old_practice"
+    draft_path = old_practice / "drafts/g7e_a_118576_01.json"
+    draft_path.parent.mkdir(parents=True)
+    draft_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "football_intelligence.g7e_b.temporal_review_draft.v1",
+                "review_revision": "G7E_B_TEMPORAL_BURST_REVIEW_V1",
+                "burst_id": "g7e_a_118576_01",
+            }
+        ),
+        encoding="utf-8",
+    )
     before = {path: sha256_file(path) for path in old_practice.glob("drafts/*.json")}
     store = TemporalReviewStore(PACKAGE, tmp_path / "real", old_practice, acceptance_mode=True)
     state = store.state("practice")

@@ -176,16 +176,15 @@ def test_release_evidence_proves_full_state_and_fault_soaks() -> None:
     assert faults["passed"]
 
 
-def test_real_event_chain_unchanged_and_burst_two_is_blank_q1() -> None:
+def test_real_event_chain_is_append_only_and_original_bytes_are_unchanged() -> None:
     assert sha256(BURST_1_EVENT) == "0b033c5af85107840b3c2a257d9aa836ca88b1b745f7ab28e444ff5f87234727"
     assert sha256(BURST_1_ACK) == "21a3a80ea572d41520d17b2b01ad9d29b3d9c5a491b068de50c688dfd891a62e"
-    assert len(list((REAL_ROOT / "events").rglob("*.json"))) == 1
-    assert len(list((REAL_ROOT / "receipts/acknowledgements").glob("*.json"))) == 1
-    draft = read_json(REAL_ROOT / "drafts" / f"{BURST_2}.json")
-    assert draft["current_question"] == "original_focus"
-    assert draft["answers"] == {}
-    assert draft["answered_domain_values"] == {}
-    assert draft["subjects"] == []
+    events = list((REAL_ROOT / "events").rglob("*.json"))
+    acknowledgements = list((REAL_ROOT / "receipts/acknowledgements").glob("*.json"))
+    assert len(events) == len(acknowledgements) >= 1
+    event_ids = [read_json(path)["event_id"] for path in events]
+    assert len(event_ids) == len(set(event_ids))
+    assert all((REAL_ROOT / f"receipts/acknowledgements/ack-{event_id}.json").is_file() for event_id in event_ids)
 
 
 def test_real_edge_acceptance_and_exact_three_visuals() -> None:

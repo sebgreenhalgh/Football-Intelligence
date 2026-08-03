@@ -1,0 +1,55 @@
+{
+  "schema_version": "football_intelligence.g7e_b_r6.server_action_contract.v1",
+  "contract_name": "G7E_B_R6_SERVER_AUTHORITATIVE_ACTION_REDUCER_V1",
+  "review_revision": "G7E_B_R6_SERVER_AUTHORITATIVE_ACTION_REDUCER_V1",
+  "production_ready": false,
+  "action_envelope_fields": [
+    "action_id",
+    "idempotency_key",
+    "review_revision",
+    "contract_hash",
+    "mode",
+    "tranche_id",
+    "burst_id",
+    "expected_draft_revision",
+    "expected_draft_sha256",
+    "question_instance_key",
+    "action_type",
+    "payload",
+    "client_timestamp"
+  ],
+  "action_types": {
+    "ANSWER_QUESTION": "Atomically store one canonical domain answer and ANSWERED lifecycle.",
+    "CLEAR_ANSWER": "Remove one answer and reactivate its exact question.",
+    "SET_SUBJECT_LOCATION": "Persist an anchor or frame-local source-coordinate subject location.",
+    "CLEAR_SUBJECT_LOCATION": "Remove one source-coordinate subject location without changing unrelated truth.",
+    "SELECT_CANDIDATE": "Select one exact frame-local frozen candidate.",
+    "DESELECT_CANDIDATE": "Deselect one exact frame-local frozen candidate.",
+    "ADD_MISSED_PERSON_MARK": "Add one exact frame-local source-coordinate missed-person mark.",
+    "REMOVE_MISSED_PERSON_MARK": "Remove one missed-person mark by immutable mark ID.",
+    "COMPLETE_MISSED_PERSON_MARKING": "Confirm that the current missed-person mark set is complete.",
+    "CONFIRM_SUBJECT_CONTINUITY": "Persist marker, occlusion, or burst-local continuity confirmation.",
+    "NAVIGATE_BACK": "Move to the prior server-authorized question.",
+    "NAVIGATE_FORWARD": "Move to the next server-authorized question."
+  },
+  "answer_lifecycle_invariant": {
+    "accepted_answer": "ANSWER_AND_ANSWERED_LIFECYCLE_SAME_TRANSACTION",
+    "rejected_answer": "NO_DRAFT_CHANGE",
+    "successful_response": "ZERO_ANSWER_WITHOUT_ANSWERED_LIFECYCLE"
+  },
+  "summary_barrier": {
+    "authority": "SERVER_ONLY",
+    "requires_all_applicable_answered": true,
+    "requires_all_non_applicable_explicitly_skipped": true,
+    "final_preflight_uses_summary_draft_hash": true
+  },
+  "client_policy": {
+    "complete_server_state_replacement_required": true,
+    "direct_answer_mutation_forbidden": true,
+    "direct_lifecycle_mutation_forbidden": true,
+    "direct_candidate_selection_mutation_forbidden": true,
+    "direct_subject_location_mutation_forbidden": true,
+    "direct_missed_mark_mutation_forbidden": true,
+    "direct_branch_journal_mutation_forbidden": true
+  }
+}

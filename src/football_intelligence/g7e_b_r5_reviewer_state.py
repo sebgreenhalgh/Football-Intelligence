@@ -743,8 +743,14 @@ def compile_final_event(
             subject["continuity"] = "NOT_APPLICABLE"
         subject["occlusion_confirmed"] = True
     missed = answers.get("missed_check")
+    # This question exists only after at least one burst-local subject has been
+    # followed.  R5 incorrectly made it mandatory on the explicit no-subject
+    # route; R6 keeps the sparse branch semantics authoritative on the server.
     require_lifecycle(
-        "additional_subject", "additional_subject", applicable=True, expected_value=answers.get("additional_subject")
+        "additional_subject",
+        "additional_subject",
+        applicable=0 < len(subjects) < 3,
+        expected_value=answers.get("additional_subject"),
     )
     require_lifecycle("missed_check", "missed_check", applicable=True, expected_value=missed)
     if missed not in contract["domain_enums"]["missed_check"]:
