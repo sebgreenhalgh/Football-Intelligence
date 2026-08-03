@@ -1,0 +1,379 @@
+{
+  "schema_version": "football_intelligence.g7e_b_r5.canonical_reviewer_state_contract.v1",
+  "contract_id": "G7E_B_R5_CANONICAL_REVIEWER_STATE_CONTRACT_V1",
+  "review_id": "G7E_B_TEMPORAL_BURST_REVIEW",
+  "review_revision": "G7E_B_R5_REVIEWER_STATE_MACHINE_V1",
+  "production_ready": false,
+  "question_lifecycle_states": [
+    "UNREACHED",
+    "ACTIVE",
+    "ANSWERED",
+    "SKIPPED_NOT_APPLICABLE",
+    "INVALIDATED_BY_UPSTREAM_CHANGE",
+    "ERROR_REQUIRES_CORRECTION"
+  ],
+  "validation_profiles": {
+    "draft": ["DRAFT_SHAPE", "DRAFT_PROGRESS"],
+    "final": ["FINAL_EVENT_PREFLIGHT", "IMMUTABLE_EVENT"]
+  },
+  "working_draft": {
+    "schema_version": "football_intelligence.g7e_b_r5.working_draft.v1",
+    "sparse_domain_answers": true,
+    "unreached_answer_keys_absent": true,
+    "null_domain_answers_forbidden": true,
+    "empty_string_domain_answers_forbidden": true,
+    "active_pending_edit_separate": true,
+    "invalidated_answers_journal_only": true
+  },
+  "final_event": {
+    "schema_version": "football_intelligence.g7e_b_r5.burst_annotation_event.v1",
+    "compiler": "compile_final_event",
+    "canonical_not_applicable": "NOT_APPLICABLE",
+    "requires_all_applicable_answered": true,
+    "rejects_incomplete_lifecycle": true,
+    "deterministic_canonical_json": true
+  },
+  "lifecycle_transitions": [
+    ["UNREACHED", "ACTIVE"],
+    ["UNREACHED", "SKIPPED_NOT_APPLICABLE"],
+    ["ACTIVE", "ANSWERED"],
+    ["ACTIVE", "SKIPPED_NOT_APPLICABLE"],
+    ["ACTIVE", "ERROR_REQUIRES_CORRECTION"],
+    ["ANSWERED", "ACTIVE"],
+    ["ANSWERED", "INVALIDATED_BY_UPSTREAM_CHANGE"],
+    ["ANSWERED", "ERROR_REQUIRES_CORRECTION"],
+    ["SKIPPED_NOT_APPLICABLE", "ACTIVE"],
+    ["SKIPPED_NOT_APPLICABLE", "INVALIDATED_BY_UPSTREAM_CHANGE"],
+    ["INVALIDATED_BY_UPSTREAM_CHANGE", "ACTIVE"],
+    ["INVALIDATED_BY_UPSTREAM_CHANGE", "SKIPPED_NOT_APPLICABLE"],
+    ["ERROR_REQUIRES_CORRECTION", "ACTIVE"],
+    ["ERROR_REQUIRES_CORRECTION", "ANSWERED"]
+  ],
+  "question_families": {
+    "original_focus": {
+      "scope": "burst",
+      "domain": "original_focus",
+      "label": "What does the yellow original focus box contain?",
+      "always_applicable": true
+    },
+    "context_subject": {
+      "scope": "burst",
+      "domain": "context_subject",
+      "label": "Is there a relevant match person in the blue context area?",
+      "applicable_when": {"original_focus": ["NO_RELEVANT_PERSON"]}
+    },
+    "uncertain_focus_path": {
+      "scope": "burst",
+      "domain": "uncertain_focus_path",
+      "label": "What would you like to do with the uncertain yellow box?",
+      "applicable_when": {"original_focus": ["NOT_SURE"]}
+    },
+    "multi_subject_b": {
+      "scope": "burst",
+      "domain": "multi_subject_b",
+      "label": "Should another person in the yellow box become Subject B?",
+      "applicable_when": {"original_focus": ["MORE_THAN_ONE_RELEVANT_PERSON"]}
+    },
+    "anchor": {
+      "scope": "subject",
+      "domain": null,
+      "label": "Click the subject in the clearest frame",
+      "applicable_when": "SUBJECT_EXISTS"
+    },
+    "location": {
+      "scope": "subject_frame",
+      "domain": "visibility",
+      "label": "Where is this subject in this frame?",
+      "applicable_when": "SUBJECT_EXISTS"
+    },
+    "marker_review": {
+      "scope": "subject",
+      "domain": "marker_continuity_confirmation",
+      "label": "Do the nine markers follow the same subject?",
+      "applicable_when": "SUBJECT_EXISTS"
+    },
+    "supply": {
+      "scope": "subject_frame",
+      "domain": "candidate_supply",
+      "label": "Which boxes provide useful evidence for this subject?",
+      "applicable_when": "VISIBILITY_RELEVANT_FOR_SUPPLY"
+    },
+    "relationship": {
+      "scope": "subject_frame",
+      "domain": "candidate_relationship",
+      "label": "How do the selected boxes relate to this subject?",
+      "applicable_when": "RELATIONSHIP_BRANCH_APPLICABLE"
+    },
+    "occlusion": {
+      "scope": "subject",
+      "domain": "occlusion_phase",
+      "label": "Describe the occlusion sequence",
+      "applicable_when": "OCCLUSION_PRESENT"
+    },
+    "continuity": {
+      "scope": "subject",
+      "domain": "continuity",
+      "label": "Is this the same burst-local subject?",
+      "applicable_when": "CONTINUITY_REVIEW_REQUIRED"
+    },
+    "role": {
+      "scope": "subject",
+      "domain": "role",
+      "label": "What is this person's role?",
+      "applicable_when": "SUBJECT_EXISTS"
+    },
+    "participation": {
+      "scope": "subject",
+      "domain": "participation",
+      "label": "How are they participating?",
+      "applicable_when": "SUBJECT_EXISTS"
+    },
+    "certainty": {
+      "scope": "subject",
+      "domain": "certainty",
+      "label": "How sure are you?",
+      "applicable_when": "SUBJECT_EXISTS"
+    },
+    "additional_subject": {
+      "scope": "burst",
+      "domain": "additional_subject",
+      "label": "Is there another subject to review?",
+      "always_applicable": true
+    },
+    "missed_check": {
+      "scope": "burst",
+      "domain": "missed_check",
+      "label": "Is any relevant person missing a useful box?",
+      "always_applicable": true
+    },
+    "missed_mark": {
+      "scope": "burst",
+      "domain": null,
+      "label": "Mark each missed relevant person",
+      "applicable_when": {"missed_check": ["YES"]}
+    },
+    "summary": {
+      "scope": "burst",
+      "domain": null,
+      "label": "Review this burst before saving",
+      "always_applicable": true
+    }
+  },
+  "domain_enums": {
+    "original_focus": [
+      "ONE_RELEVANT_MATCH_PERSON",
+      "PART_OF_ONE_RELEVANT_MATCH_PERSON",
+      "MORE_THAN_ONE_RELEVANT_PERSON",
+      "NO_RELEVANT_PERSON",
+      "NOT_SURE"
+    ],
+    "context_subject": ["YES_ONE_PERSON", "YES_MORE_THAN_ONE_PERSON", "NO", "NOT_SURE"],
+    "uncertain_focus_path": ["TRY_DIFFERENT_FRAME", "UNCERTAIN_SUBJECT_A", "NO_SUBJECT"],
+    "multi_subject_b": ["ADD_SUBJECT_B", "ONLY_SUBJECT_A", "NOT_SURE"],
+    "marker_continuity_confirmation": ["SAME_SUBJECT_CONFIRMED", "CANNOT_TELL"],
+    "visibility": [
+      "VISIBLE_COMPLETE",
+      "VISIBLE_PARTIAL",
+      "FULLY_OCCLUDED_EXPECTED_PRESENT",
+      "OUT_OF_FRAME_OR_LEFT_SCENE",
+      "NOT_PRESENT",
+      "UNCERTAIN"
+    ],
+    "candidate_supply": [
+      "ONE_USEFUL_CANDIDATE",
+      "MULTIPLE_CANDIDATES",
+      "MERGED_WITH_OTHER_PEOPLE",
+      "FRAGMENT_ONLY",
+      "NO_CANDIDATE",
+      "UNCERTAIN"
+    ],
+    "candidate_relationship": [
+      "SAME_PERSON_DUPLICATES",
+      "SAME_PERSON_FRAGMENTS",
+      "DIFFERENT_PEOPLE",
+      "CORRECT_INNER_BAD_OUTER",
+      "MERGED_MULTI_PERSON",
+      "OBJECT_OR_BACKGROUND",
+      "SUBJECT_BODY_FRAGMENT",
+      "UNCERTAIN"
+    ],
+    "occlusion_phase": ["NONE", "ENTERING_OCCLUSION", "OCCLUDED", "EXITING_OCCLUSION", "UNCERTAIN"],
+    "continuity": ["SAME_BURST_LOCAL_SUBJECT", "DIFFERENT_SUBJECT", "CANNOT_TELL"],
+    "role": ["OUTFIELD_PLAYER", "GOALKEEPER", "RELEVANT_OFFICIAL", "OTHER_PERSON", "UNKNOWN_ROLE"],
+    "participation": ["ACTIVE_IN_MATCH", "WARMING_OR_INACTIVE", "NOT_PLAYER_OR_OFFICIAL", "UNKNOWN_PARTICIPATION"],
+    "certainty": ["CERTAIN", "PROBABLE", "NOT_SURE"],
+    "additional_subject": ["CONTINUE", "ADD_SUBJECT", "NOT_SURE"],
+    "missed_check": ["NO", "YES", "NOT_SURE"]
+  },
+  "domain_labels": {
+    "original_focus": {
+      "ONE_RELEVANT_MATCH_PERSON": "One relevant match person",
+      "PART_OF_ONE_RELEVANT_MATCH_PERSON": "Part of one relevant match person",
+      "MORE_THAN_ONE_RELEVANT_PERSON": "More than one relevant person",
+      "NO_RELEVANT_PERSON": "No relevant person",
+      "NOT_SURE": "Not sure"
+    },
+    "context_subject": {
+      "YES_ONE_PERSON": "Yes — one person",
+      "YES_MORE_THAN_ONE_PERSON": "Yes — more than one person",
+      "NO": "No",
+      "NOT_SURE": "Not sure"
+    },
+    "uncertain_focus_path": {
+      "TRY_DIFFERENT_FRAME": "Try a different frame",
+      "UNCERTAIN_SUBJECT_A": "Continue with an uncertain Subject A",
+      "NO_SUBJECT": "No subject to follow"
+    },
+    "multi_subject_b": {
+      "ADD_SUBJECT_B": "Yes — define Subject B",
+      "ONLY_SUBJECT_A": "No — follow Subject A only",
+      "NOT_SURE": "Not sure"
+    },
+    "marker_continuity_confirmation": {
+      "SAME_SUBJECT_CONFIRMED": "These markers follow the same subject",
+      "CANNOT_TELL": "Cannot tell"
+    },
+    "visibility": {
+      "VISIBLE_COMPLETE": "Visible — click the person",
+      "VISIBLE_PARTIAL": "Partly visible — click the visible part",
+      "FULLY_OCCLUDED_EXPECTED_PRESENT": "Hidden behind someone, but probably still there",
+      "OUT_OF_FRAME_OR_LEFT_SCENE": "Left the picture",
+      "NOT_PRESENT": "Not present",
+      "UNCERTAIN": "Not sure"
+    },
+    "candidate_supply": {
+      "ONE_USEFUL_CANDIDATE": "One useful box",
+      "MULTIPLE_CANDIDATES": "More than one box for this same person",
+      "MERGED_WITH_OTHER_PEOPLE": "One box covers several people",
+      "FRAGMENT_ONLY": "Only a body fragment has a box",
+      "NO_CANDIDATE": "No useful box",
+      "UNCERTAIN": "Not sure"
+    },
+    "candidate_relationship": {
+      "SAME_PERSON_DUPLICATES": "Duplicate boxes for the same person",
+      "SAME_PERSON_FRAGMENTS": "Main box plus body fragments",
+      "DIFFERENT_PEOPLE": "Different people",
+      "CORRECT_INNER_BAD_OUTER": "Correct inner person inside a poor outer box",
+      "MERGED_MULTI_PERSON": "One merged box covers several people",
+      "OBJECT_OR_BACKGROUND": "Object or background fragment",
+      "SUBJECT_BODY_FRAGMENT": "The selected box is a fragment of this subject",
+      "UNCERTAIN": "Not sure"
+    },
+    "occlusion_phase": {
+      "NONE": "No occlusion",
+      "ENTERING_OCCLUSION": "Entering occlusion",
+      "OCCLUDED": "Occluded",
+      "EXITING_OCCLUSION": "Exiting occlusion",
+      "UNCERTAIN": "Not sure"
+    },
+    "continuity": {
+      "SAME_BURST_LOCAL_SUBJECT": "Yes — same person within this clip",
+      "DIFFERENT_SUBJECT": "No — I switched to a different person",
+      "CANNOT_TELL": "Cannot tell"
+    },
+    "role": {
+      "OUTFIELD_PLAYER": "Player",
+      "GOALKEEPER": "Goalkeeper",
+      "RELEVANT_OFFICIAL": "Relevant match official",
+      "OTHER_PERSON": "Other person",
+      "UNKNOWN_ROLE": "Not sure"
+    },
+    "participation": {
+      "ACTIVE_IN_MATCH": "Active in the match",
+      "WARMING_OR_INACTIVE": "Warming up or inactive",
+      "NOT_PLAYER_OR_OFFICIAL": "Not a player or match official",
+      "UNKNOWN_PARTICIPATION": "Not sure"
+    },
+    "certainty": {
+      "CERTAIN": "Certain",
+      "PROBABLE": "Probably",
+      "NOT_SURE": "Not sure"
+    },
+    "additional_subject": {
+      "CONTINUE": "No — continue",
+      "ADD_SUBJECT": "Yes — add another subject",
+      "NOT_SURE": "Not sure — continue"
+    },
+    "missed_check": {
+      "NO": "No",
+      "YES": "Yes — let me mark them",
+      "NOT_SURE": "Not sure"
+    }
+  },
+  "candidate_cardinality": {
+    "ONE_USEFUL_CANDIDATE": {"minimum": 1, "maximum": 1, "relationship_family": null},
+    "MULTIPLE_CANDIDATES": {"minimum": 2, "maximum": null, "relationship_family": "MULTIPLE_BOX_RELATIONSHIP"},
+    "MERGED_WITH_OTHER_PEOPLE": {"minimum": 1, "maximum": 1, "relationship_family": "SINGLE_MERGED_BOX_CONFIRMATION"},
+    "FRAGMENT_ONLY": {"minimum": 1, "maximum": null, "relationship_family": "FRAGMENT_MEANING"},
+    "NO_CANDIDATE": {"minimum": 0, "maximum": 0, "relationship_family": null},
+    "UNCERTAIN": {"minimum": 0, "maximum": 0, "relationship_family": null}
+  },
+  "relationship_compatibility": {
+    "legacy_supply_aliases": {"NO_USEFUL_BOX": "NO_CANDIDATE", "NOT_SURE": "UNCERTAIN"},
+    "question_families": {
+      "MULTIPLE_BOX_RELATIONSHIP": {
+        "question": "How do these selected boxes relate to Subject {subject} in this frame?",
+        "help": "Judge only the boxes selected for Subject {subject} in this frame.",
+        "options": [
+          ["SAME_PERSON_DUPLICATES", "Duplicate boxes for the same Subject {subject}"],
+          ["SAME_PERSON_FRAGMENTS", "Main box plus body fragments"],
+          ["DIFFERENT_PEOPLE", "Different people"],
+          ["CORRECT_INNER_BAD_OUTER", "Correct inner person inside a poor outer box"],
+          ["OBJECT_OR_BACKGROUND", "Object or background fragment"],
+          ["MERGED_MULTI_PERSON", "One merged box covers several people"],
+          ["UNCERTAIN", "Not sure"]
+        ],
+        "allowed_relationships": ["SAME_PERSON_DUPLICATES", "SAME_PERSON_FRAGMENTS", "DIFFERENT_PEOPLE", "CORRECT_INNER_BAD_OUTER", "OBJECT_OR_BACKGROUND", "MERGED_MULTI_PERSON", "UNCERTAIN"]
+      },
+      "SINGLE_MERGED_BOX_CONFIRMATION": {
+        "question": "Does this one box cover Subject {subject} and at least one other person?",
+        "help": "There is one selected box. Confirm whether that single box merges people.",
+        "options": [
+          ["MERGED_MULTI_PERSON", "Yes — Subject {subject} is merged with another person"],
+          ["UNCERTAIN", "Not sure"]
+        ],
+        "allowed_relationships": ["MERGED_MULTI_PERSON", "UNCERTAIN"]
+      },
+      "FRAGMENT_MEANING": {
+        "question": "What does the selected fragment box represent?",
+        "help": "Judge what the selected fragment belongs to without guessing identity.",
+        "options": [
+          ["SUBJECT_BODY_FRAGMENT", "A body fragment of Subject {subject}"],
+          ["OBJECT_OR_BACKGROUND", "An object or background fragment"],
+          ["CORRECT_INNER_BAD_OUTER", "A useful inner person inside a poor outer box"],
+          ["UNCERTAIN", "Not sure"]
+        ],
+        "allowed_relationships": ["SUBJECT_BODY_FRAGMENT", "OBJECT_OR_BACKGROUND", "CORRECT_INNER_BAD_OUTER", "UNCERTAIN"]
+      }
+    },
+    "supply_states": {
+      "ONE_USEFUL_CANDIDATE": {"minimum_selected_count": 1, "maximum_selected_count": 1, "relationship_applicable": false, "question_family": null, "canonical_relationship": "NOT_APPLICABLE"},
+      "MULTIPLE_CANDIDATES": {"minimum_selected_count": 2, "maximum_selected_count": null, "relationship_applicable": true, "question_family": "MULTIPLE_BOX_RELATIONSHIP", "canonical_relationship": null},
+      "MERGED_WITH_OTHER_PEOPLE": {"minimum_selected_count": 1, "maximum_selected_count": 1, "relationship_applicable": true, "question_family": "SINGLE_MERGED_BOX_CONFIRMATION", "canonical_relationship": null},
+      "FRAGMENT_ONLY": {"minimum_selected_count": 1, "maximum_selected_count": null, "relationship_applicable": true, "question_family": "FRAGMENT_MEANING", "canonical_relationship": null},
+      "NO_CANDIDATE": {"minimum_selected_count": 0, "maximum_selected_count": 0, "relationship_applicable": false, "question_family": null, "canonical_relationship": "NOT_APPLICABLE"},
+      "UNCERTAIN": {"minimum_selected_count": 0, "maximum_selected_count": 0, "relationship_applicable": false, "question_family": null, "canonical_relationship": "NOT_APPLICABLE"},
+      "NOT_APPLICABLE": {"minimum_selected_count": 0, "maximum_selected_count": 0, "relationship_applicable": false, "question_family": null, "canonical_relationship": "NOT_APPLICABLE"}
+    },
+    "relationship_states": {
+      "SAME_PERSON_DUPLICATES": {"minimum_selected_count": 2},
+      "SAME_PERSON_FRAGMENTS": {"minimum_selected_count": 2},
+      "DIFFERENT_PEOPLE": {"minimum_selected_count": 2},
+      "CORRECT_INNER_BAD_OUTER": {"minimum_selected_count": 2},
+      "MERGED_MULTI_PERSON": {"minimum_selected_count": 1},
+      "OBJECT_OR_BACKGROUND": {"minimum_selected_count": 1},
+      "SUBJECT_BODY_FRAGMENT": {"minimum_selected_count": 1},
+      "UNCERTAIN": {"minimum_selected_count": 1},
+      "NOT_APPLICABLE": {"minimum_selected_count": 0}
+    }
+  },
+  "release_gate": {
+    "schema_version": "football_intelligence.g7e_b_r5.real_review_release_gate.v1",
+    "decision_required": "PASS_G7E_B_R5_REVIEWER_RELEASE_CANDIDATE_READY_FOR_REAL_TRANCHE_RESUME",
+    "bursts": 120,
+    "frame_references": 1080,
+    "tranches": 6,
+    "transition_sequences_minimum": 50000,
+    "production_ready": false
+  }
+}

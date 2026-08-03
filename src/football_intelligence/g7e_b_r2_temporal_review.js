@@ -21,18 +21,70 @@ for (const id of [
 const R2_REVISION = "G7E_B_R2_FULL_TEMPORAL_CANDIDATE_CLOSURE_V1";
 const R3_REVISION = "G7E_B_R3_FRAME_BINDING_AND_ATOMIC_FINAL_SAVE_V1";
 const R4_REVISION = "G7E_B_R4_CANDIDATE_RELATIONSHIP_BRANCH_INTEGRITY_V1";
+const R5_REVISION = "G7E_B_R5_REVIEWER_STATE_MACHINE_V1";
 const REVISION = document.documentElement.dataset.reviewRevision || R2_REVISION;
-const IS_R4 = REVISION === R4_REVISION;
-const IS_R3 = [R3_REVISION, R4_REVISION].includes(REVISION);
+const IS_R5 = REVISION === R5_REVISION;
+const IS_R4 = [R4_REVISION, R5_REVISION].includes(REVISION);
+const IS_R3 = [R3_REVISION, R4_REVISION, R5_REVISION].includes(REVISION);
+const R5_CONTRACT = IS_R5 ? window.__G7E_B_R5_CANONICAL_CONTRACT__ : null;
+function r5DomainOptions(domain, fallback) {
+  if (!IS_R5) return fallback;
+  const values = R5_CONTRACT?.domain_enums?.[domain];
+  const labels = R5_CONTRACT?.domain_labels?.[domain];
+  if (!Array.isArray(values) || !labels || values.some((value) => typeof labels[value] !== "string")) {
+    throw new Error(`canonical R5 labels are incomplete for ${domain}`);
+  }
+  return values.map((value) => [value, labels[value]]);
+}
+function r5QuestionLabel(family, fallback) {
+  if (!IS_R5) return fallback;
+  const label = R5_CONTRACT?.question_families?.[family]?.label;
+  if (typeof label !== "string") throw new Error(`canonical R5 question label is missing for ${family}`);
+  return label;
+}
+function validateR5CanonicalAdapter() {
+  if (!IS_R5) return true;
+  const requiredFamilies = [
+    "original_focus", "context_subject", "uncertain_focus_path", "multi_subject_b", "anchor", "location",
+    "marker_review", "supply", "relationship", "occlusion", "continuity", "role", "participation", "certainty",
+    "additional_subject", "missed_check", "missed_mark", "summary",
+  ];
+  const configuredFamilies = Object.keys(R5_CONTRACT?.question_families || {}).sort();
+  if (JSON.stringify(configuredFamilies) !== JSON.stringify([...requiredFamilies].sort())) {
+    throw new Error("canonical R5 question graph does not match the client adapter");
+  }
+  Object.keys(R5_CONTRACT.domain_enums).forEach((domain) => {
+    r5DomainOptions(domain, []);
+  });
+  Object.entries(R5_CONTRACT.relationship_compatibility.question_families).forEach(([family, definition]) => {
+    if (typeof definition.question !== "string" || typeof definition.help !== "string"
+      || !Array.isArray(definition.options) || definition.options.length === 0) {
+      throw new Error(`canonical R5 relationship family is incomplete: ${family}`);
+    }
+    const allowed = new Set(definition.allowed_relationships);
+    if (definition.options.some(([value, label]) => !allowed.has(value) || typeof label !== "string")) {
+      throw new Error(`canonical R5 relationship options are invalid: ${family}`);
+    }
+  });
+  return true;
+}
 const SUBJECT_COLOURS = ["#2cc9a0", "#9a72e8", "#e7a51a"];
-const LOCATION_VALUES = [
+const LOCATION_LABELS = {
+  VISIBLE_COMPLETE: "Visible â€” click the person",
+  VISIBLE_PARTIAL: "Partly visible â€” click the visible part",
+  FULLY_OCCLUDED_EXPECTED_PRESENT: "Hidden behind someone, but probably still there",
+  OUT_OF_FRAME_OR_LEFT_SCENE: "Left the picture",
+  NOT_PRESENT: "Not present",
+  UNCERTAIN: "Not sure",
+};
+const LOCATION_VALUES = r5DomainOptions("visibility", [
   ["VISIBLE_COMPLETE", "Visible — click the person"],
   ["VISIBLE_PARTIAL", "Partly visible — click the visible part"],
   ["FULLY_OCCLUDED_EXPECTED_PRESENT", "Hidden behind someone, but probably still there"],
   ["OUT_OF_FRAME_OR_LEFT_SCENE", "Left the picture"],
   ["NOT_PRESENT", "Not present"],
   ["UNCERTAIN", "Not sure"],
-];
+]);
 const LEGACY_SUPPLY_VALUES = [
   ["ONE_USEFUL_CANDIDATE", "One useful box"],
   ["MULTIPLE_CANDIDATES", "More than one box for this same person"],
@@ -49,8 +101,17 @@ const R4_SUPPLY_VALUES = [
   ["NO_CANDIDATE", "No useful box"],
   ["UNCERTAIN", "Not sure"],
 ];
-const SUPPLY_VALUES = IS_R4 ? R4_SUPPLY_VALUES : LEGACY_SUPPLY_VALUES;
-const LABELS = Object.fromEntries([...LOCATION_VALUES, ...LEGACY_SUPPLY_VALUES, ...R4_SUPPLY_VALUES]);
+const SUPPLY_LABELS = Object.fromEntries(R4_SUPPLY_VALUES);
+const SUPPLY_VALUES = r5DomainOptions("candidate_supply", IS_R4 ? R4_SUPPLY_VALUES : LEGACY_SUPPLY_VALUES);
+const R5_LABEL_ENTRIES = IS_R5
+  ? Object.entries(R5_CONTRACT.domain_labels).flatMap(([, labels]) => Object.entries(labels))
+  : [];
+const LABELS = Object.fromEntries([
+  ...LOCATION_VALUES,
+  ...LEGACY_SUPPLY_VALUES,
+  ...R4_SUPPLY_VALUES,
+  ...R5_LABEL_ENTRIES,
+]);
 
 const app = {
   mode: null,
@@ -86,6 +147,9 @@ const app = {
   relationshipCompatibility: null,
   relationshipCompatibilitySha256: null,
   branchInvalidationMessage: null,
+  canonicalContract: R5_CONTRACT,
+  canonicalContractSha256: null,
+  releaseGate: null,
 };
 
 function canonicalFrameIdentity(sequence) {
@@ -103,21 +167,23 @@ function candidateBinding(sequence, subjectIndex, selected = []) {
 
 function observation(sequence, subjectIndex) {
   const row = {
+    human_confirmed: false,
+    approximate_hidden_location: false,
+    selected_candidate_ids: [],
+  };
+  if (!IS_R5) Object.assign(row, {
     visibility: null,
     subject_location_source_x: null,
     subject_location_source_y: null,
-    human_confirmed: false,
-    approximate_hidden_location: false,
     observation_supply: null,
-    selected_candidate_ids: [],
     occlusion_phase: "NONE",
-  };
+  });
   if (IS_R3) {
     row.frame_reference_id = canonicalFrameIdentity(sequence)?.frame_id;
     row.canonical_frame_identity = canonicalFrameIdentity(sequence);
     row.candidate_selection_binding = candidateBinding(sequence, subjectIndex);
   }
-  if (IS_R4) {
+  if (IS_R4 && !IS_R5) {
     row.candidate_relationship = null;
     row.relationship_question_id = null;
     row.relationship_branch_family = null;
@@ -129,22 +195,24 @@ function newSubject(index, source) {
   const subject = {
     subject_token: `SUBJECT_${"ABC"[index]}`,
     subject_definition_source: source,
+    frame_observations: Array.from({ length: 9 }, (_, sequence) => observation(sequence, index)),
+    occlusion_confirmed: false,
+  };
+  if (!IS_R5) Object.assign(subject, {
     anchor_frame_sequence: null,
     anchor_source_xy: null,
-    frame_observations: Array.from({ length: 9 }, (_, sequence) => observation(sequence, index)),
     marker_continuity_confirmation: null,
-    occlusion_confirmed: false,
     continuity: null,
     role: null,
     participation: null,
     certainty: null,
-  };
+  });
   if (!IS_R4) subject.candidate_relationship = null;
   return subject;
 }
 
 function blankData(caseRow) {
-  return {
+  const data = {
     review_revision: REVISION,
     burst_id: caseRow.burst_id,
     current_question: "original_focus",
@@ -163,6 +231,16 @@ function blankData(caseRow) {
     targeted_correction: null,
     real_draft_recovery: null,
   };
+  if (IS_R5) Object.assign(data, {
+    schema_version: "football_intelligence.g7e_b_r5.working_draft.v1",
+    canonical_contract_id: R5_CONTRACT?.contract_id,
+    question_lifecycle: { [`${caseRow.burst_id}|original_focus`]: "ACTIVE" },
+    answered_domain_values: {},
+    pending_edit: {},
+    branch_invalidation_journal: [],
+    current_question_instance_key: `${caseRow.burst_id}|original_focus`,
+  });
+  return data;
 }
 
 function currentSubject(index = activeSubjectIndex()) { return app.data?.subjects[index] || null; }
@@ -204,8 +282,13 @@ function relationshipCompatibility(subjectIndex, sequence, final = false) {
   const familyContract = app.relationshipCompatibility.question_families?.[family] || {};
   const allowed = familyContract.allowed_relationships || [];
   if (!state.relationship_applicable) {
-    if (row.candidate_relationship !== state.canonical_relationship) errors.push("This frame does not use a relationship follow-up.");
-    if (row.relationship_question_id !== null || row.relationship_branch_family !== null) errors.push("A hidden relationship branch is stale.");
+    if (IS_R5) {
+      if (row.candidate_relationship !== undefined) errors.push("This frame retained a hidden relationship answer.");
+      if (row.relationship_question_id !== undefined || row.relationship_branch_family !== undefined) errors.push("A hidden relationship branch is stale.");
+    } else {
+      if (row.candidate_relationship !== state.canonical_relationship) errors.push("This frame does not use a relationship follow-up.");
+      if (row.relationship_question_id !== null || row.relationship_branch_family !== null) errors.push("A hidden relationship branch is stale.");
+    }
   } else {
     if (row.relationship_question_id !== relationshipQuestion || row.relationship_branch_family !== family) errors.push("The relationship branch is not bound to this exact frame.");
     if (final && !row.candidate_relationship) errors.push("This frame needs one relationship follow-up.");
@@ -228,7 +311,7 @@ function relationshipCompatibility(subjectIndex, sequence, final = false) {
 }
 function appendBranchInvalidation(subjectIndex, sequence, previousValue, reason, upstreamChange) {
   const row = app.data.subjects[subjectIndex].frame_observations[sequence];
-  app.data.action_journal.push({
+  const entry = {
     action: "RELATIONSHIP_BRANCH_INVALIDATED",
     subject_token: app.data.subjects[subjectIndex].subject_token,
     frame_reference_id: row.frame_reference_id,
@@ -238,7 +321,12 @@ function appendBranchInvalidation(subjectIndex, sequence, previousValue, reason,
     upstream_change: upstreamChange,
     question_id: `subject_${subjectIndex}_relationship_${sequence}`,
     created_at_utc: new Date().toISOString(),
-  });
+  };
+  app.data.action_journal.push(entry);
+  if (IS_R5) {
+    app.data.branch_invalidation_journal ||= [];
+    app.data.branch_invalidation_journal.push({ ...entry, lifecycle_transition: "INVALIDATED_BY_UPSTREAM_CHANGE" });
+  }
   app.branchInvalidationMessage = "A follow-up answer was cleared because it no longer applies.";
 }
 function invalidateRelationship(subjectIndex, sequence, reason, upstreamChange, forceApplicableClear = false) {
@@ -251,14 +339,23 @@ function invalidateRelationship(subjectIndex, sequence, reason, upstreamChange, 
   const previousQuestion = row.relationship_question_id;
   const previousFamily = row.relationship_branch_family;
   if (!state.relationship_applicable) {
-    row.candidate_relationship = state.canonical_relationship;
-    row.relationship_question_id = null;
-    row.relationship_branch_family = null;
+    if (IS_R5) {
+      delete row.candidate_relationship;
+      delete row.relationship_question_id;
+      delete row.relationship_branch_family;
+    } else {
+      row.candidate_relationship = state.canonical_relationship;
+      row.relationship_question_id = null;
+      row.relationship_branch_family = null;
+    }
   } else {
     row.relationship_question_id = `subject_${subjectIndex}_relationship_${sequence}`;
     row.relationship_branch_family = state.question_family;
     const allowed = app.relationshipCompatibility.question_families[state.question_family].allowed_relationships;
-    if (forceApplicableClear || (row.candidate_relationship && !allowed.includes(row.candidate_relationship))) row.candidate_relationship = null;
+    if (forceApplicableClear || (row.candidate_relationship && !allowed.includes(row.candidate_relationship))) {
+      if (IS_R5) delete row.candidate_relationship;
+      else row.candidate_relationship = null;
+    }
   }
   const changed = previous !== row.candidate_relationship || previousQuestion !== row.relationship_question_id || previousFamily !== row.relationship_branch_family;
   if (changed) appendBranchInvalidation(subjectIndex, sequence, previous, reason, upstreamChange);
@@ -574,32 +671,32 @@ function renderQuestion() {
   updateSubjectReference(part.subject);
 
   if (part.kind === "original_focus") {
-    setQuestion("What does the yellow original focus box contain?", "Judge the yellow box only. The blue dashed area is nearby context.", "START WITH THE YELLOW ORIGINAL BOX", true);
-    answerCards([
+    setQuestion(r5QuestionLabel("original_focus", "What does the yellow original focus box contain?"), "Judge the yellow box only. The blue dashed area is nearby context.", "START WITH THE YELLOW ORIGINAL BOX", true);
+    answerCards(r5DomainOptions("original_focus", [
       ["ONE_RELEVANT_MATCH_PERSON", "One relevant match person"],
       ["PART_OF_ONE_RELEVANT_MATCH_PERSON", "Part of one relevant match person"],
       ["MORE_THAN_ONE_RELEVANT_PERSON", "More than one relevant person"],
       ["NO_RELEVANT_PERSON", "No relevant person"],
       ["NOT_SURE", "Not sure"],
-    ], app.data.answers.original_focus_box_answer, chooseOriginalFocus);
+    ]), app.data.answers.original_focus_box_answer, chooseOriginalFocus);
     ui.continueButton.disabled = !app.data.answers.original_focus_box_answer;
     return;
   }
   if (part.kind === "context_subject") {
     setQuestion("Is there a relevant player, goalkeeper, or match official nearby in the blue context area who is worth following through this clip?", "The yellow original box contains no relevant person. Judge the blue context area now.", "OPTIONAL NEARBY SUBJECT", true);
-    answerCards([["YES_ONE_PERSON", "Yes — one person"], ["YES_MORE_THAN_ONE_PERSON", "Yes — more than one person"], ["NO", "No"], ["NOT_SURE", "Not sure"]], app.data.answers.context_subject_answer, chooseContext);
+    answerCards(r5DomainOptions("context_subject", [["YES_ONE_PERSON", "Yes — one person"], ["YES_MORE_THAN_ONE_PERSON", "Yes — more than one person"], ["NO", "No"], ["NOT_SURE", "Not sure"]]), app.data.answers.context_subject_answer, chooseContext);
     ui.continueButton.disabled = !app.data.answers.context_subject_answer;
     return;
   }
   if (part.kind === "uncertain_focus_path") {
     setQuestion("What would you like to do with the uncertain yellow box?", "You do not need to force a guess.", "SAFE UNCERTAIN PATH", true);
-    answerCards([["TRY_DIFFERENT_FRAME", "Try a different frame"], ["UNCERTAIN_SUBJECT_A", "Continue with an uncertain Subject A"], ["NO_SUBJECT", "No subject to follow"]], app.data.answers.uncertain_focus_path, chooseUncertainPath);
+    answerCards(r5DomainOptions("uncertain_focus_path", [["TRY_DIFFERENT_FRAME", "Try a different frame"], ["UNCERTAIN_SUBJECT_A", "Continue with an uncertain Subject A"], ["NO_SUBJECT", "No subject to follow"]]), app.data.answers.uncertain_focus_path, chooseUncertainPath);
     ui.continueButton.disabled = !app.data.answers.uncertain_focus_path || app.data.answers.uncertain_focus_path === "TRY_DIFFERENT_FRAME";
     return;
   }
   if (part.kind === "multi_subject_b") {
     setQuestion("Should another person in the yellow box become Subject B?", "Subject A is already the person you clicked. Add Subject B only when another relevant person in the yellow box should be followed.", "OPTIONAL SECOND SUBJECT", true);
-    answerCards([["ADD_SUBJECT_B", "Yes — define Subject B"], ["ONLY_SUBJECT_A", "No — follow Subject A only"], ["NOT_SURE", "Not sure"]], app.data.answers.multi_subject_b, async (value) => {
+    answerCards(r5DomainOptions("multi_subject_b", [["ADD_SUBJECT_B", "Yes — define Subject B"], ["ONLY_SUBJECT_A", "No — follow Subject A only"], ["NOT_SURE", "Not sure"]]), app.data.answers.multi_subject_b, async (value) => {
       app.data.answers.multi_subject_b = value;
       if (value === "ADD_SUBJECT_B") ensureSubjects(2, "YELLOW_MULTI_PERSON_HUMAN_SELECTION");
       else app.data.subjects = app.data.subjects.slice(0, 1);
@@ -647,13 +744,16 @@ function renderLocation(index, frame) {
     row.human_confirmed = false;
     row.approximate_hidden_location = false;
     delete row.location_binding;
-    row.observation_supply = ["OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT"].includes(value) ? "NOT_APPLICABLE" : null;
+    if (["OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT"].includes(value) && !IS_R5) row.observation_supply = "NOT_APPLICABLE";
+    else if (IS_R5) delete row.observation_supply;
+    else row.observation_supply = null;
     row.selected_candidate_ids = [];
     if (IS_R3) row.candidate_selection_binding = candidateBinding(frame, index);
     if (IS_R4) {
       if (row.observation_supply === "NOT_APPLICABLE") invalidateRelationship(index, frame, "VISIBILITY_STATE_CHANGED", value);
       else {
-        row.candidate_relationship = null;
+        if (IS_R5) delete row.candidate_relationship;
+        else row.candidate_relationship = null;
         row.relationship_question_id = null;
         row.relationship_branch_family = null;
         if (previousRelationship) appendBranchInvalidation(index, frame, previousRelationship, "VISIBILITY_STATE_CHANGED", value);
@@ -686,7 +786,14 @@ function renderMarkerReview(index) {
   const subject = currentSubject(index);
   setQuestion(`Do these markers follow the same Subject ${subjectLetter(index)}?`, "Review all nine frames. Human-confirmed points are shown; absent and uncertain frames intentionally have no marker.", `SUBJECT ${subjectLetter(index)} MARKER REVIEW`);
   ui.answerArea.innerHTML = markerStrip(subject);
-  answerCardsAppend([["SAME_SUBJECT_CONFIRMED", `These markers follow the same Subject ${subjectLetter(index)}`], ["CORRECT_FRAME", "I need to correct a frame"], ["CANNOT_TELL", "Cannot tell"]], subject.marker_continuity_confirmation, async (value) => {
+  const markerOptions = r5DomainOptions("marker_continuity_confirmation", [
+    ["SAME_SUBJECT_CONFIRMED", `These markers follow the same Subject ${subjectLetter(index)}`],
+    ["CANNOT_TELL", "Cannot tell"],
+  ]).map(([value, label]) => value === "SAME_SUBJECT_CONFIRMED"
+    ? [value, IS_R5 ? `${label} — Subject ${subjectLetter(index)}` : label]
+    : [value, label]);
+  markerOptions.splice(1, 0, ["CORRECT_FRAME", "I need to correct a frame"]);
+  answerCardsAppend(markerOptions, subject.marker_continuity_confirmation, async (value) => {
     if (value === "CORRECT_FRAME") {
       subject.marker_continuity_confirmation = null;
       app.history.push(app.questionKey);
@@ -731,7 +838,8 @@ function renderSupply(index, frame) {
     : SUPPLY_VALUES;
   const zeroAllowed = IS_R4 ? ["NO_CANDIDATE", "UNCERTAIN", null] : ["NO_USEFUL_BOX", "NOT_SURE", null];
   if (state.candidate_status === "VERIFIED_ZERO_CANDIDATES" && !zeroAllowed.includes(row.observation_supply)) {
-    row.observation_supply = null;
+    if (IS_R5) delete row.observation_supply;
+    else row.observation_supply = null;
     row.selected_candidate_ids = [];
   }
   answerCards(options, row.observation_supply, async (value) => {
@@ -779,7 +887,8 @@ function renderRelationship(index, frame = null) {
     const options = family.options.map(([value, label]) => [value, label.replaceAll("{subject}", letter)]);
     answerCards(options, row.candidate_relationship, async (value) => {
       if (value === "BRANCH_CORRECTION") {
-        row.candidate_relationship = null;
+        if (IS_R5) delete row.candidate_relationship;
+        else row.candidate_relationship = null;
         app.history.push(app.questionKey);
         app.questionKey = `subject_${index}_supply_${frame}`;
         app.data.current_question = app.questionKey;
@@ -833,7 +942,7 @@ function deriveOcclusion(subject) {
 function renderContinuity(index) {
   const subject = currentSubject(index);
   setQuestion(`Do your Subject ${subjectLetter(index)} markers appear to follow the same person throughout this clip?`, "Burst-local only. If you switched people, correct the locations before saving.", "BURST-LOCAL CONTINUITY");
-  answerCards([["SAME_BURST_LOCAL_SUBJECT", "Yes — same person within this clip"], ["DIFFERENT_SUBJECT", "No — I switched to a different person"], ["CANNOT_TELL", "Cannot tell"]], subject.continuity, async (value) => { subject.continuity = value; await saveDraft(); renderQuestion(); });
+  answerCards(r5DomainOptions("continuity", [["SAME_BURST_LOCAL_SUBJECT", "Yes — same person within this clip"], ["DIFFERENT_SUBJECT", "No — I switched to a different person"], ["CANNOT_TELL", "Cannot tell"]]), subject.continuity, async (value) => { subject.continuity = value; await saveDraft(); renderQuestion(); });
   ui.continueButton.disabled = !subject.continuity || subject.continuity === "DIFFERENT_SUBJECT";
 }
 
@@ -844,7 +953,8 @@ function renderSubjectSingle(index, kind) {
     participation: ["How are they taking part?", [["ACTIVE_IN_MATCH", "Active in the match"], ["WARMING_OR_INACTIVE", "Warming up or inactive"], ["NOT_PLAYER_OR_OFFICIAL", "Not a player or match official"], ["UNKNOWN_PARTICIPATION", "Not sure"]]],
     certainty: ["Overall, how sure are you about this subject?", [["CERTAIN", "Certain"], ["PROBABLE", "Probably"], ["NOT_SURE", "Not sure"]]],
   };
-  const [title, options] = configs[kind];
+  const [title, fallbackOptions] = configs[kind];
+  const options = r5DomainOptions(kind, fallbackOptions);
   setQuestion(title, `This applies only to Subject ${subjectLetter(index)} inside this burst.`, `SUBJECT ${subjectLetter(index)} · ONE ANSWER`);
   answerCards(options, subject[kind], async (value) => { subject[kind] = value; await saveDraft(); renderQuestion(); });
   ui.continueButton.disabled = !subject[kind];
@@ -852,9 +962,11 @@ function renderSubjectSingle(index, kind) {
 
 function renderAdditionalSubject() {
   setQuestion("Do you need to follow another person in this clip?", "Add one only when the evidence requires it. At most Subject A, B, and C are available.", "OPTIONAL BURST-LOCAL SUBJECT");
-  answerCards([["CONTINUE", "No — continue"], ["ADD", `Yes — add Subject ${subjectLetter(app.data.subjects.length)}`], ["NOT_SURE", "Not sure — continue"]], app.data.answers.additional_subject, async (value) => {
+  const addValue = IS_R5 ? "ADD_SUBJECT" : "ADD";
+  const additionalOptions = r5DomainOptions("additional_subject", [["CONTINUE", "No — continue"], ["ADD", `Yes — add Subject ${subjectLetter(app.data.subjects.length)}`], ["NOT_SURE", "Not sure — continue"]]).map(([value, label]) => value === addValue ? [value, `Yes — add Subject ${subjectLetter(app.data.subjects.length)}`] : [value, label]);
+  answerCards(additionalOptions, app.data.answers.additional_subject, async (value) => {
     app.data.answers.additional_subject = value;
-    if (value === "ADD") ensureSubjects(app.data.subjects.length + 1, "UNCERTAIN_HUMAN_SELECTION");
+    if (value === addValue) ensureSubjects(app.data.subjects.length + 1, "UNCERTAIN_HUMAN_SELECTION");
     await saveDraft(); renderQuestion();
   });
   ui.continueButton.disabled = !app.data.answers.additional_subject;
@@ -862,7 +974,7 @@ function renderAdditionalSubject() {
 
 function renderMissedCheck() {
   setQuestion("Can you see any relevant person in this whole burst who has no useful model box?", "Review all nine frames. This includes a player, goalkeeper, or relevant match official.", "WHOLE-BURST MISSED-PERSON CHECK");
-  answerCards([["NO", "No"], ["YES", "Yes — let me mark them"], ["NOT_SURE", "Not sure"]], app.data.answers.missed_check, async (value) => { app.data.answers.missed_check = value; if (value !== "YES") app.data.missed_person_marks = []; await saveDraft(); renderQuestion(); drawAll(); });
+  answerCards(r5DomainOptions("missed_check", [["NO", "No"], ["YES", "Yes — let me mark them"], ["NOT_SURE", "Not sure"]]), app.data.answers.missed_check, async (value) => { app.data.answers.missed_check = value; if (value !== "YES") app.data.missed_person_marks = []; await saveDraft(); renderQuestion(); drawAll(); });
   ui.continueButton.disabled = !app.data.answers.missed_check;
 }
 
@@ -934,13 +1046,98 @@ async function api(path, payload) {
   }
   return body;
 }
+function r5QuestionInstance(legacyKey) {
+  const part = parseQuestion(legacyKey);
+  const pieces = [app.current.burst_id];
+  if (part.subject !== null) pieces.push(`SUBJECT_${subjectLetter(part.subject)}`);
+  if (Number.isInteger(part.frame)) pieces.push(`frame_${part.frame}`);
+  pieces.push(part.kind);
+  return pieces.join("|");
+}
+
+function r5QuestionAnswer(legacyKey) {
+  const part = parseQuestion(legacyKey);
+  if (part.subject === null) {
+    const fields = { original_focus: "original_focus_box_answer", context_subject: "context_subject_answer", uncertain_focus_path: "uncertain_focus_path", multi_subject_b: "multi_subject_b", additional_subject: "additional_subject", missed_check: "missed_check" };
+    return fields[part.kind] ? app.data.answers[fields[part.kind]] : undefined;
+  }
+  const subject = app.data.subjects[part.subject];
+  if (!subject) return undefined;
+  if (part.kind === "location") return subject.frame_observations[part.frame]?.visibility;
+  if (part.kind === "supply") return subject.frame_observations[part.frame]?.observation_supply;
+  if (part.kind === "relationship") return subject.frame_observations[part.frame]?.candidate_relationship;
+  if (part.kind === "marker_review") return subject.marker_continuity_confirmation;
+  if (["continuity", "role", "participation", "certainty"].includes(part.kind)) return subject[part.kind];
+  if (part.kind === "occlusion" && subject.occlusion_confirmed) return subject.frame_observations.some((row) => row.occlusion_phase === "OCCLUDED") ? "OCCLUDED" : "NONE";
+  return undefined;
+}
+
+function r5NoDomainComplete(legacyKey) {
+  const part = parseQuestion(legacyKey);
+  if (part.kind === "anchor") {
+    const subject = app.data.subjects[part.subject];
+    return Number.isInteger(subject?.anchor_frame_sequence) && Array.isArray(subject?.anchor_source_xy);
+  }
+  if (part.kind === "missed_mark") return app.data.missed_person_marks.length > 0;
+  return part.kind === "summary";
+}
+
+function stripR5UnansweredNulls() {
+  if (!IS_R5) return;
+  const domainFields = new Set(["original_focus_box_answer", "context_subject_answer", "uncertain_focus_path", "multi_subject_b", "marker_continuity_confirmation", "visibility", "observation_supply", "candidate_relationship", "occlusion_phase", "continuity", "role", "participation", "certainty", "additional_subject", "missed_check"]);
+  const visit = (value) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    Object.keys(value).forEach((key) => {
+      if (domainFields.has(key) && (value[key] === null || value[key] === "")) delete value[key];
+      else visit(value[key]);
+    });
+  };
+  visit(app.data);
+}
+
+function synchronizeR5Lifecycle() {
+  if (!IS_R5) return;
+  stripR5UnansweredNulls();
+  app.data.question_lifecycle ||= {};
+  app.data.answered_domain_values ||= {};
+  app.data.pending_edit ||= {};
+  app.data.branch_invalidation_journal ||= [];
+  const sequence = questionSequence();
+  const visible = new Set(sequence.map(r5QuestionInstance));
+  const position = Math.max(0, sequence.indexOf(app.questionKey));
+  sequence.forEach((legacyKey, index) => {
+    const instance = r5QuestionInstance(legacyKey);
+    const answer = r5QuestionAnswer(legacyKey);
+    const complete = answer !== undefined || r5NoDomainComplete(legacyKey);
+    let lifecycle = "UNREACHED";
+    if (index < position) lifecycle = complete ? "ANSWERED" : "ERROR_REQUIRES_CORRECTION";
+    else if (index === position) lifecycle = complete ? "ANSWERED" : "ACTIVE";
+    app.data.question_lifecycle[instance] = lifecycle;
+    if (answer !== undefined) app.data.answered_domain_values[instance] = answer;
+    else delete app.data.answered_domain_values[instance];
+  });
+  Object.keys(app.data.question_lifecycle).forEach((instance) => {
+    if (!visible.has(instance)) {
+      if (app.data.question_lifecycle[instance] === "ANSWERED") app.data.branch_invalidation_journal.push({ action: "QUESTION_INVALIDATED_BY_UPSTREAM_CHANGE", question_instance_key: instance, previous_value: app.data.answered_domain_values[instance], created_at_utc: new Date().toISOString() });
+      app.data.question_lifecycle[instance] = "SKIPPED_NOT_APPLICABLE";
+      delete app.data.answered_domain_values[instance];
+    }
+  });
+  app.data.current_question_instance_key = r5QuestionInstance(app.questionKey);
+  app.data.current_question = app.questionKey;
+  app.data.canonical_contract_id = app.canonicalContract?.contract_id;
+  app.data.canonical_contract_sha256 = app.canonicalContractSha256;
+}
+
 function draftPayload() {
+  synchronizeR5Lifecycle();
   ensureR3Bindings();
   const errors = validateR3FrameBindings(false);
   if (errors.length) throw new Error(errors[0]);
   const relationshipErrors = validateR4Relationships(false);
   if (relationshipErrors.length) throw new Error(relationshipErrors[0].message);
-  return { mode: app.mode, burst_id: app.current.burst_id, current_question: app.questionKey, current_frame_sequence: app.frame, playback_speed: app.speed, answers: app.data.answers, subjects: app.data.subjects, candidate_mappings: candidateMappings(), missed_person_marks: app.data.missed_person_marks, candidate_runtime_contract: app.current.candidate_runtime_contract, unique_frame_candidate_status: app.current.unique_frame_candidate_status, per_frame_candidate_states: app.current.per_frame_candidate_states, draft_version: app.draftVersion, optimistic_lock_token: app.optimisticLockToken, click_transactions: app.data.click_transactions || [], action_journal: app.data.action_journal || [], prior_final_save_error: app.data.prior_final_save_error || null, targeted_correction: app.data.targeted_correction || null, real_draft_recovery: app.data.real_draft_recovery || null };
+  return { mode: app.mode, burst_id: app.current.burst_id, current_question: app.questionKey, current_question_instance_key: app.data.current_question_instance_key, current_frame_sequence: app.frame, playback_speed: app.speed, question_lifecycle: app.data.question_lifecycle || {}, answered_domain_values: app.data.answered_domain_values || {}, pending_edit: app.data.pending_edit || {}, answers: app.data.answers, subjects: app.data.subjects, candidate_mappings: candidateMappings(), missed_person_marks: app.data.missed_person_marks, candidate_runtime_contract: app.current.candidate_runtime_contract, unique_frame_candidate_status: app.current.unique_frame_candidate_status, per_frame_candidate_states: app.current.per_frame_candidate_states, draft_version: app.draftVersion, optimistic_lock_token: app.optimisticLockToken, click_transactions: app.data.click_transactions || [], action_journal: app.data.action_journal || [], branch_invalidation_journal: app.data.branch_invalidation_journal || [], prior_final_save_error: app.data.prior_final_save_error || null, targeted_correction: app.data.targeted_correction || null, real_draft_recovery: app.data.real_draft_recovery || null, acceptance_temporary: app.data.acceptance_temporary === true, migration_record: app.data.migration_record || null };
 }
 async function saveDraft() {
   if (app.readOnly) return;
@@ -958,7 +1155,16 @@ async function saveDraft() {
     ui.saveState.textContent = "Progress saved to server";
     return result.draft;
   }
-  catch (error) { block(`DRAFT_SAVE_ERROR — ${error.message}`); throw error; }
+  catch (error) {
+    const detail = error.payload?.errors?.[0];
+    const code = error.payload?.error_code || "DRAFT_SAVE_ERROR";
+    const field = detail?.field ? ` Field: ${detail.field}.` : "";
+    const route = detail?.correction_route
+      ? ` Return to: ${detail.correction_route}.`
+      : "";
+    block(`${code} — ${error.message}.${field}${route}`);
+    throw error;
+  }
 }
 function candidateMappings() {
   const result = [];
@@ -969,6 +1175,7 @@ function candidateMappings() {
   return result;
 }
 function eventPayload() {
+  if (IS_R5) return { mode: app.mode, burst_id: app.current.burst_id, draft_version: app.draftVersion, draft_content_sha256: app.draftContentSha256, optimistic_lock_token: app.optimisticLockToken };
   ensureR3Bindings();
   const errors = validateR3FrameBindings(true);
   if (errors.length) throw new Error(errors[0]);
@@ -1376,12 +1583,19 @@ async function loadCase(caseRow, draft = null) {
   ui.reviewShell.classList.remove("hidden"); ui.welcomeScreen.classList.add("hidden"); ui.completionScreen.classList.add("hidden"); updateProgress(); renderQuestion(); renderTimeline(); resizeCanvases(); await loadFrame(app.frame);
 }
 async function loadMode(mode, tranche = null) {
+  validateR5CanonicalAdapter();
   app.mode = mode; stopPlayback(); ui.saveState.textContent = "Loading server state…";
   const response = await fetch(`/api/bootstrap?mode=${mode}${tranche ? `&tranche=${tranche}` : ""}`); const payload = await response.json(); if (!response.ok) throw new Error(payload.error || "bootstrap failed");
   if (IS_R4) {
-    if (payload.relationship_compatibility?.review_revision !== R4_REVISION || !payload.relationship_compatibility_sha256) throw new Error("relationship-compatibility contract is unavailable");
+    if ((!IS_R5 && payload.relationship_compatibility?.review_revision !== R4_REVISION) || !payload.relationship_compatibility_sha256) throw new Error("relationship-compatibility contract is unavailable");
     app.relationshipCompatibility = payload.relationship_compatibility;
     app.relationshipCompatibilitySha256 = payload.relationship_compatibility_sha256;
+  }
+  if (IS_R5) {
+    if (!R5_CONTRACT || payload.canonical_contract?.contract_id !== R5_CONTRACT.contract_id || payload.canonical_contract_sha256 !== window.__G7E_B_R5_CANONICAL_CONTRACT_SHA256__) throw new Error("canonical reviewer-state contract is unavailable or mismatched");
+    app.canonicalContract = payload.canonical_contract;
+    app.canonicalContractSha256 = payload.canonical_contract_sha256;
+    app.releaseGate = payload.release_gate;
   }
   if (IS_R3) {
     const stateResponse = await fetch(`/api/review-state?mode=${mode}${tranche ? `&tranche=${tranche}` : ""}`, { cache: "no-store" });
@@ -1396,7 +1610,15 @@ async function loadMode(mode, tranche = null) {
   if (mode === "real" && payload.state.tranche_complete) { renderCompletion(payload.state); return; }
   if (mode === "practice" && payload.state.all_practice_complete) { renderPracticeComplete(); return; }
   app.cases = mode === "practice" ? payload.cases : payload.cases.filter((item) => item.tranche_id === payload.state.tranche_id);
-  const id = payload.state.first_incomplete_burst_id || app.cases[0].burst_id; const row = app.cases.find((item) => item.burst_id === id); await loadCase(row, payload.state.draft); ui.saveState.textContent = payload.state.draft ? "Draft restored from server" : "Ready · server-backed";
+  const id = payload.state.first_incomplete_burst_id || app.cases[0].burst_id;
+  const row = app.cases.find((item) => item.burst_id === id);
+  let draft = payload.state.draft;
+  if (IS_R5 && !draft) {
+    const initialized = await api("/api/initialize-draft", { mode, burst_id: id });
+    draft = initialized.draft;
+  }
+  await loadCase(row, draft);
+  ui.saveState.textContent = draft ? "Draft restored from server · lifecycle verified" : "Ready · server-backed";
 }
 async function loadAcknowledgedEvent(mode, eventId) {
   const response = await fetch(`/api/acknowledged-event?mode=${encodeURIComponent(mode)}&event_id=${encodeURIComponent(eventId)}`, { cache: "no-store" });
@@ -1467,4 +1689,5 @@ document.addEventListener("keydown", (event) => {
 window.__G7E_B_R2__ = { app, loadMode, loadAcknowledgedEvent, loadCase, loadFrame, renderQuestion, continueQuestion, saveDraft, saveFinalR3, sourceToDisplay, displayToSource, setZoom, zoomToSubject, resetViews, verifyMapping, validateR3FrameBindings, validateR4Relationships, relationshipCompatibility, invalidateRelationship, ensureR4Relationships, showFinalSaveError, eventPayload, draftPayload, frameCandidates, handleSourceClick, toggleCandidate, updateSubjectReference, requestDraw, questionSequence, chooseOriginalFocus, chooseContext, chooseUncertainPath, renderCandidateStatus };
 window.__G7E_B_R3__ = IS_R3 ? window.__G7E_B_R2__ : null;
 window.__G7E_B_R4__ = IS_R4 ? window.__G7E_B_R2__ : null;
+window.__G7E_B_R5__ = IS_R5 ? { ...window.__G7E_B_R2__, synchronizeR5Lifecycle, r5QuestionInstance, r5QuestionAnswer } : null;
 const params = new URLSearchParams(location.search); if (params.get("preview") === "1") ui.previewBanner.classList.remove("hidden"); if (params.get("readonlyEvent")) loadAcknowledgedEvent(params.get("mode") || "real", params.get("readonlyEvent")).catch((error) => block(`READ_ONLY_RESTORE_ERROR — ${error.message}`)); else if (params.get("autostart") === "1") loadMode(params.get("mode") || "practice").catch((error) => block(`BOOT_ERROR — ${error.message}`));

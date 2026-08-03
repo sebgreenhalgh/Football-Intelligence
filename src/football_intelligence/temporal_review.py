@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import mimetypes
@@ -18,6 +19,16 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
+from football_intelligence.g7e_b_r5_reviewer_state import (
+    R5_CONTRACT_ID,
+    R5_EVENT_SCHEMA,
+    R5_REVIEW_REVISION,
+    R5_WORKING_DRAFT_SCHEMA,
+    compile_final_event,
+    initialize_working_draft,
+    load_contract,
+    validate_working_draft,
+)
 from football_intelligence.temporal_burst_selection import CLASS_PRIORITY, MATCHES, QUOTAS
 
 REVIEW_ID = "G7E_B_TEMPORAL_BURST_REVIEW"
@@ -32,6 +43,7 @@ SUPPORTED_REVIEW_REVISIONS = (
     R2_REVIEW_REVISION,
     R3_REVIEW_REVISION,
     R4_REVIEW_REVISION,
+    R5_REVIEW_REVISION,
 )
 PROTOCOL_ID = "G7E_A_BURST_LOCAL_TEMPORAL_OBSERVATION_PROTOCOL_V1"
 TRANCHES = tuple(f"TRANCHE_{index}" for index in range(1, 7))
@@ -342,12 +354,21 @@ class TemporalReviewStore:
         self.candidate_states_by_reference = dict(candidate_state_rows.get("frames", {}))
         relationship_path = self.package / "relationship_compatibility.json"
         self.relationship_contract = read_json(relationship_path) if relationship_path.is_file() else None
+        self.canonical_contract: dict[str, Any] | None = None
+        self.canonical_contract_sha256: str | None = None
+        if self.review_revision == R5_REVIEW_REVISION:
+            self.canonical_contract, self.canonical_contract_sha256 = load_contract(
+                self.package / "canonical_reviewer_state_contract.json"
+            )
+            self.relationship_contract = self.canonical_contract["relationship_compatibility"]
         if self.review_revision == R4_REVIEW_REVISION:
             if not isinstance(self.relationship_contract, Mapping):
                 raise ValueError("R4 relationship-compatibility contract is missing")
             if self.relationship_contract.get("review_revision") != R4_REVIEW_REVISION:
                 raise ValueError("R4 relationship-compatibility revision mismatch")
             self.relationship_compatibility_sha256 = sha256_file(relationship_path)
+        elif self.review_revision == R5_REVIEW_REVISION:
+            self.relationship_compatibility_sha256 = self.canonical_contract_sha256
         else:
             self.relationship_compatibility_sha256 = None
         self.by_id = {case["burst_id"]: case for case in self.cases}
@@ -364,6 +385,71 @@ class TemporalReviewStore:
         if len(self.practice_cases) != 3:
             raise ValueError("practice-case cardinality mismatch")
         self.tranche_manifest_sha256 = sha256_file(self.package / "tranche_manifest.jsonl")
+
+    def r5_release_gate_status(self) -> dict[str, Any]:
+        if self.review_revision != R5_REVIEW_REVISION:
+            return {"required": False, "valid": True, "release_classification": None}
+        gate_path = self.package / "G7E_B_R5_REAL_REVIEW_RELEASE_GATE.json"
+        failures: list[str] = []
+        gate: Mapping[str, Any] = {}
+        if not gate_path.is_file():
+            failures.append("RELEASE_GATE_MISSING")
+        else:
+            gate = read_json(gate_path)
+            if gate.get("schema_version") != "football_intelligence.g7e_b_r5.real_review_release_gate.v1":
+                failures.append("RELEASE_GATE_SCHEMA_MISMATCH")
+            if (
+                gate.get("release_classification")
+                != "PASS_G7E_B_R5_REVIEWER_RELEASE_CANDIDATE_READY_FOR_REAL_TRANCHE_RESUME"
+            ):
+                failures.append("RELEASE_CLASSIFICATION_NOT_PASSED")
+            if gate.get("canonical_contract_id") != R5_CONTRACT_ID:
+                failures.append("RELEASE_CONTRACT_ID_MISMATCH")
+            if gate.get("canonical_contract_sha256") != self.canonical_contract_sha256:
+                failures.append("RELEASE_CONTRACT_HASH_MISMATCH")
+            if gate.get("review_revision") != R5_REVIEW_REVISION:
+                failures.append("RELEASE_REVIEW_REVISION_MISMATCH")
+            if gate.get("production_ready") is not False:
+                failures.append("RELEASE_PRODUCTION_FLAG_INVALID")
+            if gate.get("corpus", {}).get("bursts") != 120 or gate.get("corpus", {}).get("frame_references") != 1080:
+                failures.append("RELEASE_CORPUS_CARDINALITY_MISMATCH")
+            expected_files = gate.get("reviewer_file_sha256", {})
+            if not isinstance(expected_files, Mapping) or not expected_files:
+                failures.append("RELEASE_REVIEWER_HASHES_MISSING")
+            else:
+                for relative, expected in expected_files.items():
+                    path = self.package / str(relative)
+                    if not path.is_file() or sha256_file(path) != expected:
+                        failures.append(f"RELEASE_REVIEWER_HASH_MISMATCH:{relative}")
+        return {
+            "required": True,
+            "valid": not failures,
+            "failures": failures,
+            "release_classification": gate.get("release_classification"),
+            "gate_path": str(gate_path),
+            "gate_sha256": sha256_file(gate_path) if gate_path.is_file() else None,
+            "production_ready": False,
+        }
+
+    def _require_r5_real_release(self, mode: str) -> None:
+        if self.review_revision != R5_REVIEW_REVISION or mode != "real" or self.acceptance_mode:
+            return
+        status = self.r5_release_gate_status()
+        if status["valid"] is not True:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="REAL_REVIEW_TEMPORARILY_LOCKED",
+                        field="release_gate",
+                        message=(
+                            "Real review is temporarily locked. Completed progress remains read-only; "
+                            "practice and temporary acceptance are still available."
+                        ),
+                        question_id="original_focus",
+                    )
+                ],
+                "REAL_REVIEW_TEMPORARILY_LOCKED",
+            )
 
     @staticmethod
     def _frame_identity(case: Mapping[str, Any], sequence: int) -> dict[str, Any]:
@@ -408,9 +494,11 @@ class TemporalReviewStore:
         observation: Mapping[str, Any],
         final: bool,
     ) -> dict[str, Any]:
-        """Evaluate one frame against the package's single canonical R4 matrix."""
-        if self.review_revision != R4_REVIEW_REVISION or not isinstance(self.relationship_contract, Mapping):
-            raise ValueError("R4 relationship compatibility is unavailable")
+        """Evaluate one frame against the package's canonical relationship matrix."""
+        if self.review_revision not in (R4_REVIEW_REVISION, R5_REVIEW_REVISION) or not isinstance(
+            self.relationship_contract, Mapping
+        ):
+            raise ValueError("relationship compatibility is unavailable")
         aliases = self.relationship_contract.get("legacy_supply_aliases", {})
         raw_supply = observation.get("observation_supply")
         supply = aliases.get(raw_supply, raw_supply)
@@ -1050,6 +1138,9 @@ class TemporalReviewStore:
         burst_id = str(payload.get("burst_id", ""))
         if burst_id not in cases:
             raise ValueError("unknown burst draft")
+        if self.review_revision == R5_REVIEW_REVISION:
+            self._require_r5_real_release(mode)
+            return self._save_r5_draft(payload, mode, cases[burst_id])
         if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
             return self._save_r3_draft(payload, mode, cases[burst_id])
         document = {
@@ -1086,6 +1177,121 @@ class TemporalReviewStore:
             )
         self._validate_draft(document)
         atomic_write(self._root(mode) / "drafts" / f"{burst_id}.json", canonical_bytes(document))
+        return document
+
+    def initialize_draft(self, mode: str, burst_id: str) -> dict[str, Any]:
+        if self.review_revision != R5_REVIEW_REVISION:
+            raise ValueError("canonical draft initialization requires R5")
+        self._require_r5_real_release(mode)
+        cases = self.practice_by_id if mode == "practice" else self.by_id
+        case = cases.get(burst_id)
+        if case is None:
+            raise ValueError("unknown burst draft")
+        existing = self.draft(mode, burst_id)
+        if existing is not None:
+            return existing
+        if self.canonical_contract is None or self.canonical_contract_sha256 is None:
+            raise ValueError("R5 canonical contract is unavailable")
+        initial = initialize_working_draft(
+            case,
+            mode,
+            self.canonical_contract,
+            self.canonical_contract_sha256,
+        )
+        return self._save_r5_draft(initial, mode, case)
+
+    def _save_r5_draft(
+        self,
+        payload: Mapping[str, Any],
+        mode: str,
+        case: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if self.canonical_contract is None or self.canonical_contract_sha256 is None:
+            raise ValueError("R5 canonical contract is unavailable")
+        burst_id = str(payload["burst_id"])
+        path = self._root(mode) / "drafts" / f"{burst_id}.json"
+        current = read_json(path) if path.is_file() else None
+        expected_version = int(current.get("draft_version", 0)) if current else 0
+        expected_token = current.get("optimistic_lock_token") if current else None
+        supplied_version = int(payload.get("draft_version", 0))
+        supplied_token = payload.get("optimistic_lock_token")
+        if supplied_version != expected_version or supplied_token != expected_token:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="STALE_DRAFT_VERSION",
+                        field="optimistic_lock_token",
+                        message="A newer server-backed draft exists. Reload before saving this answer.",
+                        question_id=str(payload.get("current_question", "")),
+                    )
+                ],
+                "STALE_DRAFT_VERSION",
+            )
+        document = {
+            "schema_version": R5_WORKING_DRAFT_SCHEMA,
+            "review_id": self.review_id,
+            "review_revision": R5_REVIEW_REVISION,
+            "mode": mode,
+            "burst_id": burst_id,
+            "tranche_id": case.get("tranche_id"),
+            "canonical_contract_id": R5_CONTRACT_ID,
+            "canonical_contract_sha256": self.canonical_contract_sha256,
+            "current_question_instance_key": payload.get("current_question_instance_key"),
+            "current_question": str(payload.get("current_question", "original_focus")),
+            "current_frame_sequence": int(payload.get("current_frame_sequence", 4)),
+            "playback_speed": float(payload.get("playback_speed", 1.0)),
+            "question_lifecycle": copy.deepcopy(payload.get("question_lifecycle", {})),
+            "answered_domain_values": copy.deepcopy(payload.get("answered_domain_values", {})),
+            "pending_edit": copy.deepcopy(payload.get("pending_edit", {})),
+            "answers": copy.deepcopy(payload.get("answers", {})),
+            "subjects": copy.deepcopy(payload.get("subjects", [])),
+            "candidate_mappings": copy.deepcopy(payload.get("candidate_mappings", [])),
+            "missed_person_marks": copy.deepcopy(payload.get("missed_person_marks", [])),
+            "click_transactions": copy.deepcopy(payload.get("click_transactions", [])),
+            "action_journal": copy.deepcopy(payload.get("action_journal", [])),
+            "branch_invalidation_journal": copy.deepcopy(payload.get("branch_invalidation_journal", [])),
+            "prior_final_save_error": copy.deepcopy(payload.get("prior_final_save_error")),
+            "targeted_correction": copy.deepcopy(payload.get("targeted_correction")),
+            "source_manifest_hashes": copy.deepcopy(case["source_manifest_hashes"]),
+            "candidate_runtime_contract": copy.deepcopy(case["candidate_runtime_contract"]),
+            "unique_frame_candidate_status": copy.deepcopy(case["unique_frame_candidate_status"]),
+            "per_frame_candidate_states": copy.deepcopy(case["per_frame_candidate_states"]),
+            "draft_version": expected_version + 1,
+            "updated_at_utc": utc_now(),
+            "acceptance_temporary": bool(payload.get("acceptance_temporary", False)),
+            "migration_record": copy.deepcopy(payload.get("migration_record")),
+            "production_ready": False,
+        }
+        errors = validate_working_draft(
+            document,
+            self.canonical_contract,
+            self.canonical_contract_sha256,
+            "DRAFT_SHAPE",
+            case,
+        )
+        errors.extend(
+            validate_working_draft(
+                document,
+                self.canonical_contract,
+                self.canonical_contract_sha256,
+                "DRAFT_PROGRESS",
+                case,
+            )
+        )
+        if errors:
+            unique = {canonical_digest(error): error for error in errors}
+            raise ReviewValidationError(list(unique.values()), "DRAFT_SCHEMA_MISMATCH")
+        document["draft_content_sha256"] = canonical_digest(document)
+        document["optimistic_lock_token"] = canonical_digest(
+            {
+                "review_revision": R5_REVIEW_REVISION,
+                "burst_id": burst_id,
+                "draft_version": document["draft_version"],
+                "draft_content_sha256": document["draft_content_sha256"],
+            }
+        )
+        atomic_write(path, canonical_bytes(document))
+        document["server_file_sha256"] = sha256_file(path)
         return document
 
     def _save_r3_draft(
@@ -1179,6 +1385,27 @@ class TemporalReviewStore:
         if burst_id not in cases:
             raise ValueError("unknown burst event")
         case = cases[burst_id]
+        if self.review_revision == R5_REVIEW_REVISION:
+            if payload.get("schema_version") != R5_EVENT_SCHEMA:
+                raise ValueError("R5 immutable event schema mismatch")
+            if payload.get("canonical_contract_sha256") != self.canonical_contract_sha256:
+                raise ValueError("R5 immutable event contract hash mismatch")
+            if payload.get("compiled_from_working_draft") is not True:
+                raise ValueError("R5 immutable event was not compiled from a working draft")
+            self._validate_r3_frame_bindings(payload, case, final=True)
+            self._validate_r4_relationships(payload, case, final=True)
+            event, validated_case = self._validate_r1_event(payload, mode, case)
+            event.update(
+                {
+                    "schema_version": R5_EVENT_SCHEMA,
+                    "canonical_contract_id": R5_CONTRACT_ID,
+                    "canonical_contract_sha256": self.canonical_contract_sha256,
+                    "question_lifecycle_sha256": payload.get("question_lifecycle_sha256"),
+                    "compiled_from_working_draft": True,
+                    "final_validation_profile": "IMMUTABLE_EVENT",
+                }
+            )
+            return event, validated_case
         if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
             self._validate_r3_frame_bindings(payload, case, final=True)
             if self.review_revision == R4_REVIEW_REVISION:
@@ -1341,7 +1568,12 @@ class TemporalReviewStore:
         }
         expected_mappings: set[tuple[str, int, str]] = set()
         frame_states = case.get("per_frame_candidate_states", [])
-        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION, R4_REVIEW_REVISION):
+        if self.review_revision in (
+            R2_REVIEW_REVISION,
+            R3_REVIEW_REVISION,
+            R4_REVIEW_REVISION,
+            R5_REVIEW_REVISION,
+        ):
             if len(frame_states) != 9:
                 raise ValueError("R2 candidate-state closure mismatch")
             if any(row.get("candidate_status") == "CANDIDATE_DATA_UNAVAILABLE" for row in frame_states):
@@ -1364,7 +1596,9 @@ class TemporalReviewStore:
                 raise ValueError("invalid role or participation")
             if subject.get("certainty") not in CERTAINTY:
                 raise ValueError("invalid certainty")
-            if self.review_revision != R4_REVIEW_REVISION and subject.get("candidate_relationship") not in (
+            if self.review_revision not in (R4_REVIEW_REVISION, R5_REVIEW_REVISION) and subject.get(
+                "candidate_relationship"
+            ) not in (
                 *RELATIONSHIPS,
                 "NOT_APPLICABLE",
             ):
@@ -1409,13 +1643,14 @@ class TemporalReviewStore:
                 if visibility in ("OUT_OF_FRAME_OR_LEFT_SCENE", "NOT_PRESENT") and supply != "NOT_APPLICABLE":
                     raise ValueError("absent frame supply must be NOT_APPLICABLE")
                 if (
-                    self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION, R4_REVIEW_REVISION)
+                    self.review_revision
+                    in (R2_REVIEW_REVISION, R3_REVIEW_REVISION, R4_REVIEW_REVISION, R5_REVIEW_REVISION)
                     and relevant_visibility_for_supply(visibility)
                     and frame_states[sequence]["candidate_status"] == "VERIFIED_ZERO_CANDIDATES"
                     and supply
                     not in (
                         ("NO_CANDIDATE", "UNCERTAIN")
-                        if self.review_revision == R4_REVIEW_REVISION
+                        if self.review_revision in (R4_REVIEW_REVISION, R5_REVIEW_REVISION)
                         else ("NO_USEFUL_BOX", "NOT_SURE")
                     )
                 ):
@@ -1492,16 +1727,25 @@ class TemporalReviewStore:
             "created_at_utc": utc_now(),
             "production_ready": False,
         }
-        if self.review_revision in (R2_REVIEW_REVISION, R3_REVIEW_REVISION, R4_REVIEW_REVISION):
+        if self.review_revision in (
+            R2_REVIEW_REVISION,
+            R3_REVIEW_REVISION,
+            R4_REVIEW_REVISION,
+            R5_REVIEW_REVISION,
+        ):
             event.update(
                 {
                     "schema_version": (
-                        "football_intelligence.g7e_b_r4.burst_annotation_event.v1"
-                        if self.review_revision == R4_REVIEW_REVISION
+                        R5_EVENT_SCHEMA
+                        if self.review_revision == R5_REVIEW_REVISION
                         else (
-                            "football_intelligence.g7e_b_r3.burst_annotation_event.v1"
-                            if self.review_revision == R3_REVIEW_REVISION
-                            else "football_intelligence.g7e_b_r2.burst_annotation_event.v1"
+                            "football_intelligence.g7e_b_r4.burst_annotation_event.v1"
+                            if self.review_revision == R4_REVIEW_REVISION
+                            else (
+                                "football_intelligence.g7e_b_r3.burst_annotation_event.v1"
+                                if self.review_revision == R3_REVIEW_REVISION
+                                else "football_intelligence.g7e_b_r2.burst_annotation_event.v1"
+                            )
                         )
                     ),
                     "candidate_runtime_contract": case["candidate_runtime_contract"],
@@ -1526,7 +1770,7 @@ class TemporalReviewStore:
                     ],
                 }
             )
-        if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
+        if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION, R5_REVIEW_REVISION):
             event.update(
                 {
                     "draft_version": payload.get("draft_version"),
@@ -1535,7 +1779,7 @@ class TemporalReviewStore:
                     "frame_binding_validation": "PASSED",
                 }
             )
-        if self.review_revision == R4_REVIEW_REVISION:
+        if self.review_revision in (R4_REVIEW_REVISION, R5_REVIEW_REVISION):
             event.update(
                 {
                     "relationship_compatibility_sha256": self.relationship_compatibility_sha256,
@@ -1688,21 +1932,116 @@ class TemporalReviewStore:
             },
         )
 
+    def _r5_preflight_inputs(
+        self,
+        payload: Mapping[str, Any],
+        mode: str,
+    ) -> tuple[dict[str, Any], Mapping[str, Any], dict[str, Any]]:
+        if self.canonical_contract is None or self.canonical_contract_sha256 is None:
+            raise ValueError("R5 canonical contract is unavailable")
+        self._require_r5_real_release(mode)
+        cases = self.practice_by_id if mode == "practice" else self.by_id
+        burst_id = str(payload.get("burst_id", ""))
+        case = cases.get(burst_id)
+        if case is None:
+            raise ValueError("unknown burst event")
+        path = self._root(mode) / "drafts" / f"{burst_id}.json"
+        if not path.is_file():
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="SERVER_BACKED_DRAFT_REQUIRED",
+                        field="draft",
+                        message="The server-backed working draft is missing.",
+                        question_id="summary",
+                    )
+                ],
+                "SERVER_BACKED_DRAFT_REQUIRED",
+            )
+        draft = read_json(path)
+        expected = (
+            draft.get("draft_version"),
+            draft.get("draft_content_sha256"),
+            draft.get("optimistic_lock_token"),
+        )
+        supplied = (
+            payload.get("draft_version"),
+            payload.get("draft_content_sha256"),
+            payload.get("optimistic_lock_token"),
+        )
+        if supplied != expected:
+            raise ReviewValidationError(
+                [
+                    self._structured_error(
+                        code="STALE_FINAL_SAVE_DRAFT",
+                        field="draft_version",
+                        message="Final save does not reference the latest server-backed working draft.",
+                        question_id="summary",
+                    )
+                ],
+                "STALE_FINAL_SAVE_DRAFT",
+            )
+        event, errors = compile_final_event(
+            draft,
+            self.canonical_contract,
+            self.canonical_contract_sha256,
+            case,
+        )
+        if errors or event is None:
+            raise ReviewValidationError(errors, "FINAL_EVENT_COMPILATION_FAILED")
+        event, _ = self._validate_event(event, mode)
+        event.pop("created_at_utc", None)
+        event.pop("event_id", None)
+        identity_inputs = {
+            "review_revision": R5_REVIEW_REVISION,
+            "canonical_contract_sha256": self.canonical_contract_sha256,
+            "burst_id": burst_id,
+            "draft_version": draft["draft_version"],
+            "draft_content_sha256": draft["draft_content_sha256"],
+            "compiled_event_sha256": canonical_digest(event),
+        }
+        base_digest = canonical_digest(identity_inputs)
+        proposed_event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{R5_REVIEW_REVISION}:{base_digest}"))
+        idempotency_key = canonical_digest({**identity_inputs, "proposed_event_id": proposed_event_id})
+        event["event_id"] = proposed_event_id
+        event["idempotency_key"] = idempotency_key
+        event["draft_version"] = draft["draft_version"]
+        event["draft_content_sha256"] = draft["draft_content_sha256"]
+        return (
+            event,
+            case,
+            {
+                "proposed_event_id": proposed_event_id,
+                "idempotency_key": idempotency_key,
+                "draft_version": draft["draft_version"],
+                "draft_content_sha256": draft["draft_content_sha256"],
+                "compiled_event_sha256": canonical_digest(event),
+            },
+        )
+
     def _r3_error_path(self, mode: str, burst_id: str) -> Path:
         return self._root(mode) / "status" / f"final_save_error_{burst_id}.json"
 
     def final_save_preflight(self, payload: Mapping[str, Any], mode: str) -> dict[str, Any]:
-        if self.review_revision not in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
-            raise ValueError("final-save preflight requires the R3 or R4 reviewer")
+        if self.review_revision not in (R3_REVIEW_REVISION, R4_REVIEW_REVISION, R5_REVIEW_REVISION):
+            raise ValueError("final-save preflight requires the R3, R4, or R5 reviewer")
+        self._require_r5_real_release(mode)
         try:
-            _, _, inputs = self._r3_preflight_inputs(payload, mode)
+            if self.review_revision == R5_REVIEW_REVISION:
+                _, _, inputs = self._r5_preflight_inputs(payload, mode)
+            else:
+                _, _, inputs = self._r3_preflight_inputs(payload, mode)
         except ReviewValidationError as exc:
             burst_id = str(payload.get("burst_id", "unknown"))
             error_state = {
                 "schema_version": (
-                    "football_intelligence.g7e_b_r4.final_save_error.v1"
-                    if self.review_revision == R4_REVIEW_REVISION
-                    else "football_intelligence.g7e_b_r3.final_save_error.v1"
+                    "football_intelligence.g7e_b_r5.final_save_error.v1"
+                    if self.review_revision == R5_REVIEW_REVISION
+                    else (
+                        "football_intelligence.g7e_b_r4.final_save_error.v1"
+                        if self.review_revision == R4_REVIEW_REVISION
+                        else "football_intelligence.g7e_b_r3.final_save_error.v1"
+                    )
                 ),
                 "review_revision": self.review_revision,
                 "burst_id": burst_id,
@@ -1732,9 +2071,13 @@ class TemporalReviewStore:
     ) -> dict[str, Any]:
         receipt = {
             "schema_version": (
-                "football_intelligence.g7e_b_r4.event_acknowledgement_receipt.v1"
-                if self.review_revision == R4_REVIEW_REVISION
-                else "football_intelligence.g7e_b_r3.event_acknowledgement_receipt.v1"
+                "football_intelligence.g7e_b_r5.event_acknowledgement_receipt.v1"
+                if self.review_revision == R5_REVIEW_REVISION
+                else (
+                    "football_intelligence.g7e_b_r4.event_acknowledgement_receipt.v1"
+                    if self.review_revision == R4_REVIEW_REVISION
+                    else "football_intelligence.g7e_b_r3.event_acknowledgement_receipt.v1"
+                )
             ),
             "receipt_id": f"ack-{event['event_id']}",
             "review_id": self.review_id,
@@ -1801,6 +2144,10 @@ class TemporalReviewStore:
             draft_path = root / "drafts" / f"{event['burst_id']}.json"
             if draft_path.is_file():
                 draft_path.unlink()
+            tranche_receipt = (
+                self.current_tranche_receipt(str(case["tranche_id"]), create=True) if mode == "real" else None
+            )
+            global_receipt = self.current_global_receipt(create=True) if tranche_receipt is not None else None
             return {
                 "ok": True,
                 "saved": True,
@@ -1810,9 +2157,20 @@ class TemporalReviewStore:
                 "idempotency_key": supplied_key,
                 "recovered_existing_event": True,
                 "duplicate_event_created": False,
+                "tranche_complete": tranche_receipt is not None,
+                "tranche_completion_receipt_id": (
+                    tranche_receipt["tranche_completion_receipt_id"] if tranche_receipt else None
+                ),
+                "all_cases_complete": global_receipt is not None,
+                "global_completion_receipt_id": (
+                    global_receipt["global_completion_receipt_id"] if global_receipt else None
+                ),
                 "production_ready": False,
             }
-        event, case, inputs = self._r3_preflight_inputs(payload, mode)
+        if self.review_revision == R5_REVIEW_REVISION:
+            event, case, inputs = self._r5_preflight_inputs(payload, mode)
+        else:
+            event, case, inputs = self._r3_preflight_inputs(payload, mode)
         if payload.get("proposed_event_id") != inputs["proposed_event_id"]:
             raise ReviewValidationError(
                 [
@@ -1853,9 +2211,13 @@ class TemporalReviewStore:
             atomic_write(event_path, canonical_bytes(event))
         ledger = {
             "schema_version": (
-                "football_intelligence.g7e_b_r4.idempotency_record.v1"
-                if self.review_revision == R4_REVIEW_REVISION
-                else "football_intelligence.g7e_b_r3.idempotency_record.v1"
+                "football_intelligence.g7e_b_r5.idempotency_record.v1"
+                if self.review_revision == R5_REVIEW_REVISION
+                else (
+                    "football_intelligence.g7e_b_r4.idempotency_record.v1"
+                    if self.review_revision == R4_REVIEW_REVISION
+                    else "football_intelligence.g7e_b_r3.idempotency_record.v1"
+                )
             ),
             "idempotency_key": inputs["idempotency_key"],
             "event_id": event["event_id"],
@@ -1883,6 +2245,8 @@ class TemporalReviewStore:
         draft_path = root / "drafts" / f"{event['burst_id']}.json"
         if draft_path.is_file():
             draft_path.unlink()
+        tranche_receipt = self.current_tranche_receipt(str(case["tranche_id"]), create=True) if mode == "real" else None
+        global_receipt = self.current_global_receipt(create=True) if tranche_receipt is not None else None
         return {
             "ok": True,
             "saved": True,
@@ -1892,12 +2256,21 @@ class TemporalReviewStore:
             "idempotency_key": inputs["idempotency_key"],
             "recovered_existing_event": recovered,
             "duplicate_event_created": False,
+            "tranche_complete": tranche_receipt is not None,
+            "tranche_completion_receipt_id": (
+                tranche_receipt["tranche_completion_receipt_id"] if tranche_receipt else None
+            ),
+            "all_cases_complete": global_receipt is not None,
+            "global_completion_receipt_id": (
+                global_receipt["global_completion_receipt_id"] if global_receipt else None
+            ),
             "production_ready": False,
         }
 
     def save_event(self, payload: Mapping[str, Any], mode: str = "real") -> dict[str, Any]:
         with self.lock:
-            if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
+            self._require_r5_real_release(mode)
+            if self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION, R5_REVIEW_REVISION):
                 return self._save_r3_event(payload, mode)
             event, case = self._validate_event(payload, mode)
             root = self._root(mode)
@@ -1951,8 +2324,8 @@ class TemporalReviewStore:
             }
 
     def final_save_status(self, mode: str, idempotency_key: str) -> dict[str, Any]:
-        if self.review_revision not in (R3_REVIEW_REVISION, R4_REVIEW_REVISION):
-            raise ValueError("final-save status requires the R3 or R4 reviewer")
+        if self.review_revision not in (R3_REVIEW_REVISION, R4_REVIEW_REVISION, R5_REVIEW_REVISION):
+            raise ValueError("final-save status requires the R3, R4, or R5 reviewer")
         if len(idempotency_key) != 64 or any(character not in "0123456789abcdef" for character in idempotency_key):
             raise ValueError("invalid idempotency key")
         path = self._root(mode) / "idempotency" / f"{idempotency_key}.json"
@@ -1974,7 +2347,7 @@ class TemporalReviewStore:
             first = next((case for case in self.practice_cases if case["burst_id"] not in latest), None)
             final_error_path = (
                 self._r3_error_path(mode, first["burst_id"])
-                if first and self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION)
+                if first and self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION, R5_REVIEW_REVISION)
                 else None
             )
             return {
@@ -2003,7 +2376,7 @@ class TemporalReviewStore:
         first = next((case for case in cases if case["burst_id"] not in latest), None)
         final_error_path = (
             self._r3_error_path(mode, first["burst_id"])
-            if first and self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION)
+            if first and self.review_revision in (R3_REVIEW_REVISION, R4_REVIEW_REVISION, R5_REVIEW_REVISION)
             else None
         )
         last_event = max(
@@ -2030,7 +2403,8 @@ class TemporalReviewStore:
             "global_completion_receipt_id": (
                 global_receipt["global_completion_receipt_id"] if global_receipt else None
             ),
-            "editable": receipt is None,
+            "editable": receipt is None and (self.acceptance_mode or self.r5_release_gate_status()["valid"]),
+            "release_gate": self.r5_release_gate_status(),
         }
 
     def reset_practice(self) -> dict[str, Any]:
@@ -2346,6 +2720,12 @@ def create_server(
                 return self.send_bytes(200, (package / "review.js").read_bytes(), "text/javascript; charset=utf-8")
             if route == "/review.css":
                 return self.send_bytes(200, (package / "review.css").read_bytes(), "text/css; charset=utf-8")
+            if route == "/generated_client_contract.js":
+                return self.send_bytes(
+                    200,
+                    (package / "generated_client_contract.js").read_bytes(),
+                    "text/javascript; charset=utf-8",
+                )
             if route == "/api/bootstrap":
                 mode = query.get("mode", ["real"])[0]
                 tranche_id = query.get("tranche", [None])[0]
@@ -2357,6 +2737,9 @@ def create_server(
                         "state": store.state(mode, tranche_id),
                         "relationship_compatibility": store.relationship_contract,
                         "relationship_compatibility_sha256": store.relationship_compatibility_sha256,
+                        "canonical_contract": store.canonical_contract,
+                        "canonical_contract_sha256": store.canonical_contract_sha256,
+                        "release_gate": store.r5_release_gate_status(),
                     },
                 )
             if route == "/api/review-state":
@@ -2422,6 +2805,14 @@ def create_server(
                     draft = store.save_draft(payload, mode)
                     print(
                         "POST /api/draft HTTP 200 "
+                        f"mode={mode} burst={draft['burst_id']} draft_revision={draft.get('draft_version')}",
+                        flush=True,
+                    )
+                    return self.send_json(200, {"ok": True, "draft": draft})
+                if route == "/api/initialize-draft":
+                    draft = store.initialize_draft(mode, str(payload.get("burst_id", "")))
+                    print(
+                        "POST /api/initialize-draft HTTP 200 "
                         f"mode={mode} burst={draft['burst_id']} draft_revision={draft.get('draft_version')}",
                         flush=True,
                     )
