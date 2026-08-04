@@ -30,6 +30,7 @@ from football_intelligence.g7e_b_r5_reviewer_state import (
     validate_working_draft,
 )
 from football_intelligence.g7e_b_r6_action_reducer import (
+    ACTION_TYPES as R6_ACTION_TYPES,
     R6_ACTION_RECEIPT_SCHEMA,
     R6_CONTRACT_NAME,
     R6_REVIEW_REVISION,
@@ -38,6 +39,13 @@ from football_intelligence.g7e_b_r6_action_reducer import (
     initialize_r6_draft,
 )
 from football_intelligence.temporal_burst_selection import CLASS_PRIORITY, MATCHES, QUOTAS
+from football_intelligence.temporal_reviewer.contracts import contained_path, validate_action_envelope
+from football_intelligence.temporal_reviewer.http_server import (
+    RequestBodyTooLarge,
+    UnsupportedMediaType,
+    read_json_request,
+)
+from football_intelligence.temporal_reviewer.persistence import ActionTransaction, recover_action_transactions
 
 REVIEW_ID = "G7E_B_TEMPORAL_BURST_REVIEW"
 REVIEW_REVISION = "G7E_B_TEMPORAL_BURST_REVIEW_V1"
@@ -344,12 +352,22 @@ class TemporalReviewStore:
         decisions_root: Path | None = None,
         practice_root: Path | None = None,
         acceptance_mode: bool = False,
+        action_transaction_fail_after: str | None = None,
     ):
         self.package = package.resolve()
         self.decisions = (decisions_root or package / "human_decisions").resolve()
         self.practice = (practice_root or package / "practice_decisions").resolve()
         self.acceptance_mode = acceptance_mode
+        self.action_transaction_fail_after = action_transaction_fail_after
         self.lock = threading.RLock()
+        self.action_recovery = {
+            "real": recover_action_transactions(self.decisions),
+            "practice": recover_action_transactions(self.practice),
+        }
+        build_manifest_path = self.package / "build_manifest.json"
+        self.release_revision = (
+            read_json(build_manifest_path).get("release_revision") if build_manifest_path.is_file() else None
+        )
         review = read_json(self.package / "review_cases.json")
         practice = read_json(self.package / "practice_cases.json")
         self.review_id = str(review.get("review_id", REVIEW_ID))
@@ -407,6 +425,42 @@ class TemporalReviewStore:
 
     def r5_release_gate_status(self) -> dict[str, Any]:
         if self.review_revision == R6_REVIEW_REVISION:
+            if self.release_revision == "G7E_B_R6_1_FINAL_BYTE_VISUAL_RUNTIME_CLOSURE_V1":
+                gate_path = self.package / "G7E_B_R6_1_REAL_REVIEW_RELEASE_GATE.json"
+                failures: list[str] = []
+                gate: Mapping[str, Any] = {}
+                if not gate_path.is_file():
+                    failures.append("R6_1_RELEASE_GATE_MISSING")
+                else:
+                    gate = read_json(gate_path)
+                    if gate.get("schema_version") != "football_intelligence.g7e_b_r6_1.real_review_release_gate.v1":
+                        failures.append("R6_1_RELEASE_GATE_SCHEMA_MISMATCH")
+                    if (
+                        gate.get("release_classification")
+                        != "PASS_G7E_B_R6_1_FINAL_BYTE_VISUAL_AND_RUNTIME_CLOSURE_READY_FOR_TRANCHE_1_RESUME"
+                    ):
+                        failures.append("R6_1_RELEASE_CLASSIFICATION_NOT_PASSED")
+                    if gate.get("review_protocol_revision") != R6_REVIEW_REVISION:
+                        failures.append("R6_1_REVIEW_PROTOCOL_REVISION_MISMATCH")
+                    if gate.get("action_contract_sha256") != self.action_contract_sha256:
+                        failures.append("R6_1_ACTION_CONTRACT_HASH_MISMATCH")
+                    expected_files = gate.get("reviewer_file_sha256", {})
+                    if not isinstance(expected_files, Mapping) or not expected_files:
+                        failures.append("R6_1_RELEASE_REVIEWER_HASHES_MISSING")
+                    else:
+                        for relative, expected in expected_files.items():
+                            path = self.package / str(relative)
+                            if not path.is_file() or sha256_file(path) != expected:
+                                failures.append(f"R6_1_RELEASE_REVIEWER_HASH_MISMATCH:{relative}")
+                return {
+                    "required": True,
+                    "valid": not failures,
+                    "failures": failures,
+                    "release_classification": gate.get("release_classification"),
+                    "gate_path": str(gate_path),
+                    "gate_sha256": sha256_file(gate_path) if gate_path.is_file() else None,
+                    "production_ready": False,
+                }
             gate_path = self.package / "G7E_B_R6_REAL_REVIEW_RELEASE_GATE.json"
             failures: list[str] = []
             gate: Mapping[str, Any] = {}
@@ -1291,10 +1345,11 @@ class TemporalReviewStore:
         mode: str,
         *,
         expected_increment: int,
+        write: bool = True,
     ) -> dict[str, Any]:
         draft = copy.deepcopy(dict(document))
         burst_id = str(draft["burst_id"])
-        path = self._root(mode) / "drafts" / f"{burst_id}.json"
+        path = contained_path(self._root(mode), "drafts", f"{burst_id}.json")
         draft["draft_version"] = int(draft.get("draft_version", 0)) + expected_increment
         draft["updated_at_utc"] = utc_now()
         draft["draft_content_sha256"] = self._r6_content_digest(draft)
@@ -1306,8 +1361,10 @@ class TemporalReviewStore:
                 "draft_content_sha256": draft["draft_content_sha256"],
             }
         )
-        atomic_write(path, canonical_bytes(draft))
-        draft["server_file_sha256"] = sha256_file(path)
+        data = canonical_bytes(draft)
+        if write:
+            atomic_write(path, data)
+        draft["server_file_sha256"] = hashlib.sha256(data).hexdigest()
         return draft
 
     def apply_browser_action(self, payload: Mapping[str, Any], mode: str) -> dict[str, Any]:
@@ -1322,12 +1379,31 @@ class TemporalReviewStore:
         if self.canonical_contract is None or self.action_contract_sha256 is None:
             raise ValueError("R6 contracts are unavailable")
         root = self._root(mode)
-        idempotency_key = str(payload.get("idempotency_key", ""))
-        ledger_path = root / "action_idempotency" / f"{idempotency_key}.json"
-        if idempotency_key and ledger_path.is_file():
+        action_id, idempotency_key = validate_action_envelope(payload, R6_ACTION_TYPES)
+        action_bytes = canonical_bytes(dict(payload))
+        semantic_payload = {
+            key: payload[key]
+            for key in (
+                "review_revision",
+                "contract_hash",
+                "mode",
+                "tranche_id",
+                "burst_id",
+                "question_instance_key",
+                "action_type",
+                "payload",
+            )
+        }
+        action_envelope_sha256 = hashlib.sha256(action_bytes).hexdigest()
+        action_semantic_sha256 = hashlib.sha256(canonical_bytes(semantic_payload)).hexdigest()
+        recover_action_transactions(root)
+        ledger_path = contained_path(root, "action_idempotency", f"{idempotency_key}.json")
+        if ledger_path.is_file():
             ledger = read_json(ledger_path)
             if ledger.get("action_id") != payload.get("action_id"):
                 raise ValueError("action idempotency key is bound to another action")
+            if ledger.get("action_semantic_sha256") != action_semantic_sha256:
+                raise ValueError("action ID is already bound to different semantic content")
             restored = self.draft(mode, burst_id)
             if restored is None or restored.get("draft_content_sha256") != ledger.get("result_draft_sha256"):
                 raise ValueError("idempotent action result no longer matches canonical draft")
@@ -1348,8 +1424,7 @@ class TemporalReviewStore:
             self.canonical_contract,
             self.action_contract_sha256,
         )
-        persisted = self._persist_r6_draft(reduced, mode, expected_increment=1)
-        action_id = str(payload["action_id"])
+        persisted = self._persist_r6_draft(reduced, mode, expected_increment=1, write=False)
         receipt = {
             "schema_version": R6_ACTION_RECEIPT_SCHEMA,
             "receipt_id": f"action-ack-{action_id}",
@@ -1366,20 +1441,39 @@ class TemporalReviewStore:
             "created_at_utc": utc_now(),
             "production_ready": False,
         }
-        receipt_path = root / "receipts" / "actions" / f"{receipt['receipt_id']}.json"
-        atomic_write(receipt_path, canonical_bytes(receipt))
+        receipt_bytes = canonical_bytes(receipt)
         ledger = {
             "schema_version": "football_intelligence.g7e_b_r6.action_idempotency.v1",
             "idempotency_key": idempotency_key,
             "action_id": action_id,
             "action_receipt_id": receipt["receipt_id"],
-            "action_receipt_sha256": sha256_file(receipt_path),
+            "action_receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "action_envelope_sha256": action_envelope_sha256,
+            "action_semantic_sha256": action_semantic_sha256,
             "result_draft_revision": persisted["draft_version"],
             "result_draft_sha256": persisted["draft_content_sha256"],
             "created_at_utc": utc_now(),
             "production_ready": False,
         }
-        atomic_write(ledger_path, canonical_bytes(ledger))
+        persisted_for_disk = copy.deepcopy(persisted)
+        persisted_for_disk.pop("server_file_sha256", None)
+        ActionTransaction(root, action_id).commit(
+            draft_relative=f"drafts/{burst_id}.json",
+            draft_bytes=canonical_bytes(persisted_for_disk),
+            receipt_relative=f"receipts/actions/{receipt['receipt_id']}.json",
+            receipt_bytes=receipt_bytes,
+            ledger_relative=f"action_idempotency/{idempotency_key}.json",
+            ledger_bytes=canonical_bytes(ledger),
+            transaction_context={
+                "previous_draft_revision": current["draft_version"],
+                "previous_draft_sha256": current["draft_content_sha256"],
+                "action_envelope_sha256": action_envelope_sha256,
+                "action_semantic_sha256": action_semantic_sha256,
+                "next_draft_revision": persisted["draft_version"],
+                "next_draft_sha256": persisted["draft_content_sha256"],
+            },
+            fail_after=self.action_transaction_fail_after,
+        )
         return {
             "ok": True,
             "idempotent_replay": False,
@@ -3085,17 +3179,32 @@ def create_server(
                 return self.send_json(200, state)
             if route.startswith("/assets/"):
                 relative = Path(unquote(route.removeprefix("/assets/")))
-                candidate = (resolved_asset_root / relative).resolve()
-                if resolved_asset_root not in candidate.parents or not candidate.is_file():
+                try:
+                    candidate = contained_path(resolved_asset_root, relative)
+                except ValueError:
+                    return self.send_json(404, {"error": "asset not found"})
+                if not candidate.is_file():
                     return self.send_json(404, {"error": "asset not found"})
                 mime = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+                return self.send_bytes(200, candidate.read_bytes(), mime)
+            if route.startswith("/review-assets/"):
+                relative = Path(unquote(route.removeprefix("/review-assets/")))
+                visual_root = contained_path(package, "review_assets")
+                try:
+                    candidate = contained_path(visual_root, relative)
+                except ValueError:
+                    return self.send_json(404, {"error": "review asset not found"})
+                if not candidate.is_file():
+                    return self.send_json(404, {"error": "review asset not found"})
+                mime = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+                if not mime.startswith("image/"):
+                    return self.send_json(415, {"error": "review asset is not an image"})
                 return self.send_bytes(200, candidate.read_bytes(), mime)
             return self.send_json(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = read_json_request(self)
                 route = urlparse(self.path).path
                 mode = str(payload.get("mode", "real"))
                 if route == "/api/relationship-compatibility":
@@ -3169,6 +3278,10 @@ def create_server(
                 if route == "/api/acceptance/complete-practice":
                     return self.send_json(200, store.complete_acceptance_practice())
                 return self.send_json(404, {"error": "not found"})
+            except RequestBodyTooLarge as exc:
+                return self.send_json(413, {"ok": False, "error_code": "REQUEST_BODY_TOO_LARGE", "error": str(exc)})
+            except UnsupportedMediaType as exc:
+                return self.send_json(415, {"ok": False, "error_code": "UNSUPPORTED_MEDIA_TYPE", "error": str(exc)})
             except InterruptedAcknowledgement as exc:
                 print(
                     f"POST /api/save HTTP 503 event_id={exc.event_id} error_code=ACKNOWLEDGEMENT_INTERRUPTED",

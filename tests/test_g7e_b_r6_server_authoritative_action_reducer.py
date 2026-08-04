@@ -167,6 +167,10 @@ def test_duplicate_action_is_idempotent_and_stale_concurrent_action_fails(tmp_pa
     second = reviewer.apply_browser_action(action, "real")
     assert second["idempotent_replay"] is True
     assert first["draft"]["draft_content_sha256"] == second["draft"]["draft_content_sha256"]
+    conflicting_duplicate = copy.deepcopy(action)
+    conflicting_duplicate["payload"] = {"value": "ONE_RELEVANT_MATCH_PERSON"}
+    with pytest.raises(ValueError, match="different semantic content"):
+        reviewer.apply_browser_action(conflicting_duplicate, "real")
     stale = copy.deepcopy(action)
     stale["action_id"] = str(uuid.uuid4())
     stale["idempotency_key"] = stale["action_id"]

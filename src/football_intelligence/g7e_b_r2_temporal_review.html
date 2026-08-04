@@ -53,6 +53,13 @@
           <button id="resetViewButton" type="button">Reset</button>
           <button id="zoomSubjectButton" type="button">Zoom to Subject A</button>
           <button id="fullScreenButton" type="button">Full screen</button>
+          <fieldset class="visual-mode-switch" aria-label="Review image appearance">
+            <legend>Image</legend>
+            <button id="visualModeAuto" type="button" data-visual-mode="AUTO">Auto</button>
+            <button id="visualModeOriginal" type="button" data-visual-mode="ORIGINAL">Original</button>
+            <button id="visualModeEnhanced" type="button" data-visual-mode="ENHANCED">Enhanced</button>
+          </fieldset>
+          <output id="visualModeStatus" class="visual-mode-status">Auto</output>
           <output id="zoomPercent" class="zoom-percent">100%</output>
           <label class="lock-view"><input id="lockViewToggle" type="checkbox" checked> Lock view across frames</label>
           <span class="mapping-badge">Source mapping <b id="mappingState">CHECKING</b></span>

@@ -1,136 +1,71 @@
-# SoccerTrack v2
+# Football Intelligence Infrastructure
 
-A full-pitch, multi-view soccer dataset for **Game State Reconstruction (GSR)**, **Ball Action Spotting (BAS)**, and **Multi-Object Tracking (MOT)** — plus the toolkit used to build it.
+This repository is the code, contracts, and test infrastructure for a privacy-bounded football-video observation research programme. It develops auditable proposal, calibration, human-review, and temporal-reasoning components while keeping match media, human decisions, model weights, and experiment outputs outside Git.
 
-- **Paper (arXiv preprint)**: <https://arxiv.org/abs/2508.01802>
-- **Dataset landing page**: <https://atomscott.github.io/SoccerTrack-v2/>
-- **Hugging Face dataset**: <https://huggingface.co/datasets/atomscott/soccertrack-v2>
-- **SoccerTrack Challenge 2025 (MOT)**: <https://sites.google.com/g.sp.m.is.nagoya-u.ac.jp/stc2025>
+Current status: development and human review only. `production_ready=false`.
 
-10 full-length panoramic 4K matches, with per-frame GSR annotations (2D pitch coordinates, jersey-based player IDs, roles, teams) and BAS labels for 12 action classes (Pass, Drive, Header, High Pass, Out, Cross, Throw In, Shot, Ball Player Block, Player Successful Tackle, Free Kick, Goal).
+## Safety and data boundary
+
+- Git contains source, tests, schemas, compact documentation, and lightweight configuration.
+- Match media, datasets, experiments, model weights, browser decision roots, immutable events, and receipts stay in the external project-data root.
+- Validation and sealed-holdout media are accessed only by an explicitly authorised stage.
+- Temporal labels use burst-local subjects only; they are not player identities or tracks.
+- No development result is promoted automatically.
+
+See [AGENTS.md](AGENTS.md) and [the safety contract](docs/football_intelligence/SAFETY_CONTRACT.md) before running a pipeline or reviewer.
+
+## Local setup
+
+Python 3.12 and `uv` are required.
+
+```powershell
+uv sync
+uv run fi-pipeline --help
+```
+
+Smaller dependency groups are available for bounded work:
+
+```powershell
+uv sync --only-group reviewer --only-group dev
+uv sync --group cv-gpu
+uv sync --group research
+```
+
+Reviewer release acceptance requires the authorised local Windows workstation, protected external assets, Microsoft Edge, and temporary decision roots. Hosted CI deliberately does not receive those assets.
 
 ## Repository layout
 
-```
-.
-├── docs/          # public landing page (GitHub Pages) + developer docs + leaderboards
-├── src/           # core Python modules (calibration, tracking, data_utils, evaluation, ...)
-├── scripts/       # shell pipeline + one-off Python scripts
-├── shell_scripts/ # additional shell helpers
-├── baselines/     # minimal starter kits for GSR / BAS / MOT
-├── configs/       # configuration files
-├── notebooks/     # Jupyter notebooks (quickstart + analyses)
-├── diagrams/      # architecture / pipeline diagrams
-├── pyproject.toml # dependencies (managed by uv)
-├── uv.lock        # pinned lockfile
-├── Makefile       # serve docs, format
-├── AGENTS.md      # working rules (workflow, conventions, commands)
-├── CONTRIBUTING.md# how external contributors land a change
-├── LICENSE        # MIT (code)
-├── LICENSE-DATA   # CC BY 4.0 (dataset)
-└── TODO.md        # → docs/TODO.md
+```text
+src/                         reusable Python and reviewer runtime code
+scripts/                     deterministic build, audit, and release tools
+tests/                       focused and CPU-safe regression tests
+docs/football_intelligence/  canonical project state and safety contracts
+configs/                     lightweight pipeline configuration
+baselines/                   retained upstream starter material
 ```
 
-The **journal paper** (Pattern Analysis and Applications) lives in a separate private repo (`AtomScott/soccertrack-v2-paper`) until acceptance; arXiv preprint above is the public version.
+The external sibling directories `matches/`, `datasets/`, `experiments/`, and `models/` are not repository content.
 
-## Quick start
+## Current reviewer strand
 
-```bash
-git clone https://github.com/AtomScott/SoccerTrack-v2.git
-cd SoccerTrack-v2
+The active temporal-review architecture uses server-authoritative, versioned, idempotent browser actions; recoverable draft/receipt/ledger persistence; immutable final events and acknowledgements; hash-bound source-frame derivatives; and exact refresh restoration. The R6.1 release adds review-only Original, Enhanced, and Auto display modes without changing source truth, dimensions, or coordinates.
 
-uv sync                                 # creates .venv and installs deps from uv.lock
-source .venv/bin/activate
-```
+Canonical status and the authorised next action are in [CURRENT_STATE.md](docs/football_intelligence/CURRENT_STATE.md) and [NEXT_STAGE.md](docs/football_intelligence/NEXT_STAGE.md).
 
-Requires Python 3.12+ and [`uv`](https://github.com/astral-sh/uv).
+## Upstream SoccerTrack v2
 
-## Common commands
+This work retains and extends code from the upstream [SoccerTrack v2](https://github.com/AtomScott/SoccerTrack-v2) dataset and toolkit by Atom Scott and collaborators. The upstream project provides full-pitch panoramic football data and tooling for Game State Reconstruction, Ball Action Spotting, and Multi-Object Tracking:
 
-```bash
-make help            # list all targets
-make serve-docs      # serve docs/ at http://localhost:8000
-make format          # ruff autofix on src/
-```
+- [paper](https://arxiv.org/abs/2508.01802)
+- [dataset page](https://atomscott.github.io/SoccerTrack-v2/)
+- [Hugging Face dataset](https://huggingface.co/datasets/atomscott/soccertrack-v2)
 
-## M5 visual-only infrastructure
+The Python import package remains `football_intelligence`; upstream package names are not renamed in this stage.
 
-The M5 macro-stage begins with read-only infrastructure for safe replay and validation. It separates the repository root from the external artifact root, then writes canonical baseline captures under `matches/128058/runs/step_m5/02_infrastructure_hardening/runs`. This stage does not rebuild Step1G, M3T, M4, raw-video, or manual-decision artifacts, and it keeps the baseline `VISUAL_ONLY_NOT_METRIC`, `production_ready=false`, `no_auto_promotion=true`, and `human_approved=false`.
+## Licence and attribution
 
-M5.2 is preserved as package-clone parity verification: it proved isolation, integrity, comparison, and immutability, but it did not prove algorithmic M4 reconstruction. M5.2R is the corrective true reconstruction stage under `matches/128058/runs/step_m5/04_true_m4_reconstruction`; it regenerates run-local M1 nodes from frozen F3/G inputs, rebuilds M4 rows from M3T pathlets/edges/decisions, rerenders visual evidence from source frames, and only then compares to the preserved M4 oracle.
-
-```bash
-fi-pipeline config validate --config configs/pipeline/visual_only_v1.yaml --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence>
-fi-pipeline baseline capture --config configs/pipeline/visual_only_v1.yaml --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence> --legacy-m4-root <artifact-root>/matches/128058/calibration/step2_visual_continuity/step2m4_sparse_handoff_package
-fi-pipeline baseline validate --run-dir <artifact-root>/matches/128058/runs/step_m5/02_infrastructure_hardening/runs/<generated_m5_baseline_run_id> --repo-root <SoccerTrack-v2> --artifact-root <football-intelligence>
-```
-
-## Ground-truth pipeline
-
-The toolkit produces per-match ground truth from raw BePro panoramic recordings. Full details in [`docs/ground_truth_creation.md`](docs/ground_truth_creation.md). One-shot:
-
-```bash
-./scripts/create_ground_truth.sh 117093          # single match
-./scripts/create_ground_truth.sh 117093 117094   # multiple matches
-```
-
-Stage-by-stage scripts live under `scripts/` (`trim_video_into_halves.sh`, `convert_raw_to_pitch_plane.sh`, `calibrate_camera.sh`, `convert_pitch_plane_to_image_plane.sh`, `generate_detections.sh`, `convert_coordinates_to_bboxes.sh`, `plot_coordinates_on_video.sh`).
-
-## Documentation
-
-| Topic | Doc |
-|---|---|
-| Quickstart notebook | [`notebooks/quickstart.ipynb`](notebooks/quickstart.ipynb) |
-| GSR annotation format | [`docs/format-gsr.md`](docs/format-gsr.md) |
-| BAS annotation format | [`docs/format-bas.md`](docs/format-bas.md) |
-| Baseline starter kits | [`baselines/README.md`](baselines/README.md) |
-| Leaderboards | [`docs/leaderboard.html`](docs/leaderboard.html) |
-| Project setup | [`docs/setup.md`](docs/setup.md) |
-| CLI reference | [`docs/cli.md`](docs/cli.md) |
-| Configuration | [`docs/configuration.md`](docs/configuration.md) |
-| Data processing | [`docs/data_processing.md`](docs/data_processing.md) |
-| Ground-truth creation | [`docs/ground_truth_creation.md`](docs/ground_truth_creation.md) |
-| Camera calibration | [`docs/calibration.md`](docs/calibration.md) |
-| Visualization | [`docs/visualization.md`](docs/visualization.md) |
-| Landing page (HTML) | [`docs/index.html`](docs/index.html) / [`docs/index-ja.html`](docs/index-ja.html) |
-
-## Tasks
-
-- **GSR** — see [`docs/task-gsr.html`](docs/task-gsr.html). Reconstruct 2D pitch state (positions + IDs + roles) from panoramic video. Inspired by [SoccerNet GSR](https://www.soccer-net.org/tasks/game-state-reconstruction).
-- **BAS** — see [`docs/task-bas.html`](docs/task-bas.html). Detect and classify 12 ball-action classes. Inspired by [SoccerNet BAS](https://www.soccer-net.org/tasks/ball-action-spotting).
-- **MOT** — see [`docs/task-mot.html`](docs/task-mot.html). Persistent player tracking; basis of the [SoccerTrack Challenge 2025](https://sites.google.com/g.sp.m.is.nagoya-u.ac.jp/stc2025).
-
-## Open work
-
-Live checklist: [`docs/TODO.md`](docs/TODO.md) (dataset release, format docs, landing page polish, baselines, CI).
+Repository code is covered by [MIT](LICENSE). SoccerTrack dataset material is covered by [CC BY 4.0](LICENSE-DATA). Dataset files are not distributed from this repository. Cite the upstream SoccerTrack v2 paper when using its data or original toolkit.
 
 ## Contributing
 
-PRs welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and skim [`AGENTS.md`](AGENTS.md) — together they cover the git workflow, issue triage, and code conventions.
-
-## Citation
-
-If you use SoccerTrack v2 in your research, please cite:
-
-```bibtex
-@article{scott2025soccertrackv2,
-  title   = {{SoccerTrack v2}: A Full-Pitch Multi-View Soccer Dataset for Game State Reconstruction},
-  author  = {Scott, Atom and Uchida, Ikuma and Kuroda, Kento and Kim, Yufi and Fujii, Keisuke},
-  journal = {arXiv preprint arXiv:2508.01802},
-  year    = {2025},
-  url     = {https://arxiv.org/abs/2508.01802}
-}
-```
-
-The journal version (Pattern Analysis and Applications) is in preparation; bibtex will be updated on acceptance.
-
-## License
-
-- **Code** (this repo's source code, landing page, scripts, loaders, baselines): [MIT](LICENSE).
-- **Dataset** (videos + GSR / BAS / MOT annotations, distributed via Hugging Face and Google Drive): [CC BY 4.0](LICENSE-DATA).
-
-Both permit commercial use. Please cite the paper if you use the dataset in research.
-
-## Contact
-
-Atom Scott — <atom.james.scott@gmail.com> — Nagoya University / [Playbox](https://playbox.co.jp/).
+Read [CONTRIBUTING.md](CONTRIBUTING.md). Never attach private footage, human-decision payloads, credentials, or model weights to a pull request or issue.

@@ -20,6 +20,7 @@ from football_intelligence.g7e_b_r5_reviewer_state import (
     question_family,
     question_key,
 )
+from football_intelligence.temporal_reviewer.contracts import validate_action_envelope
 
 R6_REVIEW_REVISION = "G7E_B_R6_SERVER_AUTHORITATIVE_ACTION_REDUCER_V1"
 R6_WORKING_DRAFT_SCHEMA = "football_intelligence.g7e_b_r6.server_draft.v1"
@@ -30,7 +31,6 @@ R6_CONTRACT_NAME = "G7E_B_R6_SERVER_AUTHORITATIVE_ACTION_REDUCER_V1"
 
 ACTION_TYPES = {
     "ANSWER_QUESTION",
-    "CLEAR_ANSWER",
     "SET_SUBJECT_LOCATION",
     "CLEAR_SUBJECT_LOCATION",
     "SELECT_CANDIDATE",
@@ -496,22 +496,13 @@ def apply_action(
         raise ValueError("R6 action revision mismatch")
     if action.get("contract_hash") != action_contract_sha256:
         raise ValueError("R6 action contract hash mismatch")
-    if action.get("action_type") not in ACTION_TYPES:
-        raise ValueError("unsupported R6 action type")
+    action_id, idempotency_key = validate_action_envelope(action, ACTION_TYPES)
     if action.get("burst_id") != draft.get("burst_id") or action.get("mode") != draft.get("mode"):
         raise ValueError("R6 action case identity mismatch")
     if int(action.get("expected_draft_revision", -1)) != int(draft.get("draft_version", -2)):
         raise ValueError("STALE_DRAFT_REVISION")
     if action.get("expected_draft_sha256") != draft.get("draft_content_sha256"):
         raise ValueError("STALE_DRAFT_HASH")
-    action_id = str(action.get("action_id", ""))
-    idempotency_key = str(action.get("idempotency_key", ""))
-    try:
-        uuid.UUID(action_id)
-    except ValueError as exc:
-        raise ValueError("invalid action ID") from exc
-    if not idempotency_key:
-        raise ValueError("action idempotency key is required")
     current = _validate_current_action(draft, action)
     action_type = str(action["action_type"])
     payload = action.get("payload", {})
@@ -521,9 +512,6 @@ def apply_action(
 
     if action_type == "ANSWER_QUESTION":
         _answer_question(draft, case, canonical_contract, current, payload.get("value"))
-    elif action_type == "CLEAR_ANSWER":
-        draft["answered_domain_values"].pop(current, None)
-        draft["question_lifecycle"][current] = "ACTIVE"
     elif action_type == "SET_SUBJECT_LOCATION":
         if family not in {"anchor", "location"}:
             raise ValueError("subject location action is not valid here")

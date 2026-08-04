@@ -1,7 +1,7 @@
 [project]
 name = "soccertrack-v2"
 version = "0.1.0"
-description = "Add your description here"
+description = "Privacy-bounded infrastructure for auditable football video observation research"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -44,8 +44,25 @@ dependencies = [
 fi-pipeline = "football_intelligence.cli.app:app"
 
 [dependency-groups]
+reviewer = [
+    "numpy>=1.26.4",
+    "opencv-python>=4.10.0.84",
+    "pytest>=8.3.4",
+]
+cv-gpu = [
+    "torch==2.12.1",
+    "torchvision==0.27.1",
+    "ultralytics>=8.3.35",
+]
+research = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.9.0",
+    "pandas>=2.2.0",
+    "scikit-learn>=1.5.2",
+]
 dev = [
     "pytest>=8.3.4",
+    "ruff>=0.7.4",
 ]
 
 # Windows GPU workstations use the official CUDA 13.0 PyTorch wheels.  The

@@ -14,6 +14,7 @@ const ui = {};
   "playButton", "nextFrameButton", "centreFrameButton", "lastFrameButton", "timeline", "focusWrap",
   "focusCanvas", "focusAssetState", "focusFitButton", "focusZoomOutButton", "focusZoomInButton",
   "focusResetButton", "focusZoomSubjectButton", "focusZoomPercent", "subjectReference", "questionStep",
+  "visualModeAuto", "visualModeOriginal", "visualModeEnhanced", "visualModeStatus",
   "subjectPill", "questionLegend", "questionKicker", "questionTitle", "questionHelp", "answerArea",
   "backButton", "continueButton", "startRealButton", "startPracticeButton", "completionTitle",
   "completionCount", "trancheReceipt", "lastEvent", "globalReceiptRow", "globalReceipt", "pauseMessage",
@@ -27,7 +28,9 @@ const app = {
   assetReady: false, mappingVerified: false, pending: false, readOnly: false,
   inputMode: "pan", view: { zoom: 1, centerX: .5, centerY: .5 },
   focusView: { zoom: 1 }, drag: null, productionBundleSha256: null,
+  visualPreference: localStorage.getItem("fi.temporal_review.visual_mode") || "AUTO", resolvedVisualMode: "ORIGINAL",
 };
+if (!["AUTO", "ORIGINAL", "ENHANCED"].includes(app.visualPreference)) app.visualPreference = "AUTO";
 
 function block(message, kind = "runtime") {
   ui.blockingError.classList.remove("hidden");
@@ -97,7 +100,9 @@ async function dispatch(actionType, payload = {}, questionKey = app.draft.curren
 
 function setControls(enabled) {
   document.querySelectorAll("button").forEach((button) => {
-    if (!button.closest(".topbar") && !button.closest(".help-drawer")) button.disabled = !enabled || app.readOnly;
+    if (!button.closest(".topbar") && !button.closest(".help-drawer") && !button.closest(".visual-mode-switch")) {
+      button.disabled = !enabled || app.readOnly;
+    }
   });
 }
 
@@ -239,9 +244,39 @@ async function saveFinal() {
 async function advance() { if (familyOf() === "summary") return saveFinal(); await dispatch("NAVIGATE_FORWARD"); }
 async function back() { await dispatch("NAVIGATE_BACK"); }
 
+function resolvedVisualMode(frame) {
+  const preference = ["AUTO", "ORIGINAL", "ENHANCED"].includes(app.visualPreference) ? app.visualPreference : "AUTO";
+  return preference === "AUTO" ? (frame.auto_visual_mode || "ORIGINAL") : preference;
+}
+function visualRecord(frame) {
+  const mode = resolvedVisualMode(frame);
+  const record = frame.visual_modes?.[mode] || {
+    panorama_url: frame.panorama_url, panorama_sha256: frame.panorama_sha256,
+    focus_url: frame.focus_url, focus_sha256: frame.focus_sha256,
+  };
+  return { mode, record };
+}
+function setAssetMessage(element, message) {
+  element.textContent = message;
+  element.classList.toggle("visible", Boolean(message));
+}
+function updateVisualModeUi(frame = app.current?.frames?.[app.frame]) {
+  const resolved = frame ? resolvedVisualMode(frame) : "ORIGINAL";
+  app.resolvedVisualMode = resolved;
+  document.querySelectorAll("[data-visual-mode]").forEach((button) => button.classList.toggle("active", button.dataset.visualMode === app.visualPreference));
+  ui.visualModeStatus.textContent = app.visualPreference === "AUTO" ? `Auto · ${resolved === "ENHANCED" ? "Enhanced" : "Original"}` : resolved === "ENHANCED" ? "Enhanced · review only" : "Original · source truth";
+}
+async function setVisualPreference(mode) {
+  if (!["AUTO", "ORIGINAL", "ENHANCED"].includes(mode) || app.pending) return;
+  app.visualPreference = mode;
+  localStorage.setItem("fi.temporal_review.visual_mode", mode);
+  updateVisualModeUi();
+  await loadFrame(app.frame);
+}
 async function verifiedImage(frame, kind) {
-  const url = kind === "focus" ? frame.focus_url : frame.panorama_url;
-  const expected = kind === "focus" ? frame.focus_sha256 : frame.panorama_sha256;
+  const { record } = visualRecord(frame);
+  const url = record[`${kind}_url`];
+  const expected = record[`${kind}_sha256`];
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) throw new Error(`${kind} asset HTTP/MIME failure`);
   const bytes = await response.arrayBuffer(); const digest = await sha256Hex(bytes);
@@ -251,14 +286,14 @@ async function verifiedImage(frame, kind) {
 }
 async function loadFrame(sequence) {
   app.frame = Math.max(0, Math.min(8, sequence)); app.assetReady = false; app.mappingVerified = false;
-  ui.assetState.textContent = "Loading verified football frame…"; ui.focusAssetState.textContent = "Loading verified detail…";
+  setAssetMessage(ui.assetState, "Loading verified football frame…"); setAssetMessage(ui.focusAssetState, "Loading verified detail…");
   const frame = app.current.frames[app.frame];
   try {
     [app.image, app.focusImage] = await Promise.all([verifiedImage(frame, "panorama"), verifiedImage(frame, "focus")]);
     app.assetReady = true; app.mappingVerified = frame.source_width === app.current.source_width && frame.source_height === app.current.source_height;
     if (!app.mappingVerified || !app.image.width || !app.image.height) throw new Error("decoded frame mapping failed");
-    ui.assetState.textContent = ""; ui.focusAssetState.textContent = ""; ui.mappingState.textContent = "VERIFIED"; draw(); renderTimeline();
-  } catch (error) { block(`IMAGE_ASSET_ERROR · ${error.message}`, "image-asset"); }
+    setAssetMessage(ui.assetState, ""); setAssetMessage(ui.focusAssetState, ""); ui.mappingState.textContent = "VERIFIED"; updateVisualModeUi(frame); draw(); renderTimeline();
+  } catch (error) { setAssetMessage(ui.assetState, "Image unavailable"); setAssetMessage(ui.focusAssetState, "Image unavailable"); setControls(false); block(`IMAGE_ASSET_ERROR · ${error.message}`, "image-asset"); }
 }
 async function alignFrameToQuestion() { const part = parseKey(); if (Number.isInteger(part.frame) && part.frame !== app.frame) await loadFrame(part.frame); }
 
@@ -312,11 +347,11 @@ async function handleCanvasClick(event) {
     return dispatch(selected ? "DESELECT_CANDIDATE" : "SELECT_CANDIDATE", { candidate_id: hits[0].candidate_id });
   }
 }
-function renderTimeline() { ui.timeline.innerHTML = app.current.frames.map((frame, index) => `<button type="button" data-frame="${index}" class="${index === app.frame ? "active" : ""}"><b>${index + 1}</b><span>${frame.relative_offset_seconds > 0 ? "+" : ""}${frame.relative_offset_seconds.toFixed(1)}s</span></button>`).join(""); ui.timeline.querySelectorAll("[data-frame]").forEach((button) => { button.onclick = () => loadFrame(Number(button.dataset.frame)); }); }
+function renderTimeline() { ui.timeline.innerHTML = app.current.frames.map((frame, index) => { const { mode, record } = visualRecord(frame); return `<button type="button" data-frame="${index}" data-frame-visual-mode="${mode}" class="${index === app.frame ? "active" : ""}"><img src="${record.panorama_url}" alt="Frame ${index + 1} ${mode.toLowerCase()} view"><b>${index + 1}</b><span>${frame.relative_offset_seconds > 0 ? "+" : ""}${frame.relative_offset_seconds.toFixed(1)}s</span></button>`; }).join(""); ui.timeline.querySelectorAll("[data-frame]").forEach((button) => { button.onclick = () => loadFrame(Number(button.dataset.frame)); }); }
 
 async function loadMode(mode) {
   clearBlock(); app.mode = mode; const bootstrap = await getJson(`/api/bootstrap?mode=${encodeURIComponent(mode)}`);
-  ui.previewBanner.textContent = "R6 RELEASE PREVIEW — NO NEW REAL HUMAN TRUTH";
+  ui.previewBanner.textContent = "R6.1 FINAL-BYTE REVIEW PREVIEW — NO NEW REAL HUMAN TRUTH";
   ui.previewBanner.classList.toggle("hidden", bootstrap.acceptance_temporary !== true);
   if (bootstrap.release_gate?.required && !bootstrap.release_gate.valid && mode === "real" && bootstrap.state?.editable !== true) throw new Error(`REAL_REVIEW_TEMPORARILY_LOCKED · ${bootstrap.release_gate.failures.join(", ")}`);
   app.cases = bootstrap.cases; app.contract = bootstrap.canonical_contract; app.contractHash = bootstrap.canonical_contract_sha256; app.actionContract = bootstrap.server_action_contract; app.actionContractHash = bootstrap.server_action_contract_sha256;
@@ -331,6 +366,9 @@ function renderCompletion(state) { ui.reviewShell.classList.add("hidden"); ui.we
 
 ui.startRealButton.onclick = () => loadMode("real").catch((error) => block(error.message, "boot"));
 ui.startPracticeButton.onclick = () => loadMode("practice").catch((error) => block(error.message, "boot"));
+ui.visualModeAuto.onclick = () => setVisualPreference("AUTO");
+ui.visualModeOriginal.onclick = () => setVisualPreference("ORIGINAL");
+ui.visualModeEnhanced.onclick = () => setVisualPreference("ENHANCED");
 ui.nextTrancheButton.onclick = async () => { try { await api("/api/tranche/start-next", { mode: "real", tranche_id: app.current.tranche_id }); await loadMode("real"); } catch (error) { block(`TRANCHE_START_ERROR · ${error.message}`, "server-action"); } };
 ui.continueButton.onclick = () => advance(); ui.backButton.onclick = () => back(); ui.panoramaCanvas.addEventListener("click", handleCanvasClick);
 ui.overlayToggle.onchange = draw; ui.subjectToggle.onchange = draw; ui.idToggle.onchange = draw;

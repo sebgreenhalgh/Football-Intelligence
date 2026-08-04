@@ -4,6 +4,7 @@
   "review_revision": "G7E_B_R6_SERVER_AUTHORITATIVE_ACTION_REDUCER_V1",
   "production_ready": false,
   "action_envelope_fields": [
+    "schema_version",
     "action_id",
     "idempotency_key",
     "review_revision",
@@ -20,7 +21,6 @@
   ],
   "action_types": {
     "ANSWER_QUESTION": "Atomically store one canonical domain answer and ANSWERED lifecycle.",
-    "CLEAR_ANSWER": "Remove one answer and reactivate its exact question.",
     "SET_SUBJECT_LOCATION": "Persist an anchor or frame-local source-coordinate subject location.",
     "CLEAR_SUBJECT_LOCATION": "Remove one source-coordinate subject location without changing unrelated truth.",
     "SELECT_CANDIDATE": "Select one exact frame-local frozen candidate.",

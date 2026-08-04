@@ -20,6 +20,9 @@ from typing import Any
 import cv2
 import websocket
 
+from football_intelligence.temporal_review import TemporalReviewStore
+from football_intelligence.temporal_reviewer.invariants import scan_persisted_invariants
+
 PROJECT = Path(r"C:\Users\sebgr\Documents\football-intelligence")
 REPO = PROJECT / "SoccerTrack-v2"
 PART7 = PROJECT / "experiments/football_observation_reasoner/part 7"
@@ -539,6 +542,11 @@ def acceptance() -> None:
         try:
             start_review(actions)
             for index in range(120):
+                # Final save can select the next burst before its verified images
+                # finish loading. Wait for the production READY state before the
+                # next real DOM answer so slower hash-bound derivatives cannot
+                # turn this corpus gate into a timing-dependent no-op click.
+                actions.wait_loaded()
                 current = str(actions.snapshot()["burst_id"])
                 before = len(actions.trace)
                 no_subject_route(actions, "NO")
@@ -564,9 +572,15 @@ def acceptance() -> None:
         global_paths = sorted(full_root.glob("receipts/global_completion/*.json"))
         if (len(event_paths), len(ack_paths), len(tranche_paths), len(global_paths)) != (120, 120, 6, 1):
             raise RuntimeError("full-browser receipt cardinality mismatch")
-        mismatch_count = sum(
-            any(value.startswith(("ANSWER_WITHOUT", "ANSWERED_LIFECYCLE", "HIDDEN_STALE")) for value in [])
-            for _ in event_paths
+        persisted_invariants = scan_persisted_invariants(
+            TemporalReviewStore(PACKAGE, full_root, full_practice, acceptance_mode=True), "real"
+        )
+        mismatch_count = int(persisted_invariants["discrepancy_count"])
+        if mismatch_count:
+            raise RuntimeError(f"persisted full-browser invariants failed: {persisted_invariants['discrepancies'][:5]}")
+        write_json(
+            R6 / "05_FULL_120_BURST_BROWSER_AUDIT/persisted_invariant_scan.json",
+            persisted_invariants,
         )
         full_audit = {
             "schema_version": "football_intelligence.g7e_b_r6.full_browser_audit.v1",
@@ -584,6 +598,8 @@ def acceptance() -> None:
                 json.dumps(full_trace, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest(),
             "zero_answer_lifecycle_mismatches": mismatch_count == 0,
+            "persisted_invariant_inspected_counts": persisted_invariants["inspected_counts"],
+            "persisted_invariant_discrepancy_count": mismatch_count,
             "zero_stale_state": True,
             "zero_duplicate_events": len({path.stem for path in event_paths}) == 120,
             "production_ready": False,

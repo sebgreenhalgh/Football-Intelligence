@@ -1,0 +1,83 @@
+name: quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  reviewer-and-core:
+    name: reviewer and CPU-safe core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate lock file
+        run: uv lock --check
+      - name: Install bounded CPU dependencies
+        run: uv sync --only-group reviewer --only-group dev --no-install-project
+      - name: Enforce repository data boundaries
+        run: uv run --no-sync python scripts/check_repository_data_boundaries.py
+      - name: Ruff lint
+        run: >-
+          uv run --no-sync ruff check
+          src/football_intelligence/temporal_reviewer
+          src/football_intelligence/temporal_review.py
+          src/football_intelligence/g7e_b_r6_action_reducer.py
+          scripts/g7e_b_r6_capture_edge_acceptance.py
+          scripts/g7e_b_r6_1_build_final_byte_reviewer.py
+          scripts/g7e_b_r6_1_capture_visual_acceptance.py
+          scripts/g7e_b_r6_1_finalize_release.py
+          scripts/g7e_b_r6_1_run_fault_security_challenge.py
+          scripts/g7e_b_r6_1_run_final_edge_acceptance.py
+          scripts/g7e_b_r6_1_run_focused_tests.py
+          scripts/g7e_b_r6_1_verify_real_resume.py
+          scripts/audit_repository_history_privacy.py
+          scripts/check_repository_data_boundaries.py
+          tests/test_g7e_b_r6_1_final_byte_runtime.py
+          tests/test_g7e_b_r6_server_authoritative_action_reducer.py
+      - name: Ruff format check
+        run: >-
+          uv run --no-sync ruff format --check
+          src/football_intelligence/temporal_reviewer
+          src/football_intelligence/temporal_review.py
+          src/football_intelligence/g7e_b_r6_action_reducer.py
+          scripts/g7e_b_r6_capture_edge_acceptance.py
+          scripts/g7e_b_r6_1_build_final_byte_reviewer.py
+          scripts/g7e_b_r6_1_capture_visual_acceptance.py
+          scripts/g7e_b_r6_1_finalize_release.py
+          scripts/g7e_b_r6_1_run_fault_security_challenge.py
+          scripts/g7e_b_r6_1_run_final_edge_acceptance.py
+          scripts/g7e_b_r6_1_run_focused_tests.py
+          scripts/g7e_b_r6_1_verify_real_resume.py
+          scripts/audit_repository_history_privacy.py
+          scripts/check_repository_data_boundaries.py
+          tests/test_g7e_b_r6_1_final_byte_runtime.py
+          tests/test_g7e_b_r6_server_authoritative_action_reducer.py
+      - name: JavaScript syntax
+        run: node --check src/football_intelligence/g7e_b_r6_temporal_review.js
+      - name: Repository-contained temporal reviewer regressions
+        run: uv run --no-sync pytest -q tests/test_g7e_b_r6_1_final_byte_runtime.py
+      - name: CPU-safe contract tests
+        run: >-
+          uv run --no-sync pytest -q
+          tests/unit/core/test_fingerprints.py
+          tests/unit/core/test_path_roots.py
+
+# Protected video, private decision roots, and Microsoft Edge release acceptance
+# are intentionally excluded from hosted CI. Run the versioned R6.1 release
+# script on the authorised local Windows workstation against temporary roots.

@@ -3045,7 +3045,25 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+cv-gpu = [
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "ultralytics" },
+]
 dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+research = [
+    { name = "jupyter" },
+    { name = "matplotlib" },
+    { name = "pandas" },
+    { name = "scikit-learn" },
+]
+reviewer = [
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "numpy", version = "2.2.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
+    { name = "opencv-python" },
     { name = "pytest" },
 ]
 
@@ -3087,7 +3105,26 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.3.4" }]
+cv-gpu = [
+    { name = "torch", specifier = "==2.12.1", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "torchvision", specifier = "==0.27.1", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "ultralytics", specifier = ">=8.3.35" },
+]
+dev = [
+    { name = "pytest", specifier = ">=8.3.4" },
+    { name = "ruff", specifier = ">=0.7.4" },
+]
+research = [
+    { name = "jupyter", specifier = ">=1.1.1" },
+    { name = "matplotlib", specifier = ">=3.9.0" },
+    { name = "pandas", specifier = ">=2.2.0" },
+    { name = "scikit-learn", specifier = ">=1.5.2" },
+]
+reviewer = [
+    { name = "numpy", specifier = ">=1.26.4" },
+    { name = "opencv-python", specifier = ">=4.10.0.84" },
+    { name = "pytest", specifier = ">=8.3.4" },
+]
 
 [[package]]
 name = "soupsieve"

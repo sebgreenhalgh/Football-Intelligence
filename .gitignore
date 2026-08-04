@@ -26,15 +26,35 @@ Thumbs.db
 *.pfx
 
 # Large/generated football artifacts
-/matches/
+matches/
+datasets/
+experiments/
 data/
 outputs/
 overlays/
 videos/
+frames/
+crops/
 review_pack/
+review_packs/
 calibration/
 artifacts/
-models/*.pt
+models/
+weights/
+checkpoints/
+**/human_decisions/
+**/practice_decisions/
+**/temporary_decisions/
+**/browser_acceptance*/
+**/receipts/
+**/action_idempotency/
+**/action_transactions/
+**/.browser-profile*/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
 *.mp4
 *.mov
 *.avi
@@ -58,3 +78,7 @@ logs/
 _cleanup_quarantine_*/
 _archive_*/
 _tmp_*/
+.codex_tmp/
+.pytest_tmp_*/
+playwright-report/
+test-results/
