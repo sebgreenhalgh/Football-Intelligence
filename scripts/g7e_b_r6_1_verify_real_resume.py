@@ -90,7 +90,7 @@ def click_display_mode(cdp: Any, module: ModuleType, preference: str) -> dict[st
     )
     clicked = cdp.evaluate(
         f"(()=>{{const b=document.getElementById('visualMode{preference.title()}');"
-        "if(!b||b.disabled)return false;b.click();return true;}})()"
+        "if(!b||b.disabled)return false;b.click();return true;})()"
     )
     if clicked is not True:
         raise RuntimeError(f"display-only mode was unavailable: {preference}")

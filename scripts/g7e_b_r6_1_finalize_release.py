@@ -59,6 +59,20 @@ def write(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
+def remove_tree_after_process_exit(path: Path, timeout_seconds: float = 30.0) -> None:
+    """Remove a process worktree after Windows releases inherited log handles."""
+
+    deadline = time.monotonic() + timeout_seconds
+    while path.exists():
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
 def git(*arguments: str) -> str:
     return subprocess.check_output(["git", *arguments], cwd=REPO, text=True).strip()
 
@@ -253,7 +267,7 @@ def served_hashes() -> dict[str, str]:
             process.kill()
             process.wait(timeout=5)
         stream.close()
-        shutil.rmtree(temporary)
+        remove_tree_after_process_exit(temporary)
 
 
 def package_manifest() -> dict[str, Any]:
