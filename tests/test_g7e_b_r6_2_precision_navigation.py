@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
+
+import pytest
+
+from football_intelligence import temporal_review
+from football_intelligence.temporal_reviewer import persistence
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src/football_intelligence"
@@ -101,3 +107,23 @@ def test_r6_2_release_gate_is_fail_closed_and_nonproduction() -> None:
     assert "G7E_B_R6_2_REAL_REVIEW_RELEASE_GATE.json" in source
     assert "PASS_G7E_B_R6_2_PRECISION_ZOOM_PAN_READY_FOR_TRANCHE_1_RESUME" in source
     assert '"production_ready": False' in source
+
+
+def test_atomic_replace_retries_transient_windows_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "draft.json"
+    actual_replace = os.replace
+    attempts = 0
+
+    def transient_replace(source: str | Path, destination: str | Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 4:
+            raise PermissionError(5, "transient scanner lock")
+        actual_replace(source, destination)
+
+    monkeypatch.setattr(persistence.os, "replace", transient_replace)
+    temporal_review.atomic_write(target, b'{"safe":true}\n')
+    assert target.read_bytes() == b'{"safe":true}\n'
+    assert attempts == 4

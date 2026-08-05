@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
+import time
 from typing import Any, Mapping
 from football_intelligence.temporal_reviewer.contracts import canonical_action_uuid, contained_path
 
@@ -21,14 +23,31 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def replace_with_retry(source: str | Path, destination: str | Path, attempts: int = 20) -> None:
+    """Complete an atomic replace despite bounded transient Windows file locks."""
+
+    for attempt in range(attempts):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(min(0.01 * (2**attempt), 0.25))
+
+
 def _atomic_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    with temporary.open("wb") as stream:
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        replace_with_retry(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _read_journal(path: Path) -> dict[str, object]:

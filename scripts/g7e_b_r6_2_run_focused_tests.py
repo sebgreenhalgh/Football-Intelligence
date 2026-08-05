@@ -90,13 +90,13 @@ def main() -> None:
         run("git_diff_check", ["git", "diff", "--check", "HEAD"]),
     ]
     shutil.rmtree(pytest_base, ignore_errors=True)
-    if "95 passed" not in records[0]["stdout_tail"]:
-        raise RuntimeError(f"focused pytest count was not the frozen 95-test matrix: {records[0]['stdout_tail']}")
+    if "96 passed" not in records[0]["stdout_tail"]:
+        raise RuntimeError(f"focused pytest count was not the frozen 96-test matrix: {records[0]['stdout_tail']}")
     document = {
         "schema_version": "football_intelligence.g7e_b_r6_2.focused_tests.v1",
         "classification": "PASS_G7E_B_R6_2_FOCUSED_AND_INHERITED_TESTS",
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
-        "pytest_expected_count": 95,
+        "pytest_expected_count": 96,
         "pytest_paths": list(PYTEST_PATHS),
         "checks": records,
         "intentionally_excluded": [

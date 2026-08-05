@@ -45,7 +45,11 @@ from football_intelligence.temporal_reviewer.http_server import (
     UnsupportedMediaType,
     read_json_request,
 )
-from football_intelligence.temporal_reviewer.persistence import ActionTransaction, recover_action_transactions
+from football_intelligence.temporal_reviewer.persistence import (
+    ActionTransaction,
+    recover_action_transactions,
+    replace_with_retry,
+)
 
 REVIEW_ID = "G7E_B_TEMPORAL_BURST_REVIEW"
 REVIEW_REVISION = "G7E_B_TEMPORAL_BURST_REVIEW_V1"
@@ -167,7 +171,7 @@ def atomic_write(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        replace_with_retry(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
