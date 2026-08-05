@@ -84,6 +84,7 @@ def test_reviewer_exposes_required_precision_controls_and_help() -> None:
 
 def test_production_pointer_handler_has_click_drag_guard_and_independent_viewers() -> None:
     text = (SOURCE / "g7e_b_r6_temporal_review.js").read_text(encoding="utf-8")
+    acceptance = (ROOT / "scripts/g7e_b_r6_capture_edge_acceptance.py").read_text(encoding="utf-8")
     assert "const threshold = 5" in text
     assert "gesture.isPan || distance >= threshold" in text
     assert 'bindViewer("panorama")' in text
@@ -92,6 +93,8 @@ def test_production_pointer_handler_has_click_drag_guard_and_independent_viewers
     assert "event.button === 1" in text
     assert "R62Viewport.zoomAtLocal" in text
     assert "R62Viewport.panFromStart" in text
+    assert "open_edge_session" in acceptance
+    assert '"browser_restart_boundaries": [20, 40, 60, 80, 100]' in acceptance
 
 
 def test_server_serves_the_exact_viewport_module() -> None:

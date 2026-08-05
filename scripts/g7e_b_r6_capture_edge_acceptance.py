@@ -453,6 +453,33 @@ def edge_process(profile: Path, debug_port: int) -> subprocess.Popen[bytes]:
     )
 
 
+def open_edge_session(profile: Path, debug_port: int) -> tuple[subprocess.Popen[bytes], websocket.WebSocket, CDP]:
+    """Open one bounded Edge session with the production viewport."""
+
+    edge = edge_process(profile, debug_port)
+    socket = websocket.create_connection(wait_debugger(debug_port), timeout=30)
+    cdp = CDP(socket)
+    cdp.command("Page.enable")
+    cdp.command("Runtime.enable")
+    cdp.command(
+        "Emulation.setDeviceMetricsOverride",
+        {"width": 1920, "height": 1080, "deviceScaleFactor": 1, "mobile": False},
+    )
+    return edge, socket, cdp
+
+
+def close_edge_session(edge: subprocess.Popen[bytes], socket: websocket.WebSocket) -> None:
+    """Close one bounded Edge session without leaving acceptance processes."""
+
+    socket.close()
+    edge.terminate()
+    try:
+        edge.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        edge.kill()
+        edge.wait(timeout=5)
+
+
 def acceptance() -> None:
     real_before = inventory(ACTUAL_REAL)
     WORK.mkdir(parents=True, exist_ok=True)
@@ -460,14 +487,7 @@ def acceptance() -> None:
     for path in VISUALS.glob("*.png"):
         path.unlink()
     profile = WORK / "edge_profile"
-    edge = edge_process(profile, 9276)
-    socket = websocket.create_connection(wait_debugger(9276), timeout=30)
-    cdp = CDP(socket)
-    cdp.command("Page.enable")
-    cdp.command("Runtime.enable")
-    cdp.command(
-        "Emulation.setDeviceMetricsOverride", {"width": 1920, "height": 1080, "deviceScaleFactor": 1, "mobile": False}
-    )
+    edge, socket, cdp = open_edge_session(profile, 9276)
     actions = BrowserActions(cdp)
     route_results: list[dict[str, Any]] = []
     try:
@@ -531,6 +551,11 @@ def acceptance() -> None:
             finally:
                 stop_server(server, stream)
 
+        challenge_trace = list(actions.trace)
+        close_edge_session(edge, socket)
+        edge, socket, cdp = open_edge_session(WORK / "edge_profile_full_0", 9300)
+        actions = BrowserActions(cdp)
+
         # Complete all 120 temporary bursts through the same production DOM handlers.
         full_root = WORK / "full_120_real"
         full_practice = WORK / "full_120_practice"
@@ -563,6 +588,15 @@ def acceptance() -> None:
                         f"document.getElementById('completionScreen').classList.contains('hidden') && window.__G7E_B_R6__?.app?.current?.burst_id !== {json.dumps(completed_burst)}",
                         60,
                     )
+                    actions.wait_loaded()
+                    close_edge_session(edge, socket)
+                    session_number = (index + 1) // 20
+                    edge, socket, cdp = open_edge_session(
+                        WORK / f"edge_profile_full_{session_number}",
+                        9300 + session_number,
+                    )
+                    actions = BrowserActions(cdp)
+                    start_review(actions)
                     actions.wait_loaded()
                 if (index + 1) % 20 == 0:
                     print(f"R6_REAL_DOM_PROGRESS {index + 1}/120", flush=True)
@@ -597,6 +631,8 @@ def acceptance() -> None:
             "tranche_receipt_count": len(tranche_paths),
             "global_receipt_count": len(global_paths),
             "action_trace_count": len(full_trace),
+            "browser_session_count": 6,
+            "browser_restart_boundaries": [20, 40, 60, 80, 100],
             "action_trace_sha256": hashlib.sha256(
                 json.dumps(full_trace, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest(),
@@ -613,13 +649,7 @@ def acceptance() -> None:
             {"interaction_origin": "REAL_DOM_ACTIONS", "actions": full_trace},
         )
     finally:
-        socket.close()
-        edge.terminate()
-        try:
-            edge.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            edge.kill()
-            edge.wait(timeout=5)
+        close_edge_session(edge, socket)
     if inventory(ACTUAL_REAL) != real_before:
         raise RuntimeError("temporary Edge acceptance mutated the real decision root")
     visual_results = [visual_gate(path) for path in sorted(VISUALS.glob("*.png"))]
@@ -640,7 +670,7 @@ def acceptance() -> None:
         "production_browser_bundle_sha256": sha256(PACKAGE / "review.js"),
         "server_reducer_sha256": sha256(REPO / "src/football_intelligence/g7e_b_r6_action_reducer.py"),
         "action_trace_sha256": hashlib.sha256(
-            json.dumps(actions.trace, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(challenge_trace + full_trace, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
         "visuals": visual_results,
         "real_root_mutations": 0,
