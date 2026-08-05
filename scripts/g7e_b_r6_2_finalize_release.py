@@ -134,6 +134,15 @@ def exact_bytes(commit: str) -> dict[str, Any]:
             "server_action_contract.json",
         ),
     }
+    direct["reviewer_state"] = (
+        "src/football_intelligence/g7e_b_r5_reviewer_state.py",
+        "runtime_source_snapshot/football_intelligence/g7e_b_r5_reviewer_state.py",
+    )
+    for source in sorted((REPO / "src/football_intelligence/temporal_reviewer").glob("*.py")):
+        direct[f"runtime_{source.stem}"] = (
+            source.relative_to(REPO).as_posix(),
+            f"runtime_source_snapshot/football_intelligence/temporal_reviewer/{source.name}",
+        )
     result: dict[str, Any] = {}
     for label, (repository_path, package_path) in direct.items():
         working = (REPO / repository_path).read_bytes()
@@ -201,7 +210,9 @@ def package_manifest() -> dict[str, Any]:
 
 
 def served_hashes() -> dict[str, str]:
-    temporary = Path(tempfile.mkdtemp(prefix="g7e_b_r6_2_served_", dir=STAGE / "11_RELEASE_GATE"))
+    parent = STAGE / "11_RELEASE_GATE"
+    parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix="g7e_b_r6_2_served_", dir=parent))
     stream = (temporary / "server.log").open("wb")
     process = subprocess.Popen(
         [
@@ -328,20 +339,10 @@ def prepare_gate() -> None:
         "served_hashes": {},
         "production_ready": False,
     }
-    gate_files = (
-        "index.html",
-        "review.js",
-        "review.css",
-        "viewport_transform.js",
-        "generated_client_contract.js",
-        "server_action_contract.json",
-        "canonical_reviewer_state_contract.json",
-        "review_cases.json",
-        "practice_cases.json",
-        "build_manifest.json",
-        "visual_asset_manifest.json",
-        "runtime_source_snapshot/football_intelligence/temporal_review.py",
-        "runtime_source_snapshot/football_intelligence/g7e_b_r6_action_reducer.py",
+    gate_files = tuple(
+        path.relative_to(PACKAGE).as_posix()
+        for path in sorted(PACKAGE.rglob("*"))
+        if path.is_file() and path.name not in {GATE_NAME, "package_manifest.json"}
     )
     gate = {
         "schema_version": "football_intelligence.g7e_b_r6_2.real_review_release_gate.v1",
