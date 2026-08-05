@@ -9,11 +9,11 @@ const ui = {};
   "resetPractice", "legacyDraftNotice", "resetLegacyPractice", "previewBanner", "blockingError",
   "reviewShell", "welcomeScreen", "completionScreen", "caseEyebrow", "caseTitle", "overlayToggle",
   "subjectToggle", "idToggle", "panoramaWrap", "panoramaCanvas", "assetState", "mappingState",
-  "fitButton", "zoomOutButton", "zoomInButton", "resetViewButton", "zoomSubjectButton",
+  "fitButton", "zoomOutButton", "zoomInButton", "resetViewButton", "panButton", "panoramaNavigationStatus", "zoomSubjectButton",
   "fullScreenButton", "zoomPercent", "lockViewToggle", "firstFrameButton", "previousFrameButton",
   "playButton", "nextFrameButton", "centreFrameButton", "lastFrameButton", "timeline", "focusWrap",
   "focusCanvas", "focusAssetState", "focusFitButton", "focusZoomOutButton", "focusZoomInButton",
-  "focusResetButton", "focusZoomSubjectButton", "focusZoomPercent", "subjectReference", "questionStep",
+  "focusResetButton", "focusPanButton", "focusNavigationStatus", "focusZoomSubjectButton", "focusFullScreenButton", "focusZoomPercent", "subjectReference", "questionStep",
   "visualModeAuto", "visualModeOriginal", "visualModeEnhanced", "visualModeStatus",
   "subjectPill", "questionLegend", "questionKicker", "questionTitle", "questionHelp", "answerArea",
   "backButton", "continueButton", "startRealButton", "startPracticeButton", "completionTitle",
@@ -26,8 +26,10 @@ const app = {
   mode: null, cases: [], current: null, draft: null, contract: null, contractHash: null,
   actionContract: null, actionContractHash: null, frame: 4, image: null, focusImage: null,
   assetReady: false, mappingVerified: false, pending: false, readOnly: false,
-  inputMode: "pan", view: { zoom: 1, centerX: .5, centerY: .5 },
-  focusView: { zoom: 1 }, drag: null, productionBundleSha256: null,
+  inputMode: "pan", view: R62Viewport.createState(), focusView: R62Viewport.createState(),
+  frameViews: { panorama: new Map(), focus: new Map() }, drag: null, spacePan: false,
+  activeViewer: "panorama", lastAnnotationPointer: null, acceptanceCoordinateProbe: null,
+  productionBundleSha256: null, viewportTransformSha256: null, acceptanceTemporary: false,
   visualPreference: localStorage.getItem("fi.temporal_review.visual_mode") || "AUTO", resolvedVisualMode: "ORIGINAL",
 };
 if (!["AUTO", "ORIGINAL", "ENHANCED"].includes(app.visualPreference)) app.visualPreference = "AUTO";
@@ -284,8 +286,23 @@ async function verifiedImage(frame, kind) {
   const bitmap = await createImageBitmap(new Blob([bytes], { type: response.headers.get("content-type") }));
   return bitmap;
 }
+function rememberFrameViews(sequence = app.frame) {
+  app.frameViews.panorama.set(sequence, R62Viewport.createState(app.view));
+  app.frameViews.focus.set(sequence, R62Viewport.createState(app.focusView));
+}
+function prepareFrameViews(target) {
+  if (target === app.frame) return;
+  rememberFrameViews(app.frame);
+  if (!ui.lockViewToggle.checked) {
+    app.view = R62Viewport.createState(app.frameViews.panorama.get(target));
+    app.focusView = R62Viewport.createState(app.frameViews.focus.get(target));
+  } else {
+    app.view = R62Viewport.createState(app.view);
+    app.focusView = R62Viewport.createState(app.focusView);
+  }
+}
 async function loadFrame(sequence) {
-  app.frame = Math.max(0, Math.min(8, sequence)); app.assetReady = false; app.mappingVerified = false;
+  const target = Math.max(0, Math.min(8, sequence)); prepareFrameViews(target); app.frame = target; app.assetReady = false; app.mappingVerified = false;
   setAssetMessage(ui.assetState, "Loading verified football frame…"); setAssetMessage(ui.focusAssetState, "Loading verified detail…");
   const frame = app.current.frames[app.frame];
   try {
@@ -297,28 +314,69 @@ async function loadFrame(sequence) {
 }
 async function alignFrameToQuestion() { const part = parseKey(); if (Number.isInteger(part.frame) && part.frame !== app.frame) await loadFrame(part.frame); }
 
-function transform(canvas) {
-  const rect = canvas.getBoundingClientRect(); const dpr = devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr)); canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  const fit = Math.min(canvas.width / app.current.source_width, canvas.height / app.current.source_height);
-  const scale = fit * app.view.zoom; const width = app.current.source_width * scale; const height = app.current.source_height * scale;
-  const x = (canvas.width - width) / 2 + (.5 - app.view.centerX) * Math.max(0, width - canvas.width);
-  const y = (canvas.height - height) / 2 + (.5 - app.view.centerY) * Math.max(0, height - canvas.height);
-  return { dpr, scale, x, y, width, height };
+function viewerState(name) { return name === "focus" ? app.focusView : app.view; }
+function setViewerState(name, value) { if (name === "focus") app.focusView = value; else app.view = value; }
+function viewerCanvas(name) { return name === "focus" ? ui.focusCanvas : ui.panoramaCanvas; }
+function viewerWrap(name) { return name === "focus" ? ui.focusWrap : ui.panoramaWrap; }
+function viewerSourceSize(name) {
+  if (name === "focus") return [app.focusImage?.width || 1, app.focusImage?.height || 1];
+  return [app.current?.source_width || 1, app.current?.source_height || 1];
 }
-function sourceToCanvas(point, t) { return [t.x + point[0] * t.scale, t.y + point[1] * t.scale]; }
-function canvasToSource(event) {
-  const rect = ui.panoramaCanvas.getBoundingClientRect(); const t = transform(ui.panoramaCanvas);
-  return [((event.clientX - rect.left) * t.dpr - t.x) / t.scale, ((event.clientY - rect.top) * t.dpr - t.y) / t.scale];
+function focusCrop() { return app.current?.focus_crop_source_xyxy || [0, 0, app.current?.source_width || 1, app.current?.source_height || 1]; }
+function focusLocalToSource(point) {
+  const crop = focusCrop(); const [width, height] = viewerSourceSize("focus");
+  return [crop[0] + point[0] * (crop[2] - crop[0]) / width, crop[1] + point[1] * (crop[3] - crop[1]) / height];
 }
+function sourceToFocusLocal(point) {
+  const crop = focusCrop(); const [width, height] = viewerSourceSize("focus");
+  return [(point[0] - crop[0]) * width / (crop[2] - crop[0]), (point[1] - crop[1]) * height / (crop[3] - crop[1])];
+}
+function transformViewer(name) {
+  const canvas = viewerCanvas(name); const rect = canvas.getBoundingClientRect(); const dpr = devicePixelRatio || 1;
+  const backingWidth = Math.max(1, Math.round(rect.width * dpr)); const backingHeight = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== backingWidth) canvas.width = backingWidth;
+  if (canvas.height !== backingHeight) canvas.height = backingHeight;
+  const [sourceWidth, sourceHeight] = viewerSourceSize(name);
+  const geometry = R62Viewport.transform(viewerState(name), sourceWidth, sourceHeight, rect.width, rect.height);
+  return { ...geometry, dpr, rect };
+}
+function sourceToCanvas(point, geometry) { return R62Viewport.sourceToLocal(point, geometry); }
+function clientToViewerSource(name, clientX, clientY) {
+  const geometry = transformViewer(name); const local = [clientX - geometry.rect.left, clientY - geometry.rect.top];
+  const point = R62Viewport.localToSource(local, geometry);
+  return name === "focus" ? focusLocalToSource(point) : point;
+}
+function viewerSourceToClient(name, point) {
+  const geometry = transformViewer(name); const localPoint = name === "focus" ? sourceToFocusLocal(point) : point;
+  const local = R62Viewport.sourceToLocal(localPoint, geometry);
+  return [geometry.rect.left + local[0], geometry.rect.top + local[1]];
+}
+function canvasToSource(event) { return clientToViewerSource("panorama", event.clientX, event.clientY); }
 function drawBox(ctx, box, t, colour, width = 3) {
   const [x1, y1] = sourceToCanvas([box[0], box[1]], t); const [x2, y2] = sourceToCanvas([box[2], box[3]], t);
-  ctx.strokeStyle = colour; ctx.lineWidth = width * t.dpr; ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+  ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+}
+function drawFocusBox(ctx, sourceBox, t, colour, width = 2) {
+  const local = [...sourceToFocusLocal([sourceBox[0], sourceBox[1]]), ...sourceToFocusLocal([sourceBox[2], sourceBox[3]])];
+  drawBox(ctx, local, t, colour, width);
+}
+function updateNavigationUi() {
+  const panoramaPan = app.view.panMode === true; const focusPan = app.focusView.panMode === true;
+  ui.panButton.classList.toggle("active", panoramaPan); ui.panButton.setAttribute("aria-pressed", String(panoramaPan));
+  ui.focusPanButton.classList.toggle("active", focusPan); ui.focusPanButton.setAttribute("aria-pressed", String(focusPan));
+  ui.panoramaNavigationStatus.classList.toggle("pan-active", panoramaPan || (app.spacePan && app.activeViewer === "panorama"));
+  ui.focusNavigationStatus.classList.toggle("pan-active", focusPan || (app.spacePan && app.activeViewer === "focus"));
+  ui.panoramaNavigationStatus.textContent = panoramaPan ? "clicks will not mark" : "Annotation mode";
+  ui.focusNavigationStatus.textContent = focusPan ? "clicks will not mark" : "Navigation only";
+  ui.panoramaWrap.classList.toggle("navigation-grab", panoramaPan || app.spacePan);
+  ui.focusWrap.classList.toggle("navigation-grab", focusPan || app.spacePan);
+  ui.zoomPercent.textContent = `${Math.round(app.view.zoom * 100)}%`;
+  ui.focusZoomPercent.textContent = `${Math.round(app.focusView.zoom * 100)}%`;
 }
 function draw() {
   if (!app.assetReady || !app.image) return;
-  const canvas = ui.panoramaCanvas; const ctx = canvas.getContext("2d"); const t = transform(canvas);
-  ctx.fillStyle = "#090f20"; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(app.image, t.x, t.y, t.width, t.height);
+  const canvas = ui.panoramaCanvas; const ctx = canvas.getContext("2d"); const t = transformViewer("panorama");
+  ctx.setTransform(t.dpr, 0, 0, t.dpr, 0, 0); ctx.fillStyle = "#090f20"; ctx.fillRect(0, 0, t.viewportWidth, t.viewportHeight); ctx.drawImage(app.image, t.left, t.top, t.width, t.height);
   if (ui.overlayToggle.checked) candidates().forEach((candidate) => drawBox(ctx, candidate.source_box_xyxy, t, "rgba(255,255,255,.88)", 1.5));
   if (app.frame === 4) {
     (app.current.candidates || []).forEach((originalFocus) =>
@@ -329,35 +387,113 @@ function draw() {
   }
   const part = parseKey();
   if (part.family === "supply") frameRow(part.subject, part.frame).selected_candidate_ids.forEach((id) => { const c = candidates().find((row) => row.candidate_id === id); if (c) drawBox(ctx, c.source_box_xyxy, t, "#2cc9a0", 4); });
-  if (ui.subjectToggle.checked) app.draft?.subjects?.forEach((subject, index) => { const row = subject.frame_observations[app.frame]; const point = Number.isFinite(row?.subject_location_source_x) ? [row.subject_location_source_x, row.subject_location_source_y] : (subject.anchor_frame_sequence === app.frame ? subject.anchor_source_xy : null); if (point) { const [x, y] = sourceToCanvas(point, t); ctx.fillStyle = ["#2cc9a0", "#9a72e8", "#e7a51a"][index]; ctx.beginPath(); ctx.arc(x, y, 8 * t.dpr, 0, Math.PI * 2); ctx.fill(); } });
-  app.draft?.missed_person_marks?.filter((mark) => mark.frame_sequence === app.frame).forEach((mark, index) => { const [x, y] = sourceToCanvas(mark.source_xy, t); ctx.fillStyle = "#ff5e6d"; ctx.beginPath(); ctx.arc(x, y, 9 * t.dpr, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "white"; ctx.font = `${12 * t.dpr}px sans-serif`; ctx.fillText(String(index + 1), x + 11 * t.dpr, y); });
-  const focus = ui.focusCanvas; const fctx = focus.getContext("2d"); const frect = focus.getBoundingClientRect(); const dpr = devicePixelRatio || 1; focus.width = Math.max(1, Math.round(frect.width * dpr)); focus.height = Math.max(1, Math.round(frect.height * dpr)); fctx.fillStyle = "#090f20"; fctx.fillRect(0, 0, focus.width, focus.height); const fs = Math.min(focus.width / app.focusImage.width, focus.height / app.focusImage.height) * app.focusView.zoom; const fw = app.focusImage.width * fs, fh = app.focusImage.height * fs; fctx.drawImage(app.focusImage, (focus.width - fw) / 2, (focus.height - fh) / 2, fw, fh);
-  ui.zoomPercent.textContent = `${Math.round(app.view.zoom * 100)}%`; ui.focusZoomPercent.textContent = `${Math.round(app.focusView.zoom * 100)}%`;
+  if (ui.subjectToggle.checked) app.draft?.subjects?.forEach((subject, index) => { const row = subject.frame_observations[app.frame]; const point = Number.isFinite(row?.subject_location_source_x) ? [row.subject_location_source_x, row.subject_location_source_y] : (subject.anchor_frame_sequence === app.frame ? subject.anchor_source_xy : null); if (point) { const [x, y] = sourceToCanvas(point, t); ctx.fillStyle = ["#2cc9a0", "#9a72e8", "#e7a51a"][index]; ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill(); } });
+  app.draft?.missed_person_marks?.filter((mark) => mark.frame_sequence === app.frame).forEach((mark, index) => { const [x, y] = sourceToCanvas(mark.source_xy, t); ctx.fillStyle = "#ff5e6d"; ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "white"; ctx.font = "12px sans-serif"; ctx.fillText(String(index + 1), x + 11, y); });
+  const focus = ui.focusCanvas; const fctx = focus.getContext("2d"); const ft = transformViewer("focus");
+  fctx.setTransform(ft.dpr, 0, 0, ft.dpr, 0, 0); fctx.fillStyle = "#090f20"; fctx.fillRect(0, 0, ft.viewportWidth, ft.viewportHeight); fctx.drawImage(app.focusImage, ft.left, ft.top, ft.width, ft.height);
+  if (ui.overlayToggle.checked) candidates().forEach((candidate) => drawFocusBox(fctx, candidate.source_box_xyxy, ft, "rgba(255,255,255,.9)", 1.5));
+  if (app.frame === 4) (app.current.candidates || []).forEach((candidate) => drawFocusBox(fctx, candidate.source_box_xyxy, ft, "#ffd84f", 3));
+  updateNavigationUi();
 }
 
-async function handleCanvasClick(event) {
+function candidateAt(point) {
+  return candidates().filter((candidate) => point[0] >= candidate.source_box_xyxy[0] && point[0] <= candidate.source_box_xyxy[2] && point[1] >= candidate.source_box_xyxy[1] && point[1] <= candidate.source_box_xyxy[3]).sort((a, b) => (a.source_box_xyxy[2]-a.source_box_xyxy[0])*(a.source_box_xyxy[3]-a.source_box_xyxy[1]) - (b.source_box_xyxy[2]-b.source_box_xyxy[0])*(b.source_box_xyxy[3]-b.source_box_xyxy[1]))[0] || null;
+}
+async function handleCanvasPoint(clientX, clientY) {
   if (!app.assetReady || !app.mappingVerified || app.pending || app.readOnly) return;
-  const point = canvasToSource(event); if (point.some((v, i) => v < 0 || v > (i ? app.current.source_height : app.current.source_width))) return;
+  const point = clientToViewerSource("panorama", clientX, clientY); if (point.some((v, i) => v < 0 || v > (i ? app.current.source_height : app.current.source_width))) return;
   const part = parseKey();
+  const hit = candidateAt(point);
+  if (app.acceptanceTemporary && app.acceptanceCoordinateProbe?.enabled) {
+    app.acceptanceCoordinateProbe.result = { source_xy: point, candidate_id: hit?.candidate_id || null, frame_sequence: app.frame, input_mode: app.inputMode };
+    return app.acceptanceCoordinateProbe.result;
+  }
   if (app.inputMode === "subject-location") return dispatch("SET_SUBJECT_LOCATION", { source_xy: point, frame_sequence: app.frame, approximate_hidden_location: currentAnswer() === "FULLY_OCCLUDED_EXPECTED_PRESENT" });
   if (app.inputMode === "missed-mark") return dispatch("ADD_MISSED_PERSON_MARK", { source_xy: point, frame_sequence: app.frame, mark_id: crypto.randomUUID() });
   if (app.inputMode === "candidate-selection") {
-    const hits = candidates().filter((c) => point[0] >= c.source_box_xyxy[0] && point[0] <= c.source_box_xyxy[2] && point[1] >= c.source_box_xyxy[1] && point[1] <= c.source_box_xyxy[3]).sort((a, b) => (a.source_box_xyxy[2]-a.source_box_xyxy[0])*(a.source_box_xyxy[3]-a.source_box_xyxy[1]) - (b.source_box_xyxy[2]-b.source_box_xyxy[0])*(b.source_box_xyxy[3]-b.source_box_xyxy[1]));
-    if (!hits.length) return; const selected = frameRow(part.subject, part.frame).selected_candidate_ids.includes(hits[0].candidate_id);
-    return dispatch(selected ? "DESELECT_CANDIDATE" : "SELECT_CANDIDATE", { candidate_id: hits[0].candidate_id });
+    if (!hit) return; const selected = frameRow(part.subject, part.frame).selected_candidate_ids.includes(hit.candidate_id);
+    return dispatch(selected ? "DESELECT_CANDIDATE" : "SELECT_CANDIDATE", { candidate_id: hit.candidate_id });
   }
+}
+function viewDimensions(name) {
+  const canvas = viewerCanvas(name); const rect = canvas.getBoundingClientRect(); const [sourceWidth, sourceHeight] = viewerSourceSize(name);
+  return { sourceWidth, sourceHeight, viewportWidth: rect.width, viewportHeight: rect.height, rect };
+}
+function zoomViewer(name, factor, localPoint = null) {
+  if (!app.assetReady) return;
+  const dims = viewDimensions(name); const point = localPoint || [dims.viewportWidth / 2, dims.viewportHeight / 2];
+  setViewerState(name, R62Viewport.zoomAtLocal(viewerState(name), point[0], point[1], factor, dims.sourceWidth, dims.sourceHeight, dims.viewportWidth, dims.viewportHeight));
+  draw();
+}
+function fitViewer(name) { setViewerState(name, R62Viewport.fit(viewerState(name))); draw(); }
+function togglePan(name, force = null) {
+  const state = { ...viewerState(name) }; state.panMode = force === null ? !state.panMode : Boolean(force); setViewerState(name, state); app.activeViewer = name; updateNavigationUi();
+}
+function cancelDrag() {
+  if (!app.drag) return;
+  viewerWrap(app.drag.viewer).classList.remove("navigation-grabbing");
+  try { viewerCanvas(app.drag.viewer).releasePointerCapture(app.drag.pointerId); } catch (_) { /* capture already released */ }
+  app.drag = null; updateNavigationUi();
+}
+function bindViewer(name) {
+  const canvas = viewerCanvas(name); const wrap = viewerWrap(name); const threshold = 5;
+  const activate = () => { app.activeViewer = name; };
+  wrap.addEventListener("pointerenter", activate); wrap.addEventListener("focusin", activate);
+  canvas.addEventListener("wheel", (event) => {
+    if (!app.assetReady) return; event.preventDefault(); activate();
+    const rect = canvas.getBoundingClientRect(); const factor = Math.exp(-event.deltaY * .0015);
+    zoomViewer(name, factor, [event.clientX - rect.left, event.clientY - rect.top]);
+  }, { passive: false });
+  canvas.addEventListener("pointerdown", (event) => {
+    if (!app.assetReady || ![0, 1].includes(event.button) || app.drag) return;
+    activate(); const isPan = event.button === 1 || app.spacePan || viewerState(name).panMode;
+    app.drag = { viewer: name, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, startState: { ...viewerState(name) }, isPan, moved: false };
+    canvas.setPointerCapture(event.pointerId);
+    if (isPan) { event.preventDefault(); wrap.classList.add("navigation-grabbing"); }
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!app.drag || app.drag.pointerId !== event.pointerId || app.drag.viewer !== name) return;
+    const dx = event.clientX - app.drag.startX; const dy = event.clientY - app.drag.startY;
+    app.drag.lastX = event.clientX; app.drag.lastY = event.clientY;
+    if (Math.hypot(dx, dy) >= threshold) app.drag.moved = true;
+    if (app.drag.isPan) {
+      event.preventDefault(); const dims = viewDimensions(name);
+      setViewerState(name, R62Viewport.panFromStart(app.drag.startState, dx, dy, dims.sourceWidth, dims.sourceHeight, dims.viewportWidth, dims.viewportHeight));
+      draw();
+    }
+  });
+  canvas.addEventListener("pointerup", (event) => {
+    if (!app.drag || app.drag.pointerId !== event.pointerId || app.drag.viewer !== name) return;
+    const gesture = app.drag; const distance = Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY); cancelDrag();
+    if (gesture.isPan || distance >= threshold) return;
+    if (name === "focus") {
+      if (app.acceptanceTemporary && app.acceptanceCoordinateProbe?.enabled) {
+        app.acceptanceCoordinateProbe.result = { source_xy: clientToViewerSource("focus", event.clientX, event.clientY), candidate_id: null, frame_sequence: app.frame, input_mode: "focus-navigation" };
+      }
+      return;
+    }
+    const last = app.lastAnnotationPointer; const now = performance.now();
+    if (last && now - last.at < 350 && Math.hypot(event.clientX - last.x, event.clientY - last.y) < threshold) return;
+    app.lastAnnotationPointer = { at: now, x: event.clientX, y: event.clientY };
+    handleCanvasPoint(event.clientX, event.clientY);
+  });
+  canvas.addEventListener("pointercancel", cancelDrag); canvas.addEventListener("lostpointercapture", () => { if (app.drag?.viewer === name) cancelDrag(); });
+  canvas.addEventListener("auxclick", (event) => { if (event.button === 1) event.preventDefault(); });
+  canvas.addEventListener("dblclick", (event) => event.preventDefault());
 }
 function renderTimeline() { ui.timeline.innerHTML = app.current.frames.map((frame, index) => { const { mode, record } = visualRecord(frame); return `<button type="button" data-frame="${index}" data-frame-visual-mode="${mode}" class="${index === app.frame ? "active" : ""}"><img src="${record.panorama_url}" alt="Frame ${index + 1} ${mode.toLowerCase()} view"><b>${index + 1}</b><span>${frame.relative_offset_seconds > 0 ? "+" : ""}${frame.relative_offset_seconds.toFixed(1)}s</span></button>`; }).join(""); ui.timeline.querySelectorAll("[data-frame]").forEach((button) => { button.onclick = () => loadFrame(Number(button.dataset.frame)); }); }
 
 async function loadMode(mode) {
   clearBlock(); app.mode = mode; const bootstrap = await getJson(`/api/bootstrap?mode=${encodeURIComponent(mode)}`);
-  ui.previewBanner.textContent = "R6.1 FINAL-BYTE REVIEW PREVIEW — NO NEW REAL HUMAN TRUTH";
+  ui.previewBanner.textContent = "R6.2 PRECISION-NAVIGATION REVIEW PREVIEW — NO NEW REAL HUMAN TRUTH";
   ui.previewBanner.classList.toggle("hidden", bootstrap.acceptance_temporary !== true);
   if (bootstrap.release_gate?.required && !bootstrap.release_gate.valid && mode === "real" && bootstrap.state?.editable !== true) throw new Error(`REAL_REVIEW_TEMPORARILY_LOCKED · ${bootstrap.release_gate.failures.join(", ")}`);
+  app.acceptanceTemporary = bootstrap.acceptance_temporary === true;
   app.cases = bootstrap.cases; app.contract = bootstrap.canonical_contract; app.contractHash = bootstrap.canonical_contract_sha256; app.actionContract = bootstrap.server_action_contract; app.actionContractHash = bootstrap.server_action_contract_sha256;
   const state = bootstrap.state; if ((mode === "practice" && state.all_practice_complete) || state.tranche_complete) return renderCompletion(state);
   const burstId = state.first_incomplete_burst_id; app.current = app.cases.find((row) => row.burst_id === burstId); if (!app.current) throw new Error("first incomplete burst is unavailable");
-  app.draft = state.draft || (await api("/api/initialize-draft", { mode, burst_id: burstId })).draft; app.readOnly = false; app.frame = Number(app.draft.current_frame_sequence ?? 4);
+  app.draft = state.draft || (await api("/api/initialize-draft", { mode, burst_id: burstId })).draft; app.readOnly = false;
+  app.view = R62Viewport.createState(); app.focusView = R62Viewport.createState(); app.frameViews = { panorama: new Map(), focus: new Map() }; app.frame = Number(app.draft.current_frame_sequence ?? 4);
   ui.welcomeScreen.classList.add("hidden"); ui.completionScreen.classList.add("hidden"); ui.reviewShell.classList.remove("hidden"); ui.practiceBanner.classList.toggle("hidden", mode !== "practice");
   ui.modePill.textContent = mode === "practice" ? "Practice · not human truth" : app.current.tranche_id.replace("_", " "); ui.progressText.textContent = `${state.completed_count} of ${state.total_count}`; ui.progressFill.style.width = `${100 * state.completed_count / state.total_count}%`; ui.caseEyebrow.textContent = `MATCH ${app.current.match_id} · ${app.current.half.replaceAll("_", " ")}`; ui.caseTitle.textContent = app.current.burst_id;
   await loadFrame(app.frame); renderQuestion();
@@ -370,17 +506,54 @@ ui.visualModeAuto.onclick = () => setVisualPreference("AUTO");
 ui.visualModeOriginal.onclick = () => setVisualPreference("ORIGINAL");
 ui.visualModeEnhanced.onclick = () => setVisualPreference("ENHANCED");
 ui.nextTrancheButton.onclick = async () => { try { await api("/api/tranche/start-next", { mode: "real", tranche_id: app.current.tranche_id }); await loadMode("real"); } catch (error) { block(`TRANCHE_START_ERROR · ${error.message}`, "server-action"); } };
-ui.continueButton.onclick = () => advance(); ui.backButton.onclick = () => back(); ui.panoramaCanvas.addEventListener("click", handleCanvasClick);
+ui.continueButton.onclick = () => advance(); ui.backButton.onclick = () => back();
 ui.overlayToggle.onchange = draw; ui.subjectToggle.onchange = draw; ui.idToggle.onchange = draw;
 ui.firstFrameButton.onclick = () => loadFrame(0); ui.previousFrameButton.onclick = () => loadFrame(app.frame - 1); ui.nextFrameButton.onclick = () => loadFrame(app.frame + 1); ui.centreFrameButton.onclick = () => loadFrame(4); ui.lastFrameButton.onclick = () => loadFrame(8);
-ui.fitButton.onclick = () => { app.view = { zoom: 1, centerX: .5, centerY: .5 }; draw(); }; ui.resetViewButton.onclick = ui.fitButton.onclick;
-ui.zoomInButton.onclick = () => { app.view.zoom = Math.min(8, app.view.zoom * 1.25); draw(); }; ui.zoomOutButton.onclick = () => { app.view.zoom = Math.max(1, app.view.zoom / 1.25); draw(); };
-ui.focusZoomInButton.onclick = () => { app.focusView.zoom = Math.min(8, app.focusView.zoom * 1.25); draw(); }; ui.focusZoomOutButton.onclick = () => { app.focusView.zoom = Math.max(1, app.focusView.zoom / 1.25); draw(); }; ui.focusFitButton.onclick = ui.focusResetButton.onclick = () => { app.focusView.zoom = 1; draw(); };
+ui.fitButton.onclick = ui.resetViewButton.onclick = () => fitViewer("panorama"); ui.focusFitButton.onclick = ui.focusResetButton.onclick = () => fitViewer("focus");
+ui.zoomInButton.onclick = () => zoomViewer("panorama", 1.25); ui.zoomOutButton.onclick = () => zoomViewer("panorama", 1 / 1.25);
+ui.focusZoomInButton.onclick = () => zoomViewer("focus", 1.25); ui.focusZoomOutButton.onclick = () => zoomViewer("focus", 1 / 1.25);
+ui.panButton.onclick = () => togglePan("panorama"); ui.focusPanButton.onclick = () => togglePan("focus");
+function currentSubjectPoint() {
+  const part = parseKey(); if (!Number.isInteger(part.subject)) return null;
+  const subject = app.draft?.subjects?.[part.subject]; const row = subject?.frame_observations?.[app.frame];
+  if (Number.isFinite(row?.subject_location_source_x)) return [row.subject_location_source_x, row.subject_location_source_y];
+  return subject?.anchor_frame_sequence === app.frame ? subject.anchor_source_xy : subject?.anchor_source_xy || null;
+}
+function zoomToSubject(name) {
+  const point = currentSubjectPoint(); if (!point) return;
+  const [sourceWidth, sourceHeight] = viewerSourceSize(name); const local = name === "focus" ? sourceToFocusLocal(point) : point;
+  setViewerState(name, R62Viewport.createState({ ...viewerState(name), zoom: Math.max(4, viewerState(name).zoom), focalX: local[0] / sourceWidth, focalY: local[1] / sourceHeight })); draw();
+}
+ui.zoomSubjectButton.onclick = () => zoomToSubject("panorama"); ui.focusZoomSubjectButton.onclick = () => zoomToSubject("focus");
 ui.fullScreenButton.onclick = () => ui.panoramaWrap.requestFullscreen();
+ui.focusFullScreenButton.onclick = () => ui.focusWrap.requestFullscreen();
+ui.lockViewToggle.onchange = () => { rememberFrameViews(); draw(); };
 ui.helpButton.onclick = () => { ui.helpDrawer.setAttribute("aria-hidden", "false"); ui.helpDrawer.classList.add("open"); }; ui.closeHelp.onclick = () => { ui.helpDrawer.setAttribute("aria-hidden", "true"); ui.helpDrawer.classList.remove("open"); };
-window.addEventListener("resize", draw);
-window.addEventListener("keydown", (event) => { if (/^[1-9]$/.test(event.key)) document.querySelector(`[data-shortcut="${event.key}"]`)?.click(); if (event.key === "Enter") ui.continueButton.click(); });
+bindViewer("panorama"); bindViewer("focus");
+window.addEventListener("resize", draw); document.addEventListener("fullscreenchange", draw);
+window.addEventListener("blur", () => { app.spacePan = false; cancelDrag(); });
+window.addEventListener("keydown", (event) => {
+  const interactive = ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(event.target?.tagName) || event.target?.isContentEditable;
+  if (/^[1-9]$/.test(event.key) && !interactive) document.querySelector(`[data-shortcut="${event.key}"]`)?.click();
+  if (event.key === "Enter" && !interactive) ui.continueButton.click();
+  if (event.code === "Space" && !interactive) { app.spacePan = true; event.preventDefault(); updateNavigationUi(); }
+  if (event.key === "Escape") { app.spacePan = false; cancelDrag(); togglePan("panorama", false); togglePan("focus", false); }
+  if (!interactive && ["+", "=", "-", "0", "p", "P"].includes(event.key)) {
+    event.preventDefault();
+    if (["+", "="].includes(event.key)) zoomViewer(app.activeViewer, 1.25);
+    else if (event.key === "-") zoomViewer(app.activeViewer, 1 / 1.25);
+    else if (event.key === "0") fitViewer(app.activeViewer);
+    else togglePan(app.activeViewer);
+  }
+  if (!interactive && event.key === "ArrowLeft") { event.preventDefault(); loadFrame(app.frame - 1); }
+  if (!interactive && event.key === "ArrowRight") { event.preventDefault(); loadFrame(app.frame + 1); }
+  if (!interactive && ["h", "H"].includes(event.key)) ui.helpButton.click();
+});
+window.addEventListener("keyup", (event) => { if (event.code === "Space") { app.spacePan = false; updateNavigationUi(); } });
 
-window.__G7E_B_R6__ = { app, dispatch, loadMode, loadFrame, renderQuestion, sourceToCanvas, canvasToSource, saveFinal, productionActionOrigin: "REAL_DOM_ACTIONS" };
+window.__G7E_B_R6__ = { app, dispatch, loadMode, loadFrame, renderQuestion, sourceToCanvas, canvasToSource, clientToViewerSource, viewerSourceToClient, zoomViewer, fitViewer, togglePan, handleCanvasPoint, saveFinal, productionActionOrigin: "REAL_DOM_ACTIONS" };
 
-fetch("/review.js", { cache: "no-store" }).then((response) => response.arrayBuffer()).then(sha256Hex).then((digest) => { app.productionBundleSha256 = digest; ui.saveState.textContent = "Server-backed action reviewer ready"; }).catch((error) => block(`BUNDLE_HASH_ERROR · ${error.message}`, "boot"));
+Promise.all([
+  fetch("/review.js", { cache: "no-store" }).then((response) => response.arrayBuffer()).then(sha256Hex),
+  fetch("/viewport_transform.js", { cache: "no-store" }).then((response) => response.arrayBuffer()).then(sha256Hex),
+]).then(([bundle, viewport]) => { app.productionBundleSha256 = bundle; app.viewportTransformSha256 = viewport; ui.saveState.textContent = "Server-backed precision reviewer ready"; }).catch((error) => block(`BUNDLE_HASH_ERROR · ${error.message}`, "boot"));

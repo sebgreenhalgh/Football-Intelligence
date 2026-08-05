@@ -849,8 +849,33 @@ def fault_race() -> None:
         )
         before = actions.snapshot()
         before_revision = int(before["draft_revision"])
-        click_script = "(()=>{const c=document.getElementById('panoramaCanvas'),r=c.getBoundingClientRect(),e=()=>c.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:r.left+r.width*.3,clientY:r.top+r.height*.5}));e();e();return true;})()"
-        cdp.evaluate(click_script)
+        rapid_point = cdp.evaluate(
+            "(()=>{const r=document.getElementById('panoramaCanvas').getBoundingClientRect();"
+            "return {x:r.left+r.width*.3,y:r.top+r.height*.5}})()"
+        )
+        for _ in range(2):
+            cdp.command(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mousePressed",
+                    "x": rapid_point["x"],
+                    "y": rapid_point["y"],
+                    "button": "left",
+                    "buttons": 1,
+                    "clickCount": 1,
+                },
+            )
+            cdp.command(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseReleased",
+                    "x": rapid_point["x"],
+                    "y": rapid_point["y"],
+                    "button": "left",
+                    "buttons": 0,
+                    "clickCount": 1,
+                },
+            )
         wait_value(
             cdp,
             f"(()=>{{const a=window.__G7E_B_R6__.app;return !a.pending&&a.draft.draft_version>{before_revision};}})()",

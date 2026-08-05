@@ -11,7 +11,7 @@ NO_PERMANENT_IDENTITY
 production_ready=false
 ```
 
-The latest completed architecture stage is R6, the server-authoritative action reducer. R6.1 is a release-gated closure revision: its source may be committed before acceptance, but real review must remain locked until an exact-final-byte release gate validates the commit, reviewer package, browser bundle, CSS, reducer, server module, contracts, and visual assets.
+The latest completed architecture stage is R6, the server-authoritative action reducer. R6.1 added release-gated low-light display modes. R6.2 is the current release-gated precision-navigation revision: its source may be committed before acceptance, but real review remains locked until an exact-final-byte gate validates cursor-anchored zoom, all pan modes, independent panorama/detail state, normalized Lock view, fullscreen preservation, source-coordinate round trips, the commit, reviewer package, browser bundles, CSS, reducer, server module, and contracts.
 
 ## Frozen temporal corpus
 

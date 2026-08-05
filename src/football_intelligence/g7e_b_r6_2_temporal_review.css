@@ -1,0 +1,12 @@
+.navigation-status{min-width:150px;padding:7px 10px;border:1px solid #cbd5f1;border-radius:10px;background:#f4f7ff;color:#34466d;font-size:11px;font-weight:900;text-align:center}
+.navigation-status.pan-active{border-color:#5b6fe8;background:#e9edff;color:#3047c4}
+.navigation-status.pan-active::before{content:"Pan mode \2014 ";font-weight:900}
+.evidence-toolbar .pan-toggle.active,.focus-toolbar .pan-toggle.active{border-color:#5068e8;background:#5068e8;color:#fff;box-shadow:0 0 0 3px #dfe4ff}
+.panorama-wrap.navigation-grab,.focus-image-wrap.navigation-grab{cursor:grab;user-select:none}
+.panorama-wrap.navigation-grabbing,.focus-image-wrap.navigation-grabbing{cursor:grabbing;user-select:none}
+.panorama-wrap canvas,.focus-image-wrap canvas{touch-action:none}
+.panorama-wrap:fullscreen,.focus-image-wrap:fullscreen{width:100vw;height:100vh;border-radius:0;background:#080e1d}
+.panorama-wrap:fullscreen canvas,.focus-image-wrap:fullscreen canvas{width:100%;height:100%}
+.focus-toolbar{flex-wrap:wrap}
+.focus-toolbar .navigation-status{flex:1 1 145px}
+@media(max-width:1500px){.navigation-status{min-width:128px}.evidence-toolbar .navigation-status{order:8}}

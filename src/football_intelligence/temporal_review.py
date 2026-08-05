@@ -425,6 +425,42 @@ class TemporalReviewStore:
 
     def r5_release_gate_status(self) -> dict[str, Any]:
         if self.review_revision == R6_REVIEW_REVISION:
+            if self.release_revision == "G7E_B_R6_2_PRECISION_ZOOM_PAN_COORDINATE_SAFE_MARKING_V1":
+                gate_path = self.package / "G7E_B_R6_2_REAL_REVIEW_RELEASE_GATE.json"
+                failures: list[str] = []
+                gate: Mapping[str, Any] = {}
+                if not gate_path.is_file():
+                    failures.append("R6_2_RELEASE_GATE_MISSING")
+                else:
+                    gate = read_json(gate_path)
+                    if gate.get("schema_version") != "football_intelligence.g7e_b_r6_2.real_review_release_gate.v1":
+                        failures.append("R6_2_RELEASE_GATE_SCHEMA_MISMATCH")
+                    if (
+                        gate.get("release_classification")
+                        != "PASS_G7E_B_R6_2_PRECISION_ZOOM_PAN_READY_FOR_TRANCHE_1_RESUME"
+                    ):
+                        failures.append("R6_2_RELEASE_CLASSIFICATION_NOT_PASSED")
+                    if gate.get("review_protocol_revision") != R6_REVIEW_REVISION:
+                        failures.append("R6_2_REVIEW_PROTOCOL_REVISION_MISMATCH")
+                    if gate.get("action_contract_sha256") != self.action_contract_sha256:
+                        failures.append("R6_2_ACTION_CONTRACT_HASH_MISMATCH")
+                    expected_files = gate.get("reviewer_file_sha256", {})
+                    if not isinstance(expected_files, Mapping) or not expected_files:
+                        failures.append("R6_2_RELEASE_REVIEWER_HASHES_MISSING")
+                    else:
+                        for relative, expected in expected_files.items():
+                            path = self.package / str(relative)
+                            if not path.is_file() or sha256_file(path) != expected:
+                                failures.append(f"R6_2_RELEASE_REVIEWER_HASH_MISMATCH:{relative}")
+                return {
+                    "required": True,
+                    "valid": not failures,
+                    "failures": failures,
+                    "release_classification": gate.get("release_classification"),
+                    "gate_path": str(gate_path),
+                    "gate_sha256": sha256_file(gate_path) if gate_path.is_file() else None,
+                    "production_ready": False,
+                }
             if self.release_revision == "G7E_B_R6_1_FINAL_BYTE_VISUAL_RUNTIME_CLOSURE_V1":
                 gate_path = self.package / "G7E_B_R6_1_REAL_REVIEW_RELEASE_GATE.json"
                 failures: list[str] = []
@@ -3120,6 +3156,12 @@ def create_server(
                 return self.send_bytes(200, (package / "index.html").read_bytes(), "text/html; charset=utf-8")
             if route == "/review.js":
                 return self.send_bytes(200, (package / "review.js").read_bytes(), "text/javascript; charset=utf-8")
+            if route == "/viewport_transform.js":
+                return self.send_bytes(
+                    200,
+                    (package / "viewport_transform.js").read_bytes(),
+                    "text/javascript; charset=utf-8",
+                )
             if route == "/review.css":
                 return self.send_bytes(200, (package / "review.css").read_bytes(), "text/css; charset=utf-8")
             if route == "/generated_client_contract.js":

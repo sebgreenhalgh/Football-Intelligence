@@ -48,7 +48,7 @@ The external sibling directories `matches/`, `datasets/`, `experiments/`, and `m
 
 ## Current reviewer strand
 
-The active temporal-review architecture uses server-authoritative, versioned, idempotent browser actions; recoverable draft/receipt/ledger persistence; immutable final events and acknowledgements; hash-bound source-frame derivatives; and exact refresh restoration. The R6.1 release adds review-only Original, Enhanced, and Auto display modes without changing source truth, dimensions, or coordinates.
+The active temporal-review architecture uses server-authoritative, versioned, idempotent browser actions; recoverable draft/receipt/ledger persistence; immutable final events and acknowledgements; hash-bound source-frame derivatives; and exact refresh restoration. R6.1 added review-only Original, Enhanced, and Auto display modes. R6.2 adds cursor-anchored wheel zoom, independent panorama/detail panning, normalized nine-frame view locking, fullscreen-safe navigation, and one canonical source-coordinate transform. These controls change display state only; they do not change source truth, dimensions, human answers, or coordinates.
 
 Canonical status and the authorised next action are in [CURRENT_STATE.md](docs/football_intelligence/CURRENT_STATE.md) and [NEXT_STAGE.md](docs/football_intelligence/NEXT_STAGE.md).
 

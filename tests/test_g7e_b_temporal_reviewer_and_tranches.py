@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -294,7 +295,7 @@ def test_no_inference_or_restricted_media_access_and_handoff_manifest() -> None:
 def test_repository_test_is_focused_only() -> None:
     test_names = subprocess.check_output(
         [
-            str(REPOSITORY / ".venv/Scripts/python.exe"),
+            sys.executable,
             "-m",
             "pytest",
             "--collect-only",

@@ -51,6 +51,7 @@
           <button id="zoomOutButton" type="button" aria-label="Zoom out">−</button>
           <button id="zoomInButton" type="button" aria-label="Zoom in">+</button>
           <button id="resetViewButton" type="button">Reset</button>
+          <button id="panButton" class="pan-toggle" type="button" aria-pressed="false" aria-label="Toggle panorama Pan mode">Pan</button>
           <button id="zoomSubjectButton" type="button">Zoom to Subject A</button>
           <button id="fullScreenButton" type="button">Full screen</button>
           <fieldset class="visual-mode-switch" aria-label="Review image appearance">
@@ -61,6 +62,7 @@
           </fieldset>
           <output id="visualModeStatus" class="visual-mode-status">Auto</output>
           <output id="zoomPercent" class="zoom-percent">100%</output>
+          <output id="panoramaNavigationStatus" class="navigation-status">Annotation mode</output>
           <label class="lock-view"><input id="lockViewToggle" type="checkbox" checked> Lock view across frames</label>
           <span class="mapping-badge">Source mapping <b id="mappingState">CHECKING</b></span>
         </div>
@@ -81,7 +83,7 @@
           <div class="focus-panel">
             <div class="focus-heading"><span>Closer look</span><small>Native source detail</small></div>
             <div id="focusWrap" class="focus-image-wrap" tabindex="0"><canvas id="focusCanvas" aria-label="Native-resolution focus detail"></canvas><div id="focusAssetState">Loading detail…</div></div>
-            <div class="focus-toolbar"><button id="focusFitButton" type="button">Fit</button><button id="focusZoomOutButton" type="button">−</button><button id="focusZoomInButton" type="button">+</button><button id="focusResetButton" type="button">Reset</button><button id="focusZoomSubjectButton" type="button">Zoom to Subject</button><output id="focusZoomPercent">100%</output></div>
+            <div class="focus-toolbar"><button id="focusFitButton" type="button">Fit</button><button id="focusZoomOutButton" type="button">−</button><button id="focusZoomInButton" type="button">+</button><button id="focusResetButton" type="button">Reset</button><button id="focusPanButton" class="pan-toggle" type="button" aria-pressed="false" aria-label="Toggle Closer look Pan mode">Pan</button><button id="focusZoomSubjectButton" type="button">Zoom to Subject</button><button id="focusFullScreenButton" type="button">Full screen</button><output id="focusZoomPercent">100%</output><output id="focusNavigationStatus" class="navigation-status">Navigation only</output></div>
           </div>
         </div>
 
@@ -103,7 +105,7 @@
         <div id="answerArea" class="answer-area"></div>
       </div>
       <div class="question-actions"><button id="backButton" class="secondary" type="button">Back</button><button id="continueButton" class="primary" type="button" disabled>Continue</button></div>
-      <p class="keyboard-hint">Keys: <kbd>1–6</kbd> answer · <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> frames · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>H</kbd> help</p>
+      <p class="keyboard-hint">Keys: <kbd>1–6</kbd> answer · hold <kbd>Space</kbd> + drag to pan · <kbd>←</kbd>/<kbd>→</kbd> frames · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>P</kbd> Pan · <kbd>0</kbd> Fit · <kbd>H</kbd> help</p>
     </aside>
   </main>
 
@@ -122,7 +124,8 @@
   </section>
 
   <dialog id="confirmDialog"><form method="dialog"><p class="eyebrow">EXPLICIT TRANCHE START</p><h2 id="confirmTitle">Begin the next tranche?</h2><p>The completed tranche remains immutable and read-only.</p><div><button value="cancel" class="secondary">Not yet</button><button id="confirmNext" value="confirm" class="primary">Begin next tranche</button></div></form></dialog>
-  <aside id="helpDrawer" class="help-drawer" aria-hidden="true"><button id="closeHelp" class="icon-button" type="button">Close</button><p class="eyebrow">QUICK HELP</p><h2>Use human markers to follow the same burst-local subject.</h2><ol><li>Judge the yellow original box; blue is context only.</li><li>Click Subject A in each visible frame.</li><li>Model candidate boxes are separate evidence, not identity.</li><li>Wheel to zoom around the cursor; drag to pan; Reset returns to Fit.</li><li>Not sure is always available.</li></ol><p><b>No team, permanent identity, shirt number, or track ID is requested.</b></p></aside>
+  <aside id="helpDrawer" class="help-drawer" aria-hidden="true"><button id="closeHelp" class="icon-button" type="button">Close</button><p class="eyebrow">QUICK HELP</p><h2>Inspect closely without changing your answers.</h2><ol><li>Wheel over either image to zoom toward the cursor.</li><li>Use Pan, hold Space while left-dragging, or middle-drag to move a zoomed image.</li><li>Plain left click still marks or selects only when panorama Pan mode is off.</li><li>Fit or Reset restores the whole image; Lock view carries normalized focus across all nine frames.</li><li>Full screen and Original/Enhanced/Auto preserve coordinates and view position.</li><li>Navigation is display-only and never saves or alters an annotation.</li><li>Not sure is always available.</li></ol><p><b>No team, permanent identity, shirt number, or track ID is requested.</b></p></aside>
+  <script src="/viewport_transform.js"></script>
   <script src="/review.js"></script>
 </body>
 </html>
