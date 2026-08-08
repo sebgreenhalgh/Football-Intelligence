@@ -166,8 +166,8 @@ const TITLES = {
   participation: ["How are they participating?", "Judge this burst only."],
   certainty: ["How sure are you?", "Not sure is always available."],
   additional_subject: ["Is there another subject to review?", "Add only when the evidence requires it."],
-  missed_check: ["Can you see any relevant person with no useful model box?", "Review the whole nine-frame burst."],
-  missed_mark: ["Click the centre of each missed relevant person", "Use any frame; click Done marking when the set is complete."],
+  missed_check: ["Across these nine frames, is there any frame where a visible relevant person has no useful model box?", "Review all nine frames. In each frame, mark every visible relevant person who has no useful model box in that frame."],
+  missed_mark: ["Review all nine frames and mark every visible relevant person who has no useful model box in that frame.", "If the same person is missed in multiple frames, mark them once in each affected frame. Each mark is one frame-local missed observation."],
   summary: ["Review this burst before saving", "This summary appears only after server authorization."],
 };
 
@@ -231,7 +231,7 @@ function renderQuestion() {
   if (part.family === "missed_mark") {
     app.inputMode = "missed-mark";
     const list = document.createElement("div"); list.className = "click-required";
-    list.innerHTML = `<b>${app.draft.missed_person_marks.length} missed people marked</b><br>Click the large frame to add. ${app.draft.missed_marking_complete ? "Done marking acknowledged." : ""}`;
+    list.innerHTML = `<b>${app.draft.missed_person_marks.length} frame-local missed observations marked</b><br>Review all nine frames. In each frame, mark every visible relevant person who has no useful model box in that frame. If the same person is missed in multiple frames, mark them once in each affected frame. ${app.draft.missed_marking_complete ? "Done marking acknowledged." : "Click the large frame to add a frame-local observation."}`;
     app.draft.missed_person_marks.forEach((mark, index) => {
       const remove = document.createElement("button"); remove.type = "button"; remove.textContent = `Remove mark ${index + 1}`;
       remove.onclick = () => dispatch("REMOVE_MISSED_PERSON_MARK", { mark_id: mark.mark_id }); list.appendChild(remove);
@@ -253,7 +253,7 @@ function renderQuestion() {
 function renderSummary() {
   if (!app.draft.summary_ready) { block("SUMMARY_BARRIER · the server has not authorized this summary", "summary"); return; }
   const subjectRows = app.draft.subjects.map((subject) => `<li><b>${subject.subject_token.replace("_", " ")}</b> · ${subject.role?.replaceAll("_", " ") || "role pending"}</li>`).join("");
-  ui.answerArea.innerHTML = `<div class="release-gate"><b>SERVER-VERIFIED SUMMARY</b><br>Draft ${app.draft.draft_version} · ${app.draft.draft_content_sha256}</div><ul class="summary-list"><li><b>Yellow box:</b> ${app.draft.answers.original_focus_box_answer?.replaceAll("_", " ")}</li>${subjectRows || "<li>No burst-local subject was followed.</li>"}<li><b>Whole-burst missed-person check:</b> ${app.draft.answers.missed_check}</li><li><b>Missed-person marks:</b> ${app.draft.missed_person_marks.length}</li></ul>`;
+  ui.answerArea.innerHTML = `<div class="release-gate"><b>SERVER-VERIFIED SUMMARY</b><br>Draft ${app.draft.draft_version} · ${app.draft.draft_content_sha256}</div><ul class="summary-list"><li><b>Yellow box:</b> ${app.draft.answers.original_focus_box_answer?.replaceAll("_", " ")}</li>${subjectRows || "<li>No burst-local subject was followed.</li>"}<li><b>Whole-burst missed-person check:</b> ${app.draft.answers.missed_check}</li><li><b>Frame-local missed observations marked:</b> ${app.draft.missed_person_marks.length}</li></ul>`;
   if (app.draft.real_draft_recovery || app.draft.migration_record) {
     const recovered = document.createElement("div"); recovered.id = "realDraftRecovered"; recovered.className = "click-required";
     recovered.innerHTML = "<b>Real draft recovered — no event created</b><br>All 27 human marks and every answer/coordinate were preserved. Lifecycle metadata only was repaired."; ui.answerArea.prepend(recovered);
@@ -535,7 +535,7 @@ async function loadMode(mode) {
   ui.modePill.textContent = mode === "practice" ? "Practice · not human truth" : app.current.tranche_id.replace("_", " "); ui.progressText.textContent = `${state.completed_count} of ${state.total_count}`; ui.progressFill.style.width = `${100 * state.completed_count / state.total_count}%`; ui.caseEyebrow.textContent = `MATCH ${app.current.match_id} · ${app.current.half.replaceAll("_", " ")}`; ui.caseTitle.textContent = app.current.burst_id;
   await loadFrame(app.frame); renderQuestion();
 }
-function renderCompletion(state) { ui.reviewShell.classList.add("hidden"); ui.welcomeScreen.classList.add("hidden"); ui.completionScreen.classList.remove("hidden"); ui.completionTitle.textContent = state.all_cases_complete ? "ALL CASES COMPLETE" : `${state.tranche_id || "PRACTICE"} COMPLETE`; ui.completionCount.textContent = `${state.completed_count || 20} complete`; ui.trancheReceipt.textContent = state.tranche_completion_receipt_id || "practice"; ui.lastEvent.textContent = state.last_event_id || "—"; ui.globalReceiptRow.classList.toggle("hidden", !state.global_completion_receipt_id); ui.globalReceipt.textContent = state.global_completion_receipt_id || "—"; }
+function renderCompletion(state) { const completed = Number(state.completed_count ?? 0); const total = Number(state.total_count ?? state.tranche_size ?? 0); const trancheLabel = state.tranche_id ? state.tranche_id.replaceAll("_", " ") : "TRANCHE"; ui.modePill.textContent = state.all_cases_complete ? "ALL TRANCHE COMPLETE" : `${trancheLabel} COMPLETE`; ui.progressText.textContent = `${completed} of ${total}`; ui.progressFill.style.width = total > 0 ? `${100 * completed / total}%` : "0%"; ui.reviewShell.classList.add("hidden"); ui.welcomeScreen.classList.add("hidden"); ui.completionScreen.classList.remove("hidden"); ui.completionTitle.textContent = state.all_cases_complete ? "ALL CASES COMPLETE" : `${trancheLabel.toUpperCase()} COMPLETE`; ui.completionCount.textContent = `${completed} of ${total} bursts complete`; ui.trancheReceipt.textContent = state.tranche_completion_receipt_id || "practice"; ui.lastEvent.textContent = state.last_event_id || "—"; ui.globalReceiptRow.classList.toggle("hidden", !state.global_completion_receipt_id); ui.globalReceipt.textContent = state.global_completion_receipt_id || "—"; }
 
 ui.startRealButton.onclick = () => loadMode("real").catch((error) => block(error.message, "boot"));
 ui.startPracticeButton.onclick = () => loadMode("practice").catch((error) => block(error.message, "boot"));
@@ -589,6 +589,19 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => { if (event.code === "Space") { app.spacePan = false; updateNavigationUi(); } });
 
 window.__G7E_B_R6__ = { app, dispatch, loadMode, loadFrame, renderQuestion, sourceToCanvas, canvasToSource, clientToViewerSource, viewerSourceToClient, zoomViewer, fitViewer, togglePan, handleCanvasPoint, saveFinal, productionActionOrigin: "REAL_DOM_ACTIONS" };
+
+async function hydrateCompletedState() {
+  try {
+    const bootstrap = await getJson("/api/bootstrap?mode=real");
+    if (!bootstrap.state?.tranche_complete) return;
+    app.mode = "real";
+    app.cases = bootstrap.cases || [];
+    app.current = app.cases.find((row) => row.tranche_id === bootstrap.state.tranche_id) || app.cases[0] || null;
+    renderCompletion(bootstrap.state);
+  } catch (_) { /* Keep the welcome screen when completion hydration is unavailable. */ }
+}
+
+hydrateCompletedState();
 
 Promise.all([
   fetch("/review.js", { cache: "no-store" }).then((response) => response.arrayBuffer()).then(sha256Hex),
