@@ -260,7 +260,15 @@ def run_tests() -> dict[str, Any]:
         "tests/test_g7e_b_r6_1_final_byte_runtime.py",
         "tests/test_g7e_b_r6_2_precision_navigation.py",
     ]
-    command = [str(REPO / ".venv/Scripts/python.exe"), "-m", "pytest", "-q", *paths]
+    command = [
+        str(REPO / ".venv/Scripts/python.exe"),
+        "-m",
+        "pytest",
+        "-q",
+        "--basetemp",
+        str(STAGE / "09_FOCUSED_REGRESSION_TESTS/_pytest_temp"),
+        *paths,
+    ]
     completed = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
     result = {"classification": "PASS_G7E_B_R6_3_FOCUSED_AND_INHERITED_TESTS" if completed.returncode == 0 else "FAIL_G7E_B_R6_3_TESTS", "command": command, "returncode": completed.returncode, "stdout_tail": completed.stdout[-4000:], "stderr_tail": completed.stderr[-4000:], "production_ready": False}
     write_json(STAGE / "09_FOCUSED_REGRESSION_TESTS/focused_test_report.json", result)
