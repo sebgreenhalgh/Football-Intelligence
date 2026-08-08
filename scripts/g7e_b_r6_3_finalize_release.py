@@ -260,13 +260,16 @@ def run_tests() -> dict[str, Any]:
         "tests/test_g7e_b_r6_1_final_byte_runtime.py",
         "tests/test_g7e_b_r6_2_precision_navigation.py",
     ]
+    pytest_parent = STAGE / "09_FOCUSED_REGRESSION_TESTS"
+    pytest_parent.mkdir(parents=True, exist_ok=True)
+    pytest_root = Path(tempfile.mkdtemp(prefix="pytest_", dir=pytest_parent))
     command = [
         str(REPO / ".venv/Scripts/python.exe"),
         "-m",
         "pytest",
         "-q",
         "--basetemp",
-        str(STAGE / "09_FOCUSED_REGRESSION_TESTS/_pytest_temp"),
+        str(pytest_root),
         *paths,
     ]
     completed = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
