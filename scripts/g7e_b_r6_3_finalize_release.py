@@ -211,6 +211,8 @@ def prepare_gate() -> None:
 
 
 def run_real_resume() -> dict[str, Any]:
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
     from scripts.g7e_b_r6_capture_edge_acceptance import open_edge_session, wait_http, wait_value
 
     work = Path(tempfile.mkdtemp(prefix="g7e_b_r6_3_resume_", dir=STAGE))
