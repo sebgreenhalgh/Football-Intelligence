@@ -3230,7 +3230,7 @@ def create_server(
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(data)
-            except (BrokenPipeError, ConnectionAbortedError):
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                 return
 
         def send_json(self, status: int, payload: Any) -> None:
