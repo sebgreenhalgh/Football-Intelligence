@@ -160,6 +160,45 @@ def _materialize(root: Path, journal_path: Path, journal: dict[str, object], fai
     _atomic_write(journal_path, _canonical_bytes(journal))
 
 
+def _verify_committed_transaction(root: Path, journal: Mapping[str, object]) -> None:
+    """Verify committed targets without rematerializing historical files."""
+
+    labels = ("draft", "action_receipt", "idempotency_ledger")
+    targets = journal.get("targets")
+    if not isinstance(targets, list) or len(targets) != len(labels):
+        raise ValueError("action transaction does not contain exactly three targets")
+    for index, target in enumerate(targets):
+        if not isinstance(target, dict) or target.get("label") != labels[index]:
+            raise ValueError("action transaction target order is invalid")
+        destination = contained_path(root, str(target.get("relative_path", "")))
+        if not destination.is_file():
+            if finalized_draft_target_is_superseded(root, target):
+                continue
+            raise ValueError("committed action transaction target is missing")
+        data = destination.read_bytes()
+        if target["label"] == "draft" and _sha256(data) != target.get("sha256"):
+            current = json.loads(data)
+            if int(current.get("draft_version", -1)) <= int(journal.get("next_draft_revision", -1)):
+                raise ValueError("committed action draft target changed without a later revision")
+        elif target["label"] != "draft" and _sha256(data) != target.get("sha256"):
+            raise ValueError("committed action immutable target changed")
+
+
+def recover_action_transaction(root: Path, action_id: str) -> dict[str, int]:
+    """Recover or verify one transaction when an action-local check needs it."""
+
+    root = root.resolve()
+    journal_path = contained_path(root, "action_transactions", f"{canonical_action_uuid(action_id, 'action_id')}.json")
+    if not journal_path.is_file():
+        return {"inspected": 0, "recovered": 0, "committed": 0}
+    journal = _read_journal(journal_path)
+    if journal["state"] == "COMMITTED":
+        _verify_committed_transaction(root, journal)
+        return {"inspected": 1, "recovered": 0, "committed": 1}
+    _materialize(root, journal_path, journal)
+    return {"inspected": 1, "recovered": 1, "committed": 0}
+
+
 def recover_action_transactions(root: Path) -> dict[str, int]:
     """Finish every prepared action transaction deterministically."""
 
@@ -175,7 +214,7 @@ def recover_action_transactions(root: Path) -> dict[str, int]:
             _materialize(root, journal_path, journal)
             recovered += 1
         else:
-            _materialize(root, journal_path, journal)
+            _verify_committed_transaction(root, journal)
         committed += 1
     return {"inspected": inspected, "recovered": recovered, "committed": committed}
 

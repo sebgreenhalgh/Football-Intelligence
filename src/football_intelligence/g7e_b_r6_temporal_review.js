@@ -26,6 +26,7 @@ const app = {
   mode: null, cases: [], current: null, draft: null, contract: null, contractHash: null,
   actionContract: null, actionContractHash: null, frame: 4, image: null, focusImage: null,
   assetReady: false, mappingVerified: false, pending: false, readOnly: false,
+  verifiedImageCache: new Map(), drawFramePending: false, drawFrameViewer: null,
   inputMode: "pan", view: R62Viewport.createState(), focusView: R62Viewport.createState(),
   frameViews: { panorama: new Map(), focus: new Map() }, drag: null, spacePan: false,
   activeViewer: "panorama", lastAnnotationPointer: null, acceptanceCoordinateProbe: null,
@@ -52,6 +53,22 @@ async function api(path, payload) {
 }
 async function getJson(path) { const response = await fetch(path); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); }
 async function sha256Hex(buffer) { return [...new Uint8Array(await crypto.subtle.digest("SHA-256", buffer))].map((v) => v.toString(16).padStart(2, "0")).join(""); }
+function scheduleDraw(viewer = null) {
+  if (app.drawFramePending) {
+    if (app.drawFrameViewer !== viewer) app.drawFrameViewer = null;
+    return;
+  }
+  app.drawFramePending = true;
+  app.drawFrameViewer = viewer;
+  requestAnimationFrame(() => { const target = app.drawFrameViewer; app.drawFramePending = false; app.drawFrameViewer = null; draw(target); });
+}
+function showStaleRecovery() {
+  const message = "Server state restored. Your rejected click was not replayed.";
+  ui.blockingError.classList.remove("hidden");
+  ui.blockingError.dataset.errorKind = "server-action";
+  ui.blockingError.textContent = message;
+  ui.saveState.textContent = message;
+}
 
 function familyOf(key = app.draft?.current_question_instance_key || "") { return key.split("|").at(-1); }
 function parseKey(key = app.draft?.current_question_instance_key || "") {
@@ -95,6 +112,17 @@ async function dispatch(actionType, payload = {}, questionKey = app.draft.curren
     renderQuestion(); draw();
     return response;
   } catch (error) {
+    const stale = ["STALE_DRAFT_REVISION", "STALE_DRAFT_HASH"].includes(error.payload?.error_code);
+    const canonical = error.payload?.canonical_draft;
+    if (stale && canonical) {
+      app.draft = canonical;
+      app.readOnly = false;
+      clearBlock();
+      await alignFrameToQuestion();
+      renderQuestion(); draw();
+      showStaleRecovery();
+      return { ok: false, stale_recovered: true, rejected_action_replayed: false, draft: canonical };
+    }
     block(`ACTION_REJECTED · ${error.payload?.error_code || error.message}`, "server-action");
     throw error;
   } finally { app.pending = false; setControls(true); }
@@ -209,7 +237,10 @@ function renderQuestion() {
       remove.onclick = () => dispatch("REMOVE_MISSED_PERSON_MARK", { mark_id: mark.mark_id }); list.appendChild(remove);
     });
     const done = document.createElement("button"); done.id = "doneMarkingButton"; done.type = "button"; done.className = "primary"; done.textContent = "Done marking";
-    done.disabled = app.draft.missed_person_marks.length === 0; done.onclick = () => dispatch("COMPLETE_MISSED_PERSON_MARKING"); list.appendChild(done);
+    done.disabled = app.draft.missed_person_marks.length === 0 || app.draft.missed_marking_complete === true;
+    done.title = app.draft.missed_marking_complete ? "Done marking already acknowledged by the server." : "";
+    done.onclick = () => { if (!app.draft.missed_marking_complete) dispatch("COMPLETE_MISSED_PERSON_MARKING"); };
+    list.appendChild(done);
     ui.answerArea.appendChild(list);
   }
   if (part.family === "summary") renderSummary();
@@ -279,12 +310,17 @@ async function verifiedImage(frame, kind) {
   const { record } = visualRecord(frame);
   const url = record[`${kind}_url`];
   const expected = record[`${kind}_sha256`];
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) throw new Error(`${kind} asset HTTP/MIME failure`);
-  const bytes = await response.arrayBuffer(); const digest = await sha256Hex(bytes);
-  if (digest !== expected) throw new Error(`${kind} asset hash mismatch`);
-  const bitmap = await createImageBitmap(new Blob([bytes], { type: response.headers.get("content-type") }));
-  return bitmap;
+  const key = `${url}|${expected}`;
+  if (app.verifiedImageCache.has(key)) return app.verifiedImageCache.get(key);
+  const promise = (async () => {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) throw new Error(`${kind} asset HTTP/MIME failure`);
+    const bytes = await response.arrayBuffer(); const digest = await sha256Hex(bytes);
+    if (digest !== expected) throw new Error(`${kind} asset hash mismatch`);
+    return createImageBitmap(new Blob([bytes], { type: response.headers.get("content-type") }));
+  })();
+  app.verifiedImageCache.set(key, promise);
+  try { return await promise; } catch (error) { app.verifiedImageCache.delete(key); throw error; }
 }
 function rememberFrameViews(sequence = app.frame) {
   app.frameViews.panorama.set(sequence, R62Viewport.createState(app.view));
@@ -373,26 +409,27 @@ function updateNavigationUi() {
   ui.zoomPercent.textContent = `${Math.round(app.view.zoom * 100)}%`;
   ui.focusZoomPercent.textContent = `${Math.round(app.focusView.zoom * 100)}%`;
 }
-function draw() {
+function draw(viewer = null) {
   if (!app.assetReady || !app.image) return;
-  const canvas = ui.panoramaCanvas; const ctx = canvas.getContext("2d"); const t = transformViewer("panorama");
-  ctx.setTransform(t.dpr, 0, 0, t.dpr, 0, 0); ctx.fillStyle = "#090f20"; ctx.fillRect(0, 0, t.viewportWidth, t.viewportHeight); ctx.drawImage(app.image, t.left, t.top, t.width, t.height);
-  if (ui.overlayToggle.checked) candidates().forEach((candidate) => drawBox(ctx, candidate.source_box_xyxy, t, "rgba(255,255,255,.88)", 1.5));
-  if (app.frame === 4) {
-    (app.current.candidates || []).forEach((originalFocus) =>
-      drawBox(ctx, originalFocus.source_box_xyxy, t, "#ffd84f", 4));
-    ctx.setLineDash([12, 8]);
-    drawBox(ctx, app.current.focus_crop_source_xyxy, t, "#59a7ff", 3);
-    ctx.setLineDash([]);
+  if (viewer !== "focus") {
+    const canvas = ui.panoramaCanvas; const ctx = canvas.getContext("2d"); const t = transformViewer("panorama");
+    ctx.setTransform(t.dpr, 0, 0, t.dpr, 0, 0); ctx.fillStyle = "#090f20"; ctx.fillRect(0, 0, t.viewportWidth, t.viewportHeight); ctx.drawImage(app.image, t.left, t.top, t.width, t.height);
+    if (ui.overlayToggle.checked) candidates().forEach((candidate) => drawBox(ctx, candidate.source_box_xyxy, t, "rgba(255,255,255,.88)", 1.5));
+    if (app.frame === 4) {
+      (app.current.candidates || []).forEach((originalFocus) => drawBox(ctx, originalFocus.source_box_xyxy, t, "#ffd84f", 4));
+      ctx.setLineDash([12, 8]); drawBox(ctx, app.current.focus_crop_source_xyxy, t, "#59a7ff", 3); ctx.setLineDash([]);
+    }
+    const part = parseKey();
+    if (part.family === "supply") frameRow(part.subject, part.frame).selected_candidate_ids.forEach((id) => { const c = candidates().find((row) => row.candidate_id === id); if (c) drawBox(ctx, c.source_box_xyxy, t, "#2cc9a0", 4); });
+    if (ui.subjectToggle.checked) app.draft?.subjects?.forEach((subject, index) => { const row = subject.frame_observations[app.frame]; const point = Number.isFinite(row?.subject_location_source_x) ? [row.subject_location_source_x, row.subject_location_source_y] : (subject.anchor_frame_sequence === app.frame ? subject.anchor_source_xy : null); if (point) { const [x, y] = sourceToCanvas(point, t); ctx.fillStyle = ["#2cc9a0", "#9a72e8", "#e7a51a"][index]; ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill(); } });
+    app.draft?.missed_person_marks?.filter((mark) => mark.frame_sequence === app.frame).forEach((mark, index) => { const [x, y] = sourceToCanvas(mark.source_xy, t); ctx.fillStyle = "#ff5e6d"; ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "white"; ctx.font = "12px sans-serif"; ctx.fillText(String(index + 1), x + 11, y); });
   }
-  const part = parseKey();
-  if (part.family === "supply") frameRow(part.subject, part.frame).selected_candidate_ids.forEach((id) => { const c = candidates().find((row) => row.candidate_id === id); if (c) drawBox(ctx, c.source_box_xyxy, t, "#2cc9a0", 4); });
-  if (ui.subjectToggle.checked) app.draft?.subjects?.forEach((subject, index) => { const row = subject.frame_observations[app.frame]; const point = Number.isFinite(row?.subject_location_source_x) ? [row.subject_location_source_x, row.subject_location_source_y] : (subject.anchor_frame_sequence === app.frame ? subject.anchor_source_xy : null); if (point) { const [x, y] = sourceToCanvas(point, t); ctx.fillStyle = ["#2cc9a0", "#9a72e8", "#e7a51a"][index]; ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill(); } });
-  app.draft?.missed_person_marks?.filter((mark) => mark.frame_sequence === app.frame).forEach((mark, index) => { const [x, y] = sourceToCanvas(mark.source_xy, t); ctx.fillStyle = "#ff5e6d"; ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "white"; ctx.font = "12px sans-serif"; ctx.fillText(String(index + 1), x + 11, y); });
-  const focus = ui.focusCanvas; const fctx = focus.getContext("2d"); const ft = transformViewer("focus");
-  fctx.setTransform(ft.dpr, 0, 0, ft.dpr, 0, 0); fctx.fillStyle = "#090f20"; fctx.fillRect(0, 0, ft.viewportWidth, ft.viewportHeight); fctx.drawImage(app.focusImage, ft.left, ft.top, ft.width, ft.height);
-  if (ui.overlayToggle.checked) candidates().forEach((candidate) => drawFocusBox(fctx, candidate.source_box_xyxy, ft, "rgba(255,255,255,.9)", 1.5));
-  if (app.frame === 4) (app.current.candidates || []).forEach((candidate) => drawFocusBox(fctx, candidate.source_box_xyxy, ft, "#ffd84f", 3));
+  if (viewer !== "panorama") {
+    const focus = ui.focusCanvas; const fctx = focus.getContext("2d"); const ft = transformViewer("focus");
+    fctx.setTransform(ft.dpr, 0, 0, ft.dpr, 0, 0); fctx.fillStyle = "#090f20"; fctx.fillRect(0, 0, ft.viewportWidth, ft.viewportHeight); fctx.drawImage(app.focusImage, ft.left, ft.top, ft.width, ft.height);
+    if (ui.overlayToggle.checked) candidates().forEach((candidate) => drawFocusBox(fctx, candidate.source_box_xyxy, ft, "rgba(255,255,255,.9)", 1.5));
+    if (app.frame === 4) (app.current.candidates || []).forEach((candidate) => drawFocusBox(fctx, candidate.source_box_xyxy, ft, "#ffd84f", 3));
+  }
   updateNavigationUi();
 }
 
@@ -423,9 +460,9 @@ function zoomViewer(name, factor, localPoint = null) {
   if (!app.assetReady) return;
   const dims = viewDimensions(name); const point = localPoint || [dims.viewportWidth / 2, dims.viewportHeight / 2];
   setViewerState(name, R62Viewport.zoomAtLocal(viewerState(name), point[0], point[1], factor, dims.sourceWidth, dims.sourceHeight, dims.viewportWidth, dims.viewportHeight));
-  draw();
+  scheduleDraw(name);
 }
-function fitViewer(name) { setViewerState(name, R62Viewport.fit(viewerState(name))); draw(); }
+function fitViewer(name) { setViewerState(name, R62Viewport.fit(viewerState(name))); scheduleDraw(name); }
 function togglePan(name, force = null) {
   const state = { ...viewerState(name) }; state.panMode = force === null ? !state.panMode : Boolean(force); setViewerState(name, state); app.activeViewer = name; updateNavigationUi();
 }
@@ -459,7 +496,7 @@ function bindViewer(name) {
     if (app.drag.isPan) {
       event.preventDefault(); const dims = viewDimensions(name);
       setViewerState(name, R62Viewport.panFromStart(app.drag.startState, dx, dy, dims.sourceWidth, dims.sourceHeight, dims.viewportWidth, dims.viewportHeight));
-      draw();
+      scheduleDraw(name);
     }
   });
   canvas.addEventListener("pointerup", (event) => {

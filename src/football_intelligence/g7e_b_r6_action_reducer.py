@@ -510,6 +510,14 @@ def apply_action(
         raise ValueError("action payload must be an object")
     family, token, frame = parse_instance(current)
 
+    if action.get("action_type") == "COMPLETE_MISSED_PERSON_MARKING" and draft.get("missed_marking_complete") is True:
+        if family != "missed_mark" or not draft.get("missed_person_marks"):
+            raise ValueError("completed missed-person marking state is invalid")
+        failures = validate_r6_invariants(draft, canonical_contract)
+        if failures:
+            raise ValueError(f"R6_INVARIANT_FAILED:{failures[0]}")
+        return draft
+
     if action_type == "ANSWER_QUESTION":
         _answer_question(draft, case, canonical_contract, current, payload.get("value"))
     elif action_type == "SET_SUBJECT_LOCATION":

@@ -67,6 +67,7 @@ SUPPORTED_REVIEW_REVISIONS = (
     R6_REVIEW_REVISION,
 )
 PROTOCOL_ID = "G7E_A_BURST_LOCAL_TEMPORAL_OBSERVATION_PROTOCOL_V1"
+R6_3_RELEASE_REVISION = "G7E_B_R6_3_FAST_ACTION_AND_STALE_DRAFT_RECOVERY_V1"
 TRANCHES = tuple(f"TRANCHE_{index}" for index in range(1, 7))
 
 MATCH_ROTATION: dict[str, dict[str, int]] = {
@@ -128,6 +129,23 @@ class ReviewValidationError(ValueError):
         self.errors = errors
         self.error_code = error_code
         super().__init__(str(errors[0]["message"]))
+
+
+class StaleDraftError(ReviewValidationError):
+    """Strict optimistic-concurrency rejection carrying canonical state for resync."""
+
+    def __init__(self, error_code: str, draft: Mapping[str, Any]):
+        self.canonical_draft = copy.deepcopy(dict(draft))
+        super().__init__(
+            [
+                {
+                    "error_code": error_code,
+                    "field": "draft",
+                    "message": f"{error_code}: the canonical server draft was returned.",
+                }
+            ],
+            error_code,
+        )
 
 
 class InterruptedAcknowledgement(RuntimeError):
@@ -364,10 +382,7 @@ class TemporalReviewStore:
         self.acceptance_mode = acceptance_mode
         self.action_transaction_fail_after = action_transaction_fail_after
         self.lock = threading.RLock()
-        self.action_recovery = {
-            "real": recover_action_transactions(self.decisions),
-            "practice": recover_action_transactions(self.practice),
-        }
+        self.action_recovery: dict[str, dict[str, int]] = {}
         build_manifest_path = self.package / "build_manifest.json"
         self.release_revision = (
             read_json(build_manifest_path).get("release_revision") if build_manifest_path.is_file() else None
@@ -426,9 +441,57 @@ class TemporalReviewStore:
         if len(self.practice_cases) != 3:
             raise ValueError("practice-case cardinality mismatch")
         self.tranche_manifest_sha256 = sha256_file(self.package / "tranche_manifest.jsonl")
+        self._cached_release_gate_status = self._verify_release_gate()
+        if (
+            not self.acceptance_mode
+            and self.review_revision in (R5_REVIEW_REVISION, R6_REVIEW_REVISION)
+            and self._cached_release_gate_status.get("valid") is not True
+        ):
+            failures = ",".join(self._cached_release_gate_status.get("failures", []))
+            raise RuntimeError(f"REAL_REVIEW_RELEASE_GATE_INVALID_AT_STARTUP:{failures}")
+        self.action_recovery = {
+            "real": recover_action_transactions(self.decisions),
+            "practice": recover_action_transactions(self.practice),
+        }
 
-    def r5_release_gate_status(self) -> dict[str, Any]:
+    def _verify_release_gate(self) -> dict[str, Any]:
         if self.review_revision == R6_REVIEW_REVISION:
+            if self.release_revision == R6_3_RELEASE_REVISION:
+                gate_path = self.package / "G7E_B_R6_3_REAL_REVIEW_RELEASE_GATE.json"
+                failures: list[str] = []
+                gate: Mapping[str, Any] = {}
+                if not gate_path.is_file():
+                    failures.append("R6_3_RELEASE_GATE_MISSING")
+                else:
+                    gate = read_json(gate_path)
+                    if gate.get("schema_version") != "football_intelligence.g7e_b_r6_3.real_review_release_gate.v1":
+                        failures.append("R6_3_RELEASE_GATE_SCHEMA_MISMATCH")
+                    if (
+                        gate.get("release_classification")
+                        != "PASS_G7E_B_R6_3_FAST_ACTION_AND_STALE_RECOVERY_READY_FOR_TRANCHE_1_RESUME"
+                    ):
+                        failures.append("R6_3_RELEASE_CLASSIFICATION_NOT_PASSED")
+                    if gate.get("review_protocol_revision") != R6_REVIEW_REVISION:
+                        failures.append("R6_3_REVIEW_PROTOCOL_REVISION_MISMATCH")
+                    if gate.get("action_contract_sha256") != self.action_contract_sha256:
+                        failures.append("R6_3_ACTION_CONTRACT_HASH_MISMATCH")
+                    expected_files = gate.get("reviewer_file_sha256", {})
+                    if not isinstance(expected_files, Mapping) or not expected_files:
+                        failures.append("R6_3_RELEASE_REVIEWER_HASHES_MISSING")
+                    else:
+                        for relative, expected in expected_files.items():
+                            path = self.package / str(relative)
+                            if not path.is_file() or sha256_file(path) != expected:
+                                failures.append(f"R6_3_RELEASE_REVIEWER_HASH_MISMATCH:{relative}")
+                return {
+                    "required": True,
+                    "valid": not failures,
+                    "failures": failures,
+                    "release_classification": gate.get("release_classification"),
+                    "gate_path": str(gate_path),
+                    "gate_sha256": sha256_file(gate_path) if gate_path.is_file() else None,
+                    "production_ready": False,
+                }
             if self.release_revision == "G7E_B_R6_2_PRECISION_ZOOM_PAN_COORDINATE_SAFE_MARKING_V1":
                 gate_path = self.package / "G7E_B_R6_2_REAL_REVIEW_RELEASE_GATE.json"
                 failures: list[str] = []
@@ -580,6 +643,11 @@ class TemporalReviewStore:
             "gate_sha256": sha256_file(gate_path) if gate_path.is_file() else None,
             "production_ready": False,
         }
+
+    def r5_release_gate_status(self) -> dict[str, Any]:
+        """Return the immutable startup verdict without rehashing the package."""
+
+        return copy.deepcopy(self._cached_release_gate_status)
 
     def _require_r5_real_release(self, mode: str) -> None:
         if (
@@ -1436,7 +1504,6 @@ class TemporalReviewStore:
         }
         action_envelope_sha256 = hashlib.sha256(action_bytes).hexdigest()
         action_semantic_sha256 = hashlib.sha256(canonical_bytes(semantic_payload)).hexdigest()
-        recover_action_transactions(root)
         ledger_path = contained_path(root, "action_idempotency", f"{idempotency_key}.json")
         if ledger_path.is_file():
             ledger = read_json(ledger_path)
@@ -1456,6 +1523,10 @@ class TemporalReviewStore:
         current = self.draft(mode, burst_id)
         if current is None:
             current = self.initialize_draft(mode, burst_id)
+        if int(payload.get("expected_draft_revision", -1)) != int(current.get("draft_version", -2)):
+            raise StaleDraftError("STALE_DRAFT_REVISION", current)
+        if payload.get("expected_draft_sha256") != current.get("draft_content_sha256"):
+            raise StaleDraftError("STALE_DRAFT_HASH", current)
         current.pop("server_file_sha256", None)
         reduced = apply_r6_action(
             current,
@@ -1464,7 +1535,15 @@ class TemporalReviewStore:
             self.canonical_contract,
             self.action_contract_sha256,
         )
-        persisted = self._persist_r6_draft(reduced, mode, expected_increment=1, write=False)
+        canonical_noop = (
+            payload.get("action_type") == "COMPLETE_MISSED_PERSON_MARKING"
+            and current.get("missed_marking_complete") is True
+        )
+        if canonical_noop:
+            persisted = copy.deepcopy(current)
+            persisted["server_file_sha256"] = hashlib.sha256(canonical_bytes(persisted)).hexdigest()
+        else:
+            persisted = self._persist_r6_draft(reduced, mode, expected_increment=1, write=False)
         receipt = {
             "schema_version": R6_ACTION_RECEIPT_SCHEMA,
             "receipt_id": f"action-ack-{action_id}",
@@ -1477,6 +1556,7 @@ class TemporalReviewStore:
             "action_type": payload.get("action_type"),
             "result_draft_revision": persisted["draft_version"],
             "result_draft_sha256": persisted["draft_content_sha256"],
+            "canonical_noop": canonical_noop,
             "server_validated": True,
             "created_at_utc": utc_now(),
             "production_ready": False,
@@ -1517,6 +1597,7 @@ class TemporalReviewStore:
         return {
             "ok": True,
             "idempotent_replay": False,
+            "canonical_noop": canonical_noop,
             "action_receipt_id": receipt["receipt_id"],
             "draft": persisted,
         }
@@ -3141,13 +3222,16 @@ def create_server(
             return
 
         def send_bytes(self, status: int, data: bytes, content_type: str) -> None:
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionAbortedError):
+                return
 
         def send_json(self, status: int, payload: Any) -> None:
             self.send_bytes(status, canonical_bytes(payload), "application/json; charset=utf-8")
@@ -3341,6 +3425,28 @@ def create_server(
                         "error": str(exc),
                         "event_id": exc.event_id,
                         "retry_same_idempotency_key": True,
+                    },
+                )
+            except StaleDraftError as exc:
+                canonical = exc.canonical_draft
+                return self.send_json(
+                    409,
+                    {
+                        "ok": False,
+                        "error_code": exc.error_code,
+                        "error": str(exc),
+                        "errors": exc.errors,
+                        "canonical_draft": canonical,
+                        "canonical_metadata": {
+                            "burst_id": canonical.get("burst_id"),
+                            "tranche_id": canonical.get("tranche_id"),
+                            "current_question": canonical.get("current_question"),
+                            "current_question_instance_key": canonical.get("current_question_instance_key"),
+                            "draft_version": canonical.get("draft_version"),
+                            "draft_content_sha256": canonical.get("draft_content_sha256"),
+                            "optimistic_lock_token": canonical.get("optimistic_lock_token"),
+                        },
+                        "rejected_action_replayed": False,
                     },
                 )
             except ReviewValidationError as exc:
