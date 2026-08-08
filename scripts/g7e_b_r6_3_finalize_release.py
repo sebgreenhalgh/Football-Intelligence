@@ -149,6 +149,30 @@ def package_manifest() -> dict[str, Any]:
     }
 
 
+def dom_audit_summary() -> dict[str, Any]:
+    evidence = STAGE / "08_DOM_120_AUDIT"
+    challenge = read_json(evidence / "04_PRODUCTION_PATH_CHALLENGE_SUITE/production_path_challenge_results.json")
+    marking = read_json(evidence / "04_PRODUCTION_PATH_CHALLENGE_SUITE/r6_2_marking_and_branch_acceptance.json")
+    full = read_json(evidence / "05_FULL_120_BURST_BROWSER_AUDIT/full_120_burst_browser_audit.json")
+    bundle_sha256 = sha256(PACKAGE / "review.js")
+    if full.get("production_browser_bundle_sha256") != bundle_sha256:
+        raise RuntimeError("120-burst evidence is not bound to the final packaged browser bytes")
+    return {
+        "classification": "PASS_G7E_B_R6_3_FINAL_120_DOM_AND_BRANCH_AUDIT",
+        "exact_27_mark_route": marking.get("exact_27_mark_route") is True,
+        "nine_production_branches": marking.get("all_existing_branches") == 9 and challenge.get("route_count") == 9,
+        "events": full.get("event_count"),
+        "acknowledgements": full.get("acknowledgement_count"),
+        "tranche_receipts": full.get("tranche_receipt_count"),
+        "global_receipts": full.get("global_receipt_count"),
+        "persisted_invariant_discrepancy_count": full.get("persisted_invariant_discrepancy_count"),
+        "production_browser_bundle_sha256": bundle_sha256,
+        "bound_to_exact_final_browser_bytes": True,
+        "evidence_root": str(evidence),
+        "production_ready": False,
+    }
+
+
 def prepare_gate() -> None:
     status = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO, text=True).strip()
     if status:
@@ -242,7 +266,7 @@ def run_tests() -> dict[str, Any]:
     return result
 
 
-def build_handoff(real_resume: dict[str, Any], tests: dict[str, Any], latency: dict[str, Any], equivalence: dict[str, Any], gate: dict[str, Any]) -> None:
+def build_handoff(real_resume: dict[str, Any], tests: dict[str, Any], latency: dict[str, Any], equivalence: dict[str, Any], gate: dict[str, Any], dom_audit: dict[str, Any]) -> None:
     before = read_json(STAGE / "00_BASELINE_AND_REAL_STATE_FREEZE/real_state_file_manifest_before.json")
     after = real_snapshot()
     root_before_after = {"classification": "PASS_G7E_B_R6_3_REAL_STATE_BYTE_IDENTICAL" if before["files"] == after["files"] else "FAIL_R6_3_REAL_ROOT_MUTATION", "before": {key: before[key] for key in before if key != "files"}, "after": {key: after[key] for key in after if key != "files"}, "mismatches": [] if before["files"] == after["files"] else ["real root differs"], "production_ready": False}
@@ -257,7 +281,7 @@ def build_handoff(real_resume: dict[str, Any], tests: dict[str, Any], latency: d
         "03_REAL_MODE_LATENCY.json": latency,
         "04_STALE_RESYNC_EDGE.json": {"classification": "PASS_G7E_B_R6_3_STALE_RESYNC_NO_REPLAY", "revision_and_hash_rejected": True, "canonical_draft_adopted": True, "rejected_action_replayed": False, "browser_usable": True, "production_ready": False},
         "05_DUPLICATE_DONE_AND_IDEMPOTENCY.json": {"classification": "PASS_G7E_B_R6_3_DUPLICATE_DONE_NO_REVISION_INFLATION", "fresh_action_id_canonical_noop": True, "same_action_id_idempotent": True, "production_ready": False},
-        "06_PRODUCTION_PATH_AND_120.json": {"classification": "PASS_G7E_B_R6_3_INHERITED_R6_2_PRODUCTION_PATH_AND_120_AUDIT", "exact_27_mark_route": True, "nine_production_branches": True, "events": 120, "acknowledgements": 120, "tranche_receipts": 6, "global_receipts": 1, "bound_to_exact_final_browser_bytes": True, "production_ready": False},
+        "06_PRODUCTION_PATH_AND_120.json": dom_audit,
         "07_FAULT_RECOVERY.json": {"classification": "PASS_G7E_B_R6_3_INHERITED_FAULT_AND_RESTART_RECOVERY", "prepared_and_writing_recovered": True, "committed_not_rematerialized": True, "lost_response_idempotency_preserved": True, "production_ready": False},
         "08_TESTS.json": tests,
         "09_FINAL_BYTE_EQUIVALENCE.json": equivalence,
@@ -281,11 +305,12 @@ def finalize() -> None:
         raise RuntimeError("real-mode latency gate is not passed")
     real_resume = run_real_resume()
     tests = run_tests()
+    dom_audit = dom_audit_summary()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     equivalence = {"classification": "PASS_G7E_B_R6_3_FINAL_BYTE_EQUIVALENCE", "git_commit": commit, "source_package_import_equivalence": exact_bytes(commit), "package_manifest_sha256": sha256(PACKAGE / "package_manifest.json"), "release_gate_sha256": sha256(PACKAGE / GATE_NAME), "production_ready": False}
     write_json(STAGE / "11_RELEASE_GATE/final_byte_equivalence.json", equivalence)
     gate = read_json(PACKAGE / GATE_NAME)
-    build_handoff(real_resume, tests, latency, equivalence, gate)
+    build_handoff(real_resume, tests, latency, equivalence, gate, dom_audit)
     print(PASS)
 
 
