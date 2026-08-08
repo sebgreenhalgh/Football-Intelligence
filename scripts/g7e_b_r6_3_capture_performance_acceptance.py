@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -105,14 +106,9 @@ def prepare_supply(store: TemporalReviewStore, burst_id: str) -> dict[str, Any]:
         if family == "anchor":
             draft = dispatch(store, draft, "SET_SUBJECT_LOCATION", {"frame_sequence": 4, "source_xy": [100.0, 100.0]})
         elif family == "location":
-            token = next(part for part in draft["current_question_instance_key"].split("|") if part.startswith("SUBJECT_"))
-            subject = draft["subjects"][ord(token[-1]) - ord("A")]
             frame = int(draft["current_question_instance_key"].split("frame_")[-1].split("|")[0])
-            visibility = subject["frame_observations"][frame]["visibility"]
-            value = visibility if visibility in store.canonical_contract["domain_enums"]["visibility"] else "UNCERTAIN"
-            draft = dispatch(store, draft, "ANSWER_QUESTION", {"value": value})
-            if value in {"VISIBLE_COMPLETE", "VISIBLE_PARTIAL"}:
-                draft = dispatch(store, draft, "SET_SUBJECT_LOCATION", {"frame_sequence": frame, "source_xy": [100.0, 100.0]})
+            draft = dispatch(store, draft, "ANSWER_QUESTION", {"value": "VISIBLE_COMPLETE"})
+            draft = dispatch(store, draft, "SET_SUBJECT_LOCATION", {"frame_sequence": frame, "source_xy": [100.0, 100.0]})
         elif family in {"marker_review", "occlusion", "continuity"}:
             domain = store.canonical_contract["question_families"][family]["domain"]
             draft = dispatch(store, draft, "CONFIRM_SUBJECT_CONTINUITY", {"value": store.canonical_contract["domain_enums"][domain][0]})
@@ -141,7 +137,8 @@ def samples_for(store: TemporalReviewStore) -> dict[str, tuple[dict[str, Any], s
     navigation = (nav_draft, "NAVIGATE_FORWARD", {}, True)
 
     supply_draft = prepare_supply(store, store.cases[2]["burst_id"])
-    candidate = store.by_id[supply_draft["burst_id"]]["frame_candidates"][supply_draft["subjects"][0]["frame_observations"][4].get("frame_sequence", 4)][0]["candidate_id"]
+    supply_frame = int(supply_draft["current_question_instance_key"].split("frame_")[-1].split("|")[0])
+    candidate = store.by_id[supply_draft["burst_id"]]["frame_candidates"][supply_frame][0]["candidate_id"]
     selection = (supply_draft, "SELECT_CANDIDATE", {"candidate_id": candidate}, True)
 
     mark_draft = store.initialize_draft("real", store.cases[3]["burst_id"])
@@ -226,6 +223,8 @@ def main() -> None:
 
         edge_evidence = {"attempted": False, "passed": False}
         try:
+            if str(REPO) not in sys.path:
+                sys.path.insert(0, str(REPO))
             from scripts.g7e_b_r6_capture_edge_acceptance import open_edge_session, wait_value
 
             edge_evidence["attempted"] = True
