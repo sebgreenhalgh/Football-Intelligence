@@ -231,6 +231,7 @@ def run_real_resume() -> dict[str, Any]:
         cdp.evaluate("window.__r63PostCount=0;const __r63Fetch=window.fetch;window.fetch=(...a)=>{if((a[1]?.method||'GET').toUpperCase()==='POST')window.__r63PostCount++;return __r63Fetch(...a)}")
         cdp.evaluate("document.getElementById('startRealButton').click()")
         wait_value(cdp, "window.__G7E_B_R6__?.app?.mode === 'real'")
+        wait_value(cdp, "window.__G7E_B_R6__?.app?.draft?.burst_id")
         browser = cdp.evaluate("(()=>{const a=window.__G7E_B_R6__.app;return {burst_id:a.draft.burst_id,current_question:a.draft.current_question,current_question_instance_key:a.draft.current_question_instance_key,draft_version:a.draft.draft_version,draft_content_sha256:a.draft.draft_content_sha256,post_count:window.__r63PostCount}})()")
         before = read_json(STAGE / "00_BASELINE_AND_REAL_STATE_FREEZE/real_state_file_manifest_before.json")
         after = real_snapshot()
