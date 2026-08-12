@@ -49,6 +49,8 @@ RELEVANT_VISIBILITY = {
     "FULLY_OCCLUDED_EXPECTED_PRESENT",
     "UNCERTAIN",
 }
+R6_ADDITIONAL_SUBJECT_SOURCE = "R6_ADDITIONAL_SUBJECT_BRANCH"
+R6_LEGACY_ADDITIONAL_SUBJECT_SOURCE = "UNCERTAIN_HUMAN_SELECTION"
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -133,6 +135,50 @@ def _ensure_subjects(draft: dict[str, Any], case: Mapping[str, Any], count: int,
     while len(subjects) < count:
         subjects.append(_new_subject(case, len(subjects), source))
     del subjects[count:]
+
+
+def _initial_subject_count(draft: Mapping[str, Any]) -> int:
+    """Return the cardinality established before the optional add-subject branch."""
+    answers = draft.get("answers", {})
+    focus = answers.get("original_focus_box_answer")
+    if focus in {"ONE_RELEVANT_MATCH_PERSON", "PART_OF_ONE_RELEVANT_MATCH_PERSON"}:
+        return 1
+    if focus == "MORE_THAN_ONE_RELEVANT_PERSON":
+        return 2 if answers.get("multi_subject_b") == "ADD_SUBJECT_B" else 1
+    if focus == "NO_RELEVANT_PERSON":
+        context = answers.get("context_subject_answer")
+        return 2 if context == "YES_MORE_THAN_ONE_PERSON" else 1 if context == "YES_ONE_PERSON" else 0
+    if focus == "NOT_SURE":
+        return 1 if answers.get("uncertain_focus_path") == "UNCERTAIN_SUBJECT_A" else 0
+    return 0
+
+
+def r6_subject_cardinality_error(draft: Mapping[str, Any]) -> str | None:
+    """Validate that every subject beyond the initial branch has server provenance."""
+    subjects = draft.get("subjects", [])
+    if not isinstance(subjects, list) or len(subjects) > 3:
+        return "A burst may contain at most three ordered subjects."
+    initial = _initial_subject_count(draft)
+    if len(subjects) < initial:
+        return "The selected initial branch requires more subjects."
+    if initial == 0 and subjects:
+        return "The selected initial branch permits no subjects."
+    if len(subjects) == initial:
+        return None
+    additional_key = question_key(str(draft["burst_id"]), "additional_subject")
+    lifecycle = draft.get("question_lifecycle", {})
+    history = draft.get("action_journal", [])
+    has_additional_branch = lifecycle.get(additional_key) == "ANSWERED" and any(
+        row.get("action_type") == "ANSWER_QUESTION" and row.get("question_instance_key") == additional_key
+        for row in history
+        if isinstance(row, Mapping)
+    )
+    if not has_additional_branch:
+        return "Each extra subject requires an answered canonical additional-subject branch."
+    valid_sources = {R6_ADDITIONAL_SUBJECT_SOURCE, R6_LEGACY_ADDITIONAL_SUBJECT_SOURCE}
+    if any(subject.get("subject_definition_source") not in valid_sources for subject in subjects[initial:]):
+        return "Each extra subject must have canonical additional-subject provenance."
+    return None
 
 
 def initialize_r6_draft(
@@ -328,7 +374,12 @@ def _answer_question(
     elif family == "additional_subject":
         answers["additional_subject"] = value
         if value == "ADD_SUBJECT":
-            _ensure_subjects(draft, case, min(3, len(draft["subjects"]) + 1), "UNCERTAIN_HUMAN_SELECTION")
+            _ensure_subjects(
+                draft,
+                case,
+                min(3, len(draft["subjects"]) + 1),
+                R6_ADDITIONAL_SUBJECT_SOURCE,
+            )
     elif family == "missed_check":
         answers["missed_check"] = value
         if value != "YES":
@@ -446,7 +497,9 @@ def _question_complete(draft: Mapping[str, Any], key: str, contract: Mapping[str
 def _all_summary_fields_answered(draft: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
     sequence = applicable_question_sequence(draft, contract)
     summary = question_key(draft["burst_id"], "summary")
-    return all(_question_complete(draft, key, contract) for key in sequence if key != summary)
+    return r6_subject_cardinality_error(draft) is None and all(
+        _question_complete(draft, key, contract) for key in sequence if key != summary
+    )
 
 
 def _authorize_summary(draft: dict[str, Any], contract: Mapping[str, Any]) -> None:
@@ -476,6 +529,9 @@ def validate_r6_invariants(draft: Mapping[str, Any], contract: Mapping[str, Any]
     if draft.get("summary_ready"):
         if not _all_summary_fields_answered(draft, contract):
             errors.append("SUMMARY_WITH_UNANSWERED_APPLICABLE_FIELD")
+        cardinality_error = r6_subject_cardinality_error(draft)
+        if cardinality_error:
+            errors.append(f"SUMMARY_FINAL_SUBJECT_CARDINALITY:{cardinality_error}")
         if question_family(str(draft.get("current_question_instance_key"))) != "summary":
             errors.append("SUMMARY_READY_OUTSIDE_SUMMARY")
     return errors
@@ -693,6 +749,18 @@ def compile_final_event(
     action_contract_sha256: str,
     case: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    cardinality_error = r6_subject_cardinality_error(draft)
+    if cardinality_error:
+        return None, [
+            {
+                "error_code": "FINAL_SUBJECT_PROVENANCE",
+                "field": "subjects",
+                "message": cardinality_error,
+                "question_id": "additional_subject",
+                "correction_route": "additional_subject",
+                "question_instance_key": question_key(str(draft.get("burst_id", "")), "additional_subject"),
+            }
+        ]
     failures = validate_r6_invariants(draft, canonical_contract)
     if failures or not draft.get("summary_ready"):
         return None, [
@@ -708,6 +776,7 @@ def compile_final_event(
     bridge = copy.deepcopy(dict(draft))
     bridge["schema_version"] = R5_WORKING_DRAFT_SCHEMA
     bridge["review_revision"] = canonical_contract["review_revision"]
+    bridge["r6_subject_cardinality_provenance_verified"] = True
     event, errors = compile_r5_final_event(bridge, canonical_contract, canonical_contract_sha256, case)
     if event is None:
         return None, errors

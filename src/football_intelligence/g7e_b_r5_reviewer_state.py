@@ -495,7 +495,11 @@ def compile_final_event(
             )
         )
     subjects = copy.deepcopy(draft.get("subjects", []))
-    if focus in {"ONE_RELEVANT_MATCH_PERSON", "PART_OF_ONE_RELEVANT_MATCH_PERSON"} and len(subjects) != 1:
+    if (
+        focus in {"ONE_RELEVANT_MATCH_PERSON", "PART_OF_ONE_RELEVANT_MATCH_PERSON"}
+        and len(subjects) != 1
+        and draft.get("r6_subject_cardinality_provenance_verified") is not True
+    ):
         errors.append(
             _error("FINAL_SUBJECT_COUNT", "subjects", "This focus answer requires exactly Subject A.", "original_focus")
         )
