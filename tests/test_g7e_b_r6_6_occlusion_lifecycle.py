@@ -8,6 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from football_intelligence.g7e_b_r5_reviewer_state import (
+    R5_REVIEW_REVISION,
+    R5_WORKING_DRAFT_SCHEMA,
+    compile_final_event as compile_r5_final_event,
+)
 from football_intelligence.g7e_b_r6_action_reducer import (
     _all_summary_fields_answered,
     _reconcile_branches,
@@ -126,6 +131,24 @@ def test_invalid_frame_phase_remains_independently_rejected(reviewer: TemporalRe
     assert _all_summary_fields_answered(draft, reviewer.canonical_contract) is False
     assert event is None
     assert errors[0]["error_code"] == "R6_SUMMARY_NOT_SERVER_AUTHORIZED"
+
+
+def test_r5_compiler_independently_rejects_invalid_frame_phase(reviewer: TemporalReviewStore, real_draft: dict) -> None:
+    draft = copy.deepcopy(real_draft)
+    draft["schema_version"] = R5_WORKING_DRAFT_SCHEMA
+    draft["review_revision"] = R5_REVIEW_REVISION
+    draft["r6_subject_cardinality_provenance_verified"] = True
+    draft["subjects"][1]["frame_observations"][0]["occlusion_phase"] = "INVALID_FRAME_PHASE"
+
+    event, errors = compile_r5_final_event(
+        draft,
+        reviewer.canonical_contract,
+        reviewer.canonical_contract_sha256,
+        reviewer.by_id[BURST],
+    )
+
+    assert event is None
+    assert any(row["error_code"] == "FINAL_OCCLUSION_PHASE_REQUIRED" for row in errors)
 
 
 def test_non_applicable_occlusion_is_skipped_and_requires_a_new_answer_if_restored(
