@@ -20,15 +20,21 @@ from football_intelligence.g7e_b_r6_action_reducer import (
     compile_final_event,
     rollback_provisional_additional_subject,
 )
-from football_intelligence.temporal_review import TemporalReviewStore, canonical_digest
+from football_intelligence.temporal_review import (
+    R6_7_2_RELEASE_CLASSIFICATION,
+    R6_7_2_RELEASE_GATE_NAME,
+    R6_7_2_RELEASE_REVISION,
+    TemporalReviewStore,
+    canonical_digest,
+)
 
 
 PROJECT = Path(r"C:\Users\sebgr\Documents\football-intelligence")
 PART7 = PROJECT / "experiments/football_observation_reasoner/part 7"
 PART8 = PROJECT / "experiments/football_observation_reasoner/part 8"
-STAGE = PART8 / "G7E_B_R6_7_1_REAL_MODE_RELEASE_GATE_CLOSURE_v1"
-PACKAGE = STAGE / "03_REAL_MODE_RELEASE_GATE_IMPLEMENTATION/temporal_reviewer_r6_7_1"
-BUILDER = STAGE / "build_r6_7_1.py"
+STAGE = PART8 / "G7E_B_R6_7_2_PROVISIONAL_ADDITIONAL_SUBJECT_ROLLBACK_v1"
+PACKAGE = STAGE / "03_PROVISIONAL_ROLLBACK_IMPLEMENTATION/temporal_reviewer_r6_7_2"
+BUILDER = STAGE / "build_r6_7_2.py"
 REAL_ROOT = (
     PART7
     / "G7E_B_R3_FRAME_BINDING_AND_ATOMIC_FINAL_SAVE_REPAIR_v1"
@@ -61,6 +67,17 @@ def normalized_base(real_draft: dict) -> dict:
     draft = copy.deepcopy(real_draft)
     assert rollback_provisional_additional_subject(draft) is True
     return draft
+
+
+def test_fresh_r6_7_2_package_starts_normally_with_its_dedicated_gate(tmp_path: Path) -> None:
+    build = json.loads((PACKAGE / "build_manifest.json").read_text(encoding="utf-8"))
+    gate = json.loads((PACKAGE / R6_7_2_RELEASE_GATE_NAME).read_text(encoding="utf-8"))
+
+    store = TemporalReviewStore(PACKAGE, tmp_path / "real", tmp_path / "practice", acceptance_mode=False)
+
+    assert build["release_revision"] == R6_7_2_RELEASE_REVISION
+    assert gate["release_classification"] == R6_7_2_RELEASE_CLASSIFICATION
+    assert store._cached_release_gate_status["valid"] is True
 
 
 @pytest.mark.parametrize("answer", ["CONTINUE", "NOT_SURE"])
