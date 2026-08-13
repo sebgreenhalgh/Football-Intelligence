@@ -181,6 +181,76 @@ def r6_subject_cardinality_error(draft: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _subject_review_started(draft: Mapping[str, Any], subject: Mapping[str, Any]) -> bool:
+    """Return whether a subject has received any canonical human review."""
+    token = str(subject.get("subject_token", ""))
+    if token not in {"SUBJECT_A", "SUBJECT_B", "SUBJECT_C"}:
+        return True
+    lifecycle = draft.get("question_lifecycle", {})
+    answers = draft.get("answered_domain_values", {})
+    if any(f"|{token}|" in str(key) and state == "ANSWERED" for key, state in lifecycle.items()):
+        return True
+    if any(f"|{token}|" in str(key) for key in answers):
+        return True
+    if subject.get("anchor_source_xy") is not None or subject.get("anchor_frame_sequence") is not None:
+        return True
+    if any(
+        subject.get(field) is not None
+        for field in ("marker_continuity_confirmation", "continuity", "role", "participation", "certainty")
+    ):
+        return True
+    if subject.get("occlusion_confirmed") is True:
+        return True
+    for observation in subject.get("frame_observations", []):
+        if any(
+            observation.get(field) not in (None, False, [], "NOT_APPLICABLE")
+            for field in (
+                "visibility",
+                "human_confirmed",
+                "approximate_hidden_location",
+                "subject_location_source_x",
+                "subject_location_source_y",
+                "observation_supply",
+                "candidate_relationship",
+                "selected_candidate_ids",
+            )
+        ):
+            return True
+    return False
+
+
+def rollback_provisional_additional_subject(draft: dict[str, Any]) -> bool:
+    """Remove one unentered trailing additional-branch subject after a branch rollback.
+
+    The current additional-subject answer is authoritative.  Only a trailing
+    branch-created subject with no canonical human review can be discarded.
+    This also repairs legacy drafts created before the rollback rule existed.
+    """
+    if draft.get("answers", {}).get("additional_subject") not in {"CONTINUE", "NOT_SURE"}:
+        return False
+    subjects = draft.get("subjects", [])
+    if not subjects or len(subjects) <= _initial_subject_count(draft):
+        return False
+    trailing = subjects[-1]
+    if trailing.get("subject_definition_source") not in {
+        R6_ADDITIONAL_SUBJECT_SOURCE,
+        R6_LEGACY_ADDITIONAL_SUBJECT_SOURCE,
+    } or _subject_review_started(draft, trailing):
+        return False
+    token = str(trailing["subject_token"])
+    del subjects[-1]
+    for key in list(draft.get("question_lifecycle", {})):
+        if f"|{token}|" in str(key):
+            draft["question_lifecycle"].pop(key, None)
+    for key in list(draft.get("answered_domain_values", {})):
+        if f"|{token}|" in str(key):
+            draft["answered_domain_values"].pop(key, None)
+    draft["navigation_history"] = [
+        key for key in draft.get("navigation_history", []) if f"|{token}|" not in str(key)
+    ]
+    return True
+
+
 def initialize_r6_draft(
     case: Mapping[str, Any],
     mode: str,
@@ -569,6 +639,7 @@ def apply_action(
 ) -> dict[str, Any]:
     """Apply one idempotent browser intent to a copy of canonical server state."""
     draft = copy.deepcopy(dict(document))
+    rollback_provisional_additional_subject(draft)
     if draft.get("schema_version") != R6_WORKING_DRAFT_SCHEMA:
         raise ValueError("R6 draft schema mismatch")
     if action.get("review_revision") != R6_REVIEW_REVISION:
@@ -738,6 +809,7 @@ def apply_action(
                 draft["navigation_history"].append(current)
                 _set_current(draft, question_sequence[index + 1])
 
+    rollback_provisional_additional_subject(draft)
     _reconcile_branches(draft, canonical_contract, action_id, action_type)
     if action_type not in {"NAVIGATE_BACK", "NAVIGATE_FORWARD"}:
         _set_current(draft, draft["current_question_instance_key"])
@@ -772,6 +844,11 @@ def compile_final_event(
     action_contract_sha256: str,
     case: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    draft = copy.deepcopy(dict(draft))
+    if rollback_provisional_additional_subject(draft) and question_family(
+        str(draft.get("current_question_instance_key", "summary"))
+    ) == "summary":
+        _authorize_summary(draft, canonical_contract)
     cardinality_error = r6_subject_cardinality_error(draft)
     if cardinality_error:
         return None, [
