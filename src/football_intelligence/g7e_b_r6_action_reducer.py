@@ -803,6 +803,46 @@ def compile_final_event(
     event, errors = compile_r5_final_event(bridge, canonical_contract, canonical_contract_sha256, case)
     if event is None:
         return None, errors
+    event_subjects = event.get("subjects", [])
+    draft_subjects = draft.get("subjects", [])
+    if len(event_subjects) != len(draft_subjects):
+        return None, [
+            {
+                "error_code": "FINAL_SUBJECT_OCCLUSION_BINDING",
+                "field": "subjects",
+                "message": "Compiled subjects do not match the canonical R6 draft.",
+                "question_id": "occlusion",
+            }
+        ]
+    for subject_index, (event_subject, draft_subject) in enumerate(
+        zip(event_subjects, draft_subjects, strict=True)
+    ):
+        subject_token = str(draft_subject.get("subject_token", ""))
+        if event_subject.get("subject_token") != subject_token:
+            return None, [
+                {
+                    "error_code": "FINAL_SUBJECT_OCCLUSION_BINDING",
+                    "field": f"subjects[{subject_index}].subject_token",
+                    "message": "Compiled subject order does not match the canonical R6 draft.",
+                    "question_id": "occlusion",
+                }
+            ]
+        if not _needs_occlusion(draft_subject):
+            event_subject.pop("occlusion_sequence_answer", None)
+            continue
+        occlusion_key = question_key(str(draft["burst_id"]), "occlusion", subject_token)
+        answer = draft.get("answered_domain_values", {}).get(occlusion_key)
+        if answer not in canonical_contract["domain_enums"]["occlusion_phase"]:
+            return None, [
+                {
+                    "error_code": "FINAL_SUBJECT_OCCLUSION_ANSWER_REQUIRED",
+                    "field": f"answered_domain_values.{occlusion_key}",
+                    "message": "Each applicable subject requires its canonical occlusion answer.",
+                    "question_id": "occlusion",
+                    "question_instance_key": occlusion_key,
+                }
+            ]
+        event_subject["occlusion_sequence_answer"] = answer
     event.update(
         {
             "schema_version": R6_EVENT_SCHEMA,
