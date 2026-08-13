@@ -251,6 +251,16 @@ def rollback_provisional_additional_subject(draft: dict[str, Any]) -> bool:
     return True
 
 
+def normalize_provisional_additional_subject(
+    draft: dict[str, Any], contract: Mapping[str, Any]
+) -> bool:
+    """Apply the non-destructive rollback view and refresh summary authorization."""
+    changed = rollback_provisional_additional_subject(draft)
+    if changed and question_family(str(draft.get("current_question_instance_key", "summary"))) == "summary":
+        _authorize_summary(draft, contract)
+    return changed
+
+
 def initialize_r6_draft(
     case: Mapping[str, Any],
     mode: str,
@@ -639,7 +649,7 @@ def apply_action(
 ) -> dict[str, Any]:
     """Apply one idempotent browser intent to a copy of canonical server state."""
     draft = copy.deepcopy(dict(document))
-    rollback_provisional_additional_subject(draft)
+    normalize_provisional_additional_subject(draft, canonical_contract)
     if draft.get("schema_version") != R6_WORKING_DRAFT_SCHEMA:
         raise ValueError("R6 draft schema mismatch")
     if action.get("review_revision") != R6_REVIEW_REVISION:
@@ -845,10 +855,7 @@ def compile_final_event(
     case: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     draft = copy.deepcopy(dict(draft))
-    if rollback_provisional_additional_subject(draft) and question_family(
-        str(draft.get("current_question_instance_key", "summary"))
-    ) == "summary":
-        _authorize_summary(draft, canonical_contract)
+    normalize_provisional_additional_subject(draft, canonical_contract)
     cardinality_error = r6_subject_cardinality_error(draft)
     if cardinality_error:
         return None, [

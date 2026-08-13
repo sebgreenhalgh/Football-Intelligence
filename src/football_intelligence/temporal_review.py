@@ -37,6 +37,7 @@ from football_intelligence.g7e_b_r6_action_reducer import (
     apply_action as apply_r6_action,
     compile_final_event as compile_r6_final_event,
     initialize_r6_draft,
+    normalize_provisional_additional_subject,
 )
 from football_intelligence.temporal_burst_selection import CLASS_PRIORITY, MATCHES, QUOTAS
 from football_intelligence.temporal_reviewer.contracts import contained_path, validate_action_envelope
@@ -1436,6 +1437,10 @@ class TemporalReviewStore:
         payload = read_json(path)
         if payload.get("review_revision") != self.review_revision or payload.get("burst_id") != burst_id:
             return None
+        if self.review_revision == R6_REVIEW_REVISION and self.canonical_contract is not None:
+            projected = copy.deepcopy(payload)
+            normalize_provisional_additional_subject(projected, self.canonical_contract)
+            return projected
         return payload
 
     def incompatible_draft(self, mode: str, burst_id: str) -> dict[str, Any] | None:

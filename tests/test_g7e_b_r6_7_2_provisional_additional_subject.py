@@ -130,6 +130,7 @@ def test_exact_revision_108_copy_normalizes_for_summary_and_exactly_once_save(tm
         }
     )
     reviewer = TemporalReviewStore(PACKAGE, root, tmp_path / "practice", acceptance_mode=True)
+    restored = reviewer.draft("real", BURST)
     request = {
         "mode": "real", "burst_id": BURST, "draft_version": original["draft_version"],
         "draft_content_sha256": original["draft_content_sha256"],
@@ -142,6 +143,11 @@ def test_exact_revision_108_copy_normalizes_for_summary_and_exactly_once_save(tm
     )
 
     assert draft_path.read_bytes() == original_bytes
+    assert restored is not None
+    assert [subject["subject_token"] for subject in restored["subjects"]] == ["SUBJECT_A"]
+    assert restored["summary_ready"] is True
+    assert restored["draft_version"] == original["draft_version"]
+    assert restored["draft_content_sha256"] == original["draft_content_sha256"]
     assert preflight["ok"] is True and errors == [] and event is not None
     assert [subject["subject_token"] for subject in event["subjects"]] == ["SUBJECT_A"]
     assert _all_summary_fields_answered(
