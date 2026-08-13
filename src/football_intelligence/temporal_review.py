@@ -74,6 +74,12 @@ R6_7_RELEASE_GATE_SCHEMA = "football_intelligence.g7e_b_r6_7.real_review_release
 R6_7_RELEASE_CLASSIFICATION = (
     "PASS_G7E_B_R6_7_IMMUTABLE_SUBJECT_OCCLUSION_ANSWER_PRESERVATION_READY_FOR_TRANCHE_2_RESUME"
 )
+R6_7_2_RELEASE_REVISION = "G7E_B_R6_7_2_PROVISIONAL_ADDITIONAL_SUBJECT_ROLLBACK_V1"
+R6_7_2_RELEASE_GATE_NAME = "G7E_B_R6_7_2_REAL_REVIEW_RELEASE_GATE.json"
+R6_7_2_RELEASE_GATE_SCHEMA = "football_intelligence.g7e_b_r6_7_2.real_review_release_gate.v1"
+R6_7_2_RELEASE_CLASSIFICATION = (
+    "PASS_G7E_B_R6_7_2_PROVISIONAL_ADDITIONAL_SUBJECT_ROLLBACK_READY_FOR_TRANCHE_2_RESUME"
+)
 TRANCHES = tuple(f"TRANCHE_{index}" for index in range(1, 7))
 
 MATCH_ROTATION: dict[str, dict[str, int]] = {
@@ -462,6 +468,48 @@ class TemporalReviewStore:
 
     def _verify_release_gate(self) -> dict[str, Any]:
         if self.review_revision == R6_REVIEW_REVISION:
+            if self.release_revision == R6_7_2_RELEASE_REVISION:
+                gate_path = self.package / R6_7_2_RELEASE_GATE_NAME
+                failures: list[str] = []
+                gate: Mapping[str, Any] = {}
+                if not gate_path.is_file():
+                    failures.append("R6_7_2_RELEASE_GATE_MISSING")
+                else:
+                    gate = read_json(gate_path)
+                    if gate.get("schema_version") != R6_7_2_RELEASE_GATE_SCHEMA:
+                        failures.append("R6_7_2_RELEASE_GATE_SCHEMA_MISMATCH")
+                    if gate.get("release_classification") != R6_7_2_RELEASE_CLASSIFICATION:
+                        failures.append("R6_7_2_RELEASE_CLASSIFICATION_NOT_PASSED")
+                    if gate.get("review_protocol_revision") != R6_REVIEW_REVISION:
+                        failures.append("R6_7_2_REVIEW_PROTOCOL_REVISION_MISMATCH")
+                    if gate.get("action_contract_sha256") != self.action_contract_sha256:
+                        failures.append("R6_7_2_ACTION_CONTRACT_HASH_MISMATCH")
+                    if gate.get("canonical_contract_sha256") != self.canonical_contract_sha256:
+                        failures.append("R6_7_2_CANONICAL_CONTRACT_HASH_MISMATCH")
+                    if gate.get("production_ready") is not False:
+                        failures.append("R6_7_2_PRODUCTION_READY_MISMATCH")
+                    expected_files = gate.get("reviewer_file_sha256", {})
+                    expected_snapshots = gate.get("runtime_source_snapshot_sha256", {})
+                    if not isinstance(expected_files, Mapping) or not expected_files:
+                        failures.append("R6_7_2_RELEASE_REVIEWER_HASHES_MISSING")
+                    else:
+                        for relative, expected in expected_files.items():
+                            path = self.package / str(relative)
+                            if not path.is_file() or sha256_file(path) != expected:
+                                failures.append(f"R6_7_2_RELEASE_REVIEWER_HASH_MISMATCH:{relative}")
+                    if not isinstance(expected_snapshots, Mapping) or not expected_snapshots:
+                        failures.append("R6_7_2_RELEASE_RUNTIME_SNAPSHOT_HASHES_MISSING")
+                    else:
+                        for relative, expected in expected_snapshots.items():
+                            path = self.package / str(relative)
+                            if not path.is_file() or sha256_file(path) != expected:
+                                failures.append(f"R6_7_2_RELEASE_RUNTIME_SNAPSHOT_HASH_MISMATCH:{relative}")
+                return {
+                    "required": True, "valid": not failures, "failures": failures,
+                    "release_classification": gate.get("release_classification"), "gate_path": str(gate_path),
+                    "gate_sha256": sha256_file(gate_path) if gate_path.is_file() else None,
+                    "production_ready": False,
+                }
             if self.release_revision == R6_7_RELEASE_REVISION:
                 gate_path = self.package / R6_7_RELEASE_GATE_NAME
                 failures: list[str] = []
