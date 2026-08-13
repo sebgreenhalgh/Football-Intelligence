@@ -386,8 +386,10 @@ def _answer_question(
             draft["missed_person_marks"] = []
             draft["missed_marking_complete"] = False
     elif family == "location":
+        if frame is None:
+            raise ValueError("location question requires a frame")
         subject = _current_subject(draft, token)
-        row = subject["frame_observations"][int(frame)]
+        row = subject["frame_observations"][frame]
         row["visibility"] = value
         if value not in {"VISIBLE_COMPLETE", "VISIBLE_PARTIAL", "FULLY_OCCLUDED_EXPECTED_PRESENT"}:
             for field in (
@@ -405,8 +407,10 @@ def _answer_question(
         row["selected_candidate_ids"] = []
         row["candidate_selection_binding"]["selected_candidate_ids"] = []
     elif family == "supply":
+        if frame is None:
+            raise ValueError("supply question requires a frame")
         subject = _current_subject(draft, token)
-        row = subject["frame_observations"][int(frame)]
+        row = subject["frame_observations"][frame]
         row["observation_supply"] = value
         state = _relationship_state(contract, value)
         if state is None:
@@ -424,8 +428,10 @@ def _answer_question(
             if row.get("candidate_relationship") not in allowed:
                 row.pop("candidate_relationship", None)
     elif family == "relationship":
+        if frame is None:
+            raise ValueError("relationship question requires a frame")
         subject = _current_subject(draft, token)
-        row = subject["frame_observations"][int(frame)]
+        row = subject["frame_observations"][frame]
         state = _relationship_state(contract, row.get("observation_supply"))
         if not state or not state["relationship_applicable"]:
             raise ValueError("relationship question is not applicable")
@@ -482,10 +488,14 @@ def _question_complete(draft: Mapping[str, Any], key: str, contract: Mapping[str
         subject = draft["subjects"][_subject_index(token)]
         return isinstance(subject.get("anchor_source_xy"), list)
     if family == "location":
+        if frame is None:
+            return False
         row = draft["subjects"][_subject_index(token)]["frame_observations"][int(frame)]
         if row.get("visibility") in {"VISIBLE_COMPLETE", "VISIBLE_PARTIAL"}:
             return row.get("human_confirmed") is True
     if family == "supply" and contract is not None:
+        if frame is None:
+            return False
         row = draft["subjects"][_subject_index(token)]["frame_observations"][int(frame)]
         branch = _relationship_state(contract, row.get("observation_supply"))
         if not branch:
@@ -705,11 +715,11 @@ def apply_action(
     elif action_type == "NAVIGATE_FORWARD":
         if not _question_complete(draft, current, canonical_contract):
             raise ValueError("current question is not answered")
-        sequence = applicable_question_sequence(draft, canonical_contract)
+        question_sequence = applicable_question_sequence(draft, canonical_contract)
         new_subject_anchor = next(
             (
                 key
-                for key in sequence
+                for key in question_sequence
                 if question_family(key) == "anchor"
                 and draft["question_lifecycle"].get(key) not in {"ANSWERED", "SKIPPED_NOT_APPLICABLE"}
             ),
@@ -723,10 +733,10 @@ def apply_action(
             draft["navigation_history"].append(current)
             _set_current(draft, new_subject_anchor)
         else:
-            index = sequence.index(current)
-            if index + 1 < len(sequence):
+            index = question_sequence.index(current)
+            if index + 1 < len(question_sequence):
                 draft["navigation_history"].append(current)
-                _set_current(draft, sequence[index + 1])
+                _set_current(draft, question_sequence[index + 1])
 
     _reconcile_branches(draft, canonical_contract, action_id, action_type)
     if action_type not in {"NAVIGATE_BACK", "NAVIGATE_FORWARD"}:
