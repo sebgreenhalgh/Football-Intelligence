@@ -572,6 +572,16 @@ def compile_final_event(
             continue
         any_occlusion = False
         for sequence, observation in enumerate(observations):
+            observation.setdefault("occlusion_phase", "NONE")
+            if observation["occlusion_phase"] not in contract["domain_enums"]["occlusion_phase"]:
+                errors.append(
+                    _error(
+                        "FINAL_OCCLUSION_PHASE_REQUIRED",
+                        f"subjects[{subject_index}].frame_observations[{sequence}].occlusion_phase",
+                        "Each frame occlusion phase must use the canonical enum.",
+                        f"{route_prefix}_occlusion",
+                    )
+                )
             visibility = observation.get("visibility")
             require_lifecycle(
                 "location",
@@ -682,7 +692,6 @@ def compile_final_event(
                 observation.pop("relationship_question_id", None)
                 observation.pop("relationship_branch_family", None)
                 observation["candidate_relationship"] = "NOT_APPLICABLE"
-            observation.setdefault("occlusion_phase", "NONE")
         for field in ("role", "participation", "certainty"):
             enum = contract["domain_enums"][field]
             if subject.get(field) not in enum:
@@ -716,9 +725,6 @@ def compile_final_event(
             "occlusion",
             f"{route_prefix}_occlusion",
             applicable=any_occlusion,
-            expected_value=(
-                "OCCLUDED" if any(row.get("occlusion_phase") == "OCCLUDED" for row in observations) else "NONE"
-            ),
             subject_token=subject_token,
         )
         continuity_required = (

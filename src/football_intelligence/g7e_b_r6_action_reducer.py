@@ -470,10 +470,14 @@ def _validate_current_action(draft: Mapping[str, Any], action: Mapping[str, Any]
 def _question_complete(draft: Mapping[str, Any], key: str, contract: Mapping[str, Any] | None = None) -> bool:
     state = draft.get("question_lifecycle", {}).get(key)
     if state == "SKIPPED_NOT_APPLICABLE":
-        return True
+        return False
     if state != "ANSWERED":
         return False
     family, token, frame = parse_instance(key)
+    if contract is not None:
+        domain = _domain_for_family(contract, family)
+        if domain and draft.get("answered_domain_values", {}).get(key) not in contract["domain_enums"][domain]:
+            return False
     if family == "anchor":
         subject = draft["subjects"][_subject_index(token)]
         return isinstance(subject.get("anchor_source_xy"), list)
@@ -497,8 +501,15 @@ def _question_complete(draft: Mapping[str, Any], key: str, contract: Mapping[str
 def _all_summary_fields_answered(draft: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
     sequence = applicable_question_sequence(draft, contract)
     summary = question_key(draft["burst_id"], "summary")
-    return r6_subject_cardinality_error(draft) is None and all(
-        _question_complete(draft, key, contract) for key in sequence if key != summary
+    frame_phases_valid = all(
+        observation.get("occlusion_phase", "NONE") in contract["domain_enums"]["occlusion_phase"]
+        for subject in draft.get("subjects", [])
+        for observation in subject.get("frame_observations", [])
+    )
+    return (
+        r6_subject_cardinality_error(draft) is None
+        and frame_phases_valid
+        and all(_question_complete(draft, key, contract) for key in sequence if key != summary)
     )
 
 
@@ -524,6 +535,8 @@ def validate_r6_invariants(draft: Mapping[str, Any], contract: Mapping[str, Any]
             errors.append(f"ANSWER_WITHOUT_ANSWERED_LIFECYCLE:{key}")
         if domain and lifecycle.get(key) == "ANSWERED" and key not in answers:
             errors.append(f"ANSWERED_LIFECYCLE_WITHOUT_ANSWER:{key}")
+        if domain and key in answers and answers[key] not in contract["domain_enums"][domain]:
+            errors.append(f"INVALID_DOMAIN_ENUM:{key}")
         if lifecycle.get(key) == "SKIPPED_NOT_APPLICABLE" and key in answers:
             errors.append(f"HIDDEN_STALE_ANSWER:{key}")
     if draft.get("summary_ready"):
