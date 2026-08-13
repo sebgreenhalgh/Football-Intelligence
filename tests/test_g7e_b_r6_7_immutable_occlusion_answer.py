@@ -136,12 +136,17 @@ def test_temp_real_copy_persists_answer_before_draft_deletion_and_keeps_human_co
 
     preflight = reviewer.final_save_preflight(request, "real")
     assert preflight["ok"] is True
+    save_request = {
+        **request,
+        "proposed_event_id": preflight["proposed_event_id"],
+        "idempotency_key": preflight["idempotency_key"],
+    }
     saved = reviewer.save_event(
-        {**request, "proposed_event_id": preflight["proposed_event_id"], "idempotency_key": preflight["idempotency_key"]},
+        save_request,
         "real",
     )
     repeated = reviewer.save_event(
-        {**request, "proposed_event_id": preflight["proposed_event_id"], "idempotency_key": preflight["idempotency_key"]},
+        save_request,
         "real",
     )
 
