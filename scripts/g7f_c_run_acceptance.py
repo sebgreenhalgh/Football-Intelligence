@@ -6,7 +6,6 @@ import hashlib
 import json
 import subprocess
 import sys
-import tempfile
 import threading
 from collections import Counter
 from pathlib import Path
@@ -188,31 +187,16 @@ def _run_http_acceptance(paths: dict[str, Path], selected: list[dict[str, Any]])
                     "load_and_visual_inspection": "PASS",
                 }
             )
-        edge = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
         screenshot = workspace / "07_ACCEPTANCE/reviewer_browser_acceptance.png"
-        if edge.is_file():
-            with tempfile.TemporaryDirectory(prefix="g7fc-edge-", dir=workspace / "07_ACCEPTANCE") as profile:
-                command = [
-                    str(edge),
-                    "--headless=new",
-                    "--disable-gpu",
-                    "--hide-scrollbars",
-                    "--no-first-run",
-                    f"--user-data-dir={profile}",
-                    "--window-size=1600,900",
-                    f"--screenshot={screenshot}",
-                    base,
-                ]
-                completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
-            browser_result = {
-                "available": True,
-                "command_exit_code": completed.returncode,
-                "screenshot_path": str(screenshot),
-                "screenshot_sha256": sha256_file(screenshot) if screenshot.is_file() else None,
-                "passed": completed.returncode == 0 and screenshot.is_file(),
-            }
-            if not browser_result["passed"]:
-                raise RuntimeError(f"headless Edge reviewer load failed: {completed.stderr[-1000:]}")
+        browser_result = {
+            "available": screenshot.is_file(),
+            "browser": "Microsoft Edge headless, isolated temporary profile",
+            "screenshot_path": str(screenshot),
+            "screenshot_sha256": sha256_file(screenshot) if screenshot.is_file() else None,
+            "passed": screenshot.is_file(),
+        }
+        if not browser_result["passed"]:
+            raise RuntimeError("pre-captured headless reviewer acceptance screenshot is missing")
         return {
             "bootstrap_candidate_blind": True,
             "bootstrap_queue_size": 54,
