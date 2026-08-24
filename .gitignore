@@ -78,6 +78,7 @@ logs/
 _cleanup_quarantine_*/
 _archive_*/
 _tmp_*/
+_tmp/
 .codex_tmp/
 .pytest_tmp_*/
 playwright-report/
