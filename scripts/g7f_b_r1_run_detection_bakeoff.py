@@ -1120,9 +1120,9 @@ def render_visual_review(
         if key not in selected:
             selected.append(key)
     selected = selected[:24]
-    requested = {frame_by_key[key]["frame_pixel_sha256"]: frame_by_key[key] for key in selected}
+    requested = [frame_by_key[key] for key in selected]
     by_video: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in requested.values():
+    for row in requested:
         by_video[row["source_video_relative_path"]].append(row)
     rendered = []
     output_dir = workspace / "05_VISUAL_REVIEW"
@@ -1134,13 +1134,12 @@ def render_visual_review(
         "MULTIPLICITY_REDUCTION_VARIANT": (220, 80, 220),
     }
     role_order = tuple(colors)
-    key_by_hash = {row["frame_pixel_sha256"]: key for key, row in frame_by_key.items() if key in selected}
     for relative_video, rows in sorted(by_video.items()):
         for frame_row, frame in _decode_targets(project_root(repo) / relative_video, rows):
             source_hash = frame_row["frame_pixel_sha256"]
             if sha256_rgb(frame) != source_hash:
                 raise RuntimeError("FAIL_VISUAL_SOURCE_HASH")
-            key = key_by_hash[source_hash]
+            key = (frame_row["burst_id"], int(frame_row["burst_frame_sequence"]))
             panels = []
             counts = {}
             for role in role_order:
