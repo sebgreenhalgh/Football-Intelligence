@@ -248,13 +248,18 @@ def _build(args: argparse.Namespace, staging: Path) -> dict[str, Any]:
     )
     focused_xml = staging / "08_TESTS_AND_INTEGRITY" / "focused_g7f_a_r1_pytest.xml"
     applicable_xml = staging / "08_TESTS_AND_INTEGRITY" / "applicable_g7f_a_pytest.xml"
+    focused_temp = staging / "08_TESTS_AND_INTEGRITY" / "_pytest_tmp_focused"
+    applicable_temp = staging / "08_TESTS_AND_INTEGRITY" / "_pytest_tmp_applicable"
     focused = _command_report(
         [
             sys.executable,
             "-m",
             "pytest",
+            "-p",
+            "no:cacheprovider",
             "tests/test_g7f_a_r1_frame_registry_and_adapter.py",
             "-q",
+            f"--basetemp={focused_temp}",
             f"--junitxml={focused_xml}",
         ],
         repository,
@@ -266,14 +271,20 @@ def _build(args: argparse.Namespace, staging: Path) -> dict[str, Any]:
             sys.executable,
             "-m",
             "pytest",
+            "-p",
+            "no:cacheprovider",
             "tests/test_g7f_a_gold_corpus_and_eval.py",
             "-q",
+            f"--basetemp={applicable_temp}",
             f"--junitxml={applicable_xml}",
         ],
         repository,
         environment,
     )
     _write_command_log(staging / "08_TESTS_AND_INTEGRITY" / "applicable_g7f_a_pytest.log", applicable)
+    for test_temp in (focused_temp, applicable_temp):
+        if test_temp.is_dir():
+            shutil.rmtree(test_temp)
     ruff = _command_report(
         [
             sys.executable,
