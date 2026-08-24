@@ -1,0 +1,30 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10151b; color: #edf3f8; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+header { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: #18212a; border-bottom: 1px solid #34424f; }
+#blindBadge { margin-left: 10px; padding: 4px 8px; border-radius: 12px; background: #174b39; color: #9ef0c9; font-size: 12px; }
+main { height: calc(100vh - 48px); display: grid; grid-template-columns: 310px minmax(0,1fr); }
+main.revealed { grid-template-columns: 310px minmax(0,1fr) 340px; }
+aside { overflow: auto; padding: 12px; background: #151c23; border-right: 1px solid #34424f; }
+#revealPanel { border-left: 1px solid #34424f; border-right: 0; }
+label { display: block; margin: 8px 0; font-size: 13px; }
+select, button { width: 100%; margin-top: 4px; border: 1px solid #465868; border-radius: 5px; background: #222d36; color: #edf3f8; padding: 7px; }
+button:hover { background: #30404d; }
+button.active { outline: 2px solid #65d1ff; }
+button.primary { background: #1769aa; margin-top: 12px; font-weight: 650; }
+button:disabled { opacity: .45; }
+.buttonRow { display: flex; gap: 6px; }
+.buttonRow.wrap { flex-wrap: wrap; }
+.buttonRow button { flex: 1 1 42%; }
+h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #a9bac8; margin: 16px 0 6px; }
+#viewport { position: relative; overflow: hidden; background: #07090b; cursor: crosshair; }
+#canvas { position: absolute; inset: 0; }
+#cursor, #help { position: absolute; z-index: 3; background: #101820d9; border: 1px solid #41515e; border-radius: 4px; padding: 5px 8px; font-size: 12px; pointer-events: none; }
+#cursor { right: 8px; top: 8px; } #help { left: 8px; bottom: 8px; }
+#strips { display: grid; grid-template-columns: repeat(4,1fr); gap: 4px; }
+#strips button.reviewed { background: #176b4e; }
+.assertion { line-height: 1.4; margin-top: 14px; }
+.assertion input { width: auto; }
+#instances { padding-left: 24px; font-size: 12px; }
+#instances li { padding: 3px; cursor: pointer; } #instances li.selected { background: #294252; }
+pre { font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }

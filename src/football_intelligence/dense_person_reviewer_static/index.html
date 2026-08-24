@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dense person gold reviewer</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div><strong>Dense person gold</strong> <span id="blindBadge">Candidate-blind</span></div>
+    <div id="status">Loading…</div>
+  </header>
+  <main>
+    <aside>
+      <label>Anonymous image<select id="imageSelect"></select></label>
+      <div class="buttonRow">
+        <button id="previous">← Previous</button><button id="next">Next →</button>
+      </div>
+      <h3>View</h3>
+      <div class="buttonRow wrap">
+        <button data-view="fitWidth">Fit width</button><button data-view="fitHeight">Fit height</button>
+        <button data-view="zoomIn">Zoom +</button><button data-view="zoomOut">Zoom −</button>
+        <button data-view="resetPan">Reset pan</button>
+      </div>
+      <h3>Annotation mode</h3>
+      <div class="buttonRow wrap">
+        <button id="newPerson">New person (P)</button><button id="addComponent">Add component (C)</button>
+        <button id="newIgnore">Ignore region (I)</button><button id="finishPolygon">Finish polygon (Enter)</button>
+      </div>
+      <label>Relevance<select id="relevance">
+        <option value="">Choose…</option><option>MATCH_RELEVANT</option>
+        <option>NON_MATCH_RELEVANT</option><option>RELEVANCE_UNCERTAIN</option>
+      </select></label>
+      <label>Ignore reason<select id="ignoreReason">
+        <option value="">Choose…</option><option>DENSE_CROWD_UNRESOLVABLE</option>
+        <option>BENCH_CLUSTER_UNRESOLVABLE</option><option>TINY_AMBIGUOUS_PERSON_CLUSTER</option>
+        <option>SEVERE_VISUAL_ARTIFACT</option><option>OTHER_NON_EVALUABLE_REGION</option>
+      </select></label>
+      <div class="buttonRow"><button id="undo">Undo (Z)</button><button id="redo">Redo (Y)</button></div>
+      <h3>Instances</h3><ol id="instances"></ol>
+      <h3>Exhaustiveness strips</h3><div id="strips"></div>
+      <label class="assertion"><input type="checkbox" id="assertion"> I have reviewed the full image and annotated every individually evaluable visible human.</label>
+      <button id="finalize" class="primary">Finalize immutable frame</button>
+      <button id="reveal" hidden>Reveal candidate comparison (read-only)</button>
+    </aside>
+    <section id="viewport">
+      <canvas id="canvas"></canvas>
+      <div id="cursor">x —, y —</div>
+      <div id="help">Click to add vertices · drag a vertex to edit · Delete removes selected vertex/polygon · drag background to pan</div>
+    </section>
+    <aside id="revealPanel" hidden><h3>Read-only candidate comparison</h3><pre id="revealPayload"></pre></aside>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
