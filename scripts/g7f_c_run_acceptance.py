@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -352,6 +353,7 @@ def main() -> int:
     real_inventory = inventory_tree(real_decisions)
     if real_inventory["file_count"] != 0:
         raise RuntimeError("real dense decisions root contaminated")
+    pytest_run_id = f"{os.getpid()}"
     focused = subprocess.run(
         [
             str(repo / ".venv/Scripts/python.exe"),
@@ -359,9 +361,9 @@ def main() -> int:
             "pytest",
             "tests/test_g7f_c_dense_person_gold.py",
             "-q",
-            f"--basetemp={workspace / '07_ACCEPTANCE/pytest_temp'}",
+            f"--basetemp={workspace / f'07_ACCEPTANCE/pytest_temp_{pytest_run_id}'}",
             "-o",
-            f"cache_dir={workspace / '07_ACCEPTANCE/pytest_cache'}",
+            f"cache_dir={workspace / f'07_ACCEPTANCE/pytest_cache_{pytest_run_id}'}",
         ],
         cwd=repo,
         capture_output=True,
