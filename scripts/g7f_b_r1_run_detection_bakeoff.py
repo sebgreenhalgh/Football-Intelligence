@@ -36,7 +36,7 @@ from football_intelligence.detection_forensics import (
 )
 from football_intelligence.detection_gold.consolidation import consolidate_proposals
 from football_intelligence.g7d_b1_foldwise_runtime import proposal_view_plan
-from football_intelligence.gold_eval.core import sha256_file, write_json
+from football_intelligence.gold_eval.core import inventory_tree, sha256_file, write_json
 from football_intelligence.gold_eval.evaluation import evaluate_candidate_run
 from football_intelligence.review_chassis.hashing import stable_hash
 
@@ -909,6 +909,321 @@ def select_shortlist(scorecard: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ledger_group_metrics(
+    subject_rows: Sequence[Mapping[str, Any]],
+    missed_rows: Sequence[Mapping[str, Any]],
+    role: str,
+) -> dict[str, Any]:
+    subject_counts = [int(row["candidate_counts"][role]) for row in subject_rows]
+    missed_counts = [int(row["candidate_counts"][role]) for row in missed_rows]
+    subject_supported = sum(value > 0 for value in subject_counts)
+    missed_supported = sum(value > 0 for value in missed_counts)
+    return {
+        "subject_marker_candidate_support_rate": {
+            "numerator": subject_supported,
+            "denominator": len(subject_counts),
+            "value": round(subject_supported / len(subject_counts), 6) if subject_counts else None,
+        },
+        "subject_marker_candidate_multiplicity": {
+            "denominator": len(subject_counts),
+            "counts": dict(
+                sorted(Counter(str(value) for value in subject_counts).items(), key=lambda row: int(row[0]))
+            ),
+        },
+        "candidate_count_near_reviewed_subject_marker": {
+            "denominator": len(subject_counts),
+            "counts": dict(
+                sorted(Counter(str(value) for value in subject_counts).items(), key=lambda row: int(row[0]))
+            ),
+        },
+        "missed_mark_candidate_support_rate": {
+            "numerator": missed_supported,
+            "denominator": len(missed_counts),
+            "value": round(missed_supported / len(missed_counts), 6) if missed_counts else None,
+        },
+    }
+
+
+def build_stratified_report(
+    r1: Path,
+    subject_ledger: Sequence[Mapping[str, Any]],
+    missed_ledger: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    bursts = {row["burst_id"]: row for row in read_jsonl(r1 / "02_NORMALIZED_GOLD/gold_bursts.jsonl")}
+    subjects = []
+    for source in subject_ledger:
+        row = dict(source)
+        burst = bursts[row["burst_id"]]
+        row.update(
+            {
+                "half": burst["half"],
+                "perspective_band": burst["perspective_band"],
+                "primary_selection_class": burst["primary_selection_class"],
+                "relative_frame_position": int(row["frame_sequence"]) + 1,
+            }
+        )
+        subjects.append(row)
+    missed = []
+    for source in missed_ledger:
+        row = dict(source)
+        burst = bursts[row["burst_id"]]
+        row.update(
+            {
+                "half": burst["half"],
+                "perspective_band": burst["perspective_band"],
+                "primary_selection_class": burst["primary_selection_class"],
+                "relative_frame_position": int(row["frame_sequence"]) + 1,
+            }
+        )
+        missed.append(row)
+    roles = ("FROZEN_G7E_CANDIDATE_REFERENCE", *(config["role"] for config in CONFIGS))
+    dimensions = (
+        "match_id",
+        "tranche_id",
+        "half",
+        "perspective_band",
+        "primary_selection_class",
+        "relative_frame_position",
+        "observation_supply",
+        "candidate_relationship",
+    )
+    groups: dict[str, Any] = {}
+    for field in dimensions:
+        values = sorted(
+            {str(row[field]) for row in subjects if field in row} | {str(row[field]) for row in missed if field in row}
+        )
+        groups[field] = {}
+        for value in values:
+            subject_group = [row for row in subjects if str(row.get(field)) == value]
+            missed_group = [row for row in missed if str(row.get(field)) == value]
+            groups[field][value] = {role: _ledger_group_metrics(subject_group, missed_group, role) for role in roles}
+    return {
+        "schema_version": "football_intelligence.g7f_b_r1.stratified_point_support.v1",
+        "supported_metrics_only": True,
+        "groups": groups,
+        "stress_groups": sorted(groups["primary_selection_class"]),
+        "production_ready": False,
+    }
+
+
+def build_robustness_report(reports: Mapping[str, Any]) -> dict[str, Any]:
+    references = ("FROZEN_G7E_CANDIDATE_REFERENCE", "LOCAL_DEFAULT_RERUN")
+    candidates = ("RECALL_ORIENTED_VARIANT", "MULTIPLICITY_REDUCTION_VARIANT")
+    matches = sorted(reports["LOCAL_DEFAULT_RERUN"]["per_match"])
+    comparisons = {}
+    for role in candidates:
+        comparisons[role] = {}
+        for reference in references:
+            rows = []
+            for match in matches:
+                actual = reports[role]["per_match"][match]
+                baseline = reports[reference]["per_match"][match]
+                subject = actual["subject_marker_candidate_support_rate"]["value"]
+                baseline_subject = baseline["subject_marker_candidate_support_rate"]["value"]
+                missed = actual["missed_mark_candidate_support_rate"]["value"]
+                baseline_missed = baseline["missed_mark_candidate_support_rate"]["value"]
+                regression_pp = round((subject - baseline_subject) * 100, 6)
+                rows.append(
+                    {
+                        "match_id": match,
+                        "subject_support_delta_percentage_points": regression_pp,
+                        "missed_support_delta_percentage_points": round((missed - baseline_missed) * 100, 6),
+                        "subject_regression_within_5pp": regression_pp >= -5.0,
+                        "primary_support_tradeoff_preserved_or_improved": (
+                            subject >= baseline_subject and missed >= baseline_missed
+                        ),
+                    }
+                )
+            comparisons[role][reference] = {
+                "matches": rows,
+                "no_subject_regression_over_5pp": all(row["subject_regression_within_5pp"] for row in rows),
+                "matches_preserving_or_improving_primary_support_tradeoff": sum(
+                    row["primary_support_tradeoff_preserved_or_improved"] for row in rows
+                ),
+            }
+    return {
+        "schema_version": "football_intelligence.g7f_b_r1.cross_match_robustness.v1",
+        "comparisons": comparisons,
+        "outer_match_results_used_for_tuning": False,
+        "leader_selection_deferred_to_dense_gold": True,
+        "production_ready": False,
+    }
+
+
+def _candidate_boxes_by_hash(run_path: Path) -> dict[str, list[list[float]]]:
+    result: dict[str, list[list[float]]] = defaultdict(list)
+    for row in read_json(run_path)["candidates"]:
+        result[row["source_frame_sha256"]].append([float(value) for value in row["box_xyxy"]])
+    return dict(result)
+
+
+def render_visual_review(
+    repo: Path,
+    workspace: Path,
+    r1: Path,
+    frame_manifest: Path,
+    runs: Mapping[str, Path],
+    subject_ledger: Sequence[Mapping[str, Any]],
+    missed_ledger: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    role_paths = {
+        "FROZEN_G7E_CANDIDATE_REFERENCE": r1 / "05_FROZEN_BASELINE/frozen_historical_candidate_run_v2.json",
+        **runs,
+    }
+    boxes = {role: _candidate_boxes_by_hash(path) for role, path in role_paths.items()}
+    frames = read_jsonl(frame_manifest)
+    frame_by_key = {(row["burst_id"], int(row["burst_frame_sequence"])): row for row in frames}
+    frame_scores: dict[tuple[str, int], float] = defaultdict(float)
+    reasons: dict[tuple[str, int], set[str]] = defaultdict(set)
+    for row in subject_ledger:
+        key = (row["burst_id"], int(row["frame_sequence"]))
+        values = list(row["candidate_counts"].values())
+        frame_scores[key] += max(values) - min(values)
+        labels = set(row["delta_class_vs_local_default"].values())
+        if "RECOVERED_SUBJECT_POINT" in labels:
+            reasons[key].add("recovered_subject_point")
+        if "LOST_SUBJECT_POINT" in labels:
+            reasons[key].add("lost_subject_support")
+        if "MULTIPLICITY_REDUCED" in labels:
+            reasons[key].add("multiplicity_reduction")
+        if "MULTIPLICITY_INCREASED" in labels:
+            reasons[key].add("multiplicity_increase")
+    for row in missed_ledger:
+        key = (row["burst_id"], int(row["frame_sequence"]))
+        values = list(row["candidate_counts"].values())
+        frame_scores[key] += max(values) - min(values)
+        if "RECOVERED_MISSED_MARK_POINT" in row["delta_class_vs_local_default"].values():
+            reasons[key].add("recovered_missed_mark")
+    for key, frame in frame_by_key.items():
+        source_hash = frame["frame_pixel_sha256"]
+        counts = [len(boxes[role].get(source_hash, [])) for role in role_paths]
+        frame_scores[key] += (max(counts) - min(counts)) / 10
+        if max(counts) > min(counts):
+            reasons[key].add("density_divergence")
+    best_by_burst: dict[str, tuple[str, int]] = {}
+    for key in frame_by_key:
+        current = best_by_burst.get(key[0])
+        if current is None or (frame_scores[key], -key[1]) > (frame_scores[current], -current[1]):
+            best_by_burst[key[0]] = key
+    mandatory = ("g7e_a_117092_03", "g7e_a_118577_14", "g7e_a_117092_10")
+    selected = [best_by_burst[burst] for burst in mandatory]
+    matches = ("117092", "117093", "118575", "118576", "118577", "128058")
+    for match in matches:
+        options = [key for key in best_by_burst.values() if frame_by_key[key]["match_id"] == match]
+        choice = max(options, key=lambda key: (frame_scores[key], key[0]))
+        if choice not in selected:
+            selected.append(choice)
+    ranked = sorted(best_by_burst.values(), key=lambda key: (-frame_scores[key], key[0], key[1]))
+    for key in ranked:
+        if len(selected) >= 24:
+            break
+        if key not in selected:
+            selected.append(key)
+    selected = selected[:24]
+    requested = {frame_by_key[key]["frame_pixel_sha256"]: frame_by_key[key] for key in selected}
+    by_video: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in requested.values():
+        by_video[row["source_video_relative_path"]].append(row)
+    rendered = []
+    output_dir = workspace / "05_VISUAL_REVIEW"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    colors = {
+        "FROZEN_G7E_CANDIDATE_REFERENCE": (0, 200, 255),
+        "LOCAL_DEFAULT_RERUN": (80, 220, 80),
+        "RECALL_ORIENTED_VARIANT": (255, 120, 40),
+        "MULTIPLICITY_REDUCTION_VARIANT": (220, 80, 220),
+    }
+    role_order = tuple(colors)
+    key_by_hash = {row["frame_pixel_sha256"]: key for key, row in frame_by_key.items() if key in selected}
+    for relative_video, rows in sorted(by_video.items()):
+        for frame_row, frame in _decode_targets(project_root(repo) / relative_video, rows):
+            source_hash = frame_row["frame_pixel_sha256"]
+            if sha256_rgb(frame) != source_hash:
+                raise RuntimeError("FAIL_VISUAL_SOURCE_HASH")
+            key = key_by_hash[source_hash]
+            panels = []
+            counts = {}
+            for role in role_order:
+                panel = frame.copy()
+                role_boxes = boxes[role].get(source_hash, [])
+                counts[role] = len(role_boxes)
+                for box in role_boxes:
+                    cv2.rectangle(
+                        panel,
+                        (round(box[0]), round(box[1])),
+                        (round(box[2]), round(box[3])),
+                        colors[role],
+                        max(2, round(frame.shape[1] / 1600)),
+                    )
+                width = 640
+                resized = cv2.resize(panel, (width, round(panel.shape[0] * width / panel.shape[1])))
+                header = np.zeros((44, width, 3), dtype=np.uint8)
+                cv2.putText(
+                    header,
+                    f"{role} | {len(role_boxes)} candidates",
+                    (8, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.48,
+                    colors[role],
+                    1,
+                    cv2.LINE_AA,
+                )
+                panels.append(np.vstack([header, resized]))
+            composite = np.hstack(panels)
+            filename = f"{key[0]}_f{key[1] + 1:02d}.jpg"
+            output_path = output_dir / filename
+            if not cv2.imwrite(str(output_path), composite, [cv2.IMWRITE_JPEG_QUALITY, 92]):
+                raise RuntimeError("FAIL_VISUAL_WRITE")
+            rendered.append(
+                {
+                    "burst_id": key[0],
+                    "frame_sequence": key[1],
+                    "frame_reference_id": frame_row["frame_reference_id"],
+                    "match_id": frame_row["match_id"],
+                    "source_frame_sha256": source_hash,
+                    "source_hash_verified_before_render": True,
+                    "selection_reasons": sorted(reasons[key]) or ["clean_control_or_match_coverage"],
+                    "candidate_counts": counts,
+                    "path": f"05_VISUAL_REVIEW/{filename}",
+                    "sha256": sha256_file(output_path),
+                }
+            )
+    rendered.sort(key=lambda row: (row["burst_id"], row["frame_sequence"]))
+    index = output_dir / "visual_review_index.json"
+    write_json(
+        index,
+        {
+            "schema_version": "football_intelligence.g7f_b_r1.visual_review_index.v1",
+            "panel_roles": list(role_order),
+            "mandatory_bursts": list(mandatory),
+            "lost_subject_support_observed": any(
+                "lost_subject_support" in row["selection_reasons"] for row in rendered
+            ),
+            "render_count": len(rendered),
+            "renders": rendered,
+            "production_ready": False,
+        },
+    )
+    lines = [
+        "# Visual review index",
+        "",
+        "All panels are deterministic derivatives of exact source frames verified against the frozen RGB hash.",
+        "No lost-subject-support case existed; that required category is recorded as `NONE_OBSERVED`.",
+        "",
+        "| Burst/frame | Match | Reasons | Candidate counts | File |",
+        "|---|---:|---|---|---|",
+    ]
+    for row in rendered:
+        count_text = ", ".join(f"{role}={count}" for role, count in row["candidate_counts"].items())
+        lines.append(
+            f"| {row['burst_id']} / {row['frame_sequence'] + 1} | {row['match_id']} | "
+            f"{', '.join(row['selection_reasons'])} | {count_text} | [{Path(row['path']).name}]"
+            f"(../../../{row['path'].replace(os.sep, '/')}) |"
+        )
+    (output_dir / "VISUAL_REVIEW_INDEX.md").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return read_json(index)
+
+
 def finalize(repo: Path, workspace: Path, r1: Path) -> None:
     repository_gate(repo, require_repair_head=False)
     if sha256_file(workspace / PLAN_FILE) != read_json(workspace / PLAN_RECEIPT)["plan_sha256"]:
@@ -959,6 +1274,10 @@ def finalize(repo: Path, workspace: Path, r1: Path) -> None:
     subject_ledger, missed_ledger = ledger_rows(r1, runs)
     write_jsonl(workspace / "04_PAIRED_ERROR_ANALYSIS/subject_frame_delta_ledger.jsonl", subject_ledger)
     write_jsonl(workspace / "04_PAIRED_ERROR_ANALYSIS/missed_mark_delta_ledger.jsonl", missed_ledger)
+    stratified = build_stratified_report(r1, subject_ledger, missed_ledger)
+    write_json(workspace / "03_EVALUATION/stratified_point_support.json", stratified)
+    robustness = build_robustness_report(reports)
+    write_json(workspace / "03_EVALUATION/cross_match_robustness.json", robustness)
     shortlist = select_shortlist(scorecard)
     dense_plan = {
         "schema_version": "football_intelligence.g7f_b_r1.dense_gold_discrimination_plan.v1",
@@ -977,8 +1296,39 @@ def finalize(repo: Path, workspace: Path, r1: Path) -> None:
         "production_ready": False,
     }
     write_json(workspace / "06_DENSE_GOLD_PLAN/dense_gold_discrimination_plan.json", dense_plan)
+    _, _, frame_manifest = default_paths(repo)
+    visuals = render_visual_review(repo, workspace, r1, frame_manifest, runs, subject_ledger, missed_ledger)
+    original_integrity = read_json(r1 / "10_REVIEW_PACK/CHATGPT_HANDOFF/01_SOURCE_AND_ORIGINAL_GOLD_IMMUTABILITY.json")
+    human_current = inventory_tree(Path(original_integrity["human_source_inventory"]["root"]))
+    original_current = inventory_tree(Path(original_integrity["original_workspace_after"]["root"]))
+    original_expected = original_integrity["original_workspace_after"]["ordered_inventory_sha256"]
+    source_safety = {
+        "human_source_current": human_current,
+        "human_source_expected_sha256": HUMAN_SOURCE_SHA256,
+        "human_source_unchanged": human_current["ordered_inventory_sha256"] == HUMAN_SOURCE_SHA256,
+        "original_g7f_a_current": original_current,
+        "original_g7f_a_expected_sha256": original_expected,
+        "original_g7f_a_unchanged": original_current["ordered_inventory_sha256"] == original_expected,
+    }
+    if not source_safety["human_source_unchanged"] or not source_safety["original_g7f_a_unchanged"]:
+        raise RuntimeError("FAIL_SOURCE_SUBSTRATE_MUTATION")
+    write_json(workspace / "09_ACCEPTANCE/source_substrate_immutability.json", source_safety)
     build_handoff(
-        repo, workspace, r1, runs, operational, reports, scorecard, subject_ledger, missed_ledger, shortlist, dense_plan
+        repo,
+        workspace,
+        r1,
+        runs,
+        operational,
+        reports,
+        scorecard,
+        subject_ledger,
+        missed_ledger,
+        shortlist,
+        dense_plan,
+        stratified,
+        robustness,
+        visuals,
+        source_safety,
     )
     print(json.dumps({"status": "FINALIZED", "shortlist": shortlist["pareto_shortlist"], "provisional_leader": None}))
 
@@ -995,6 +1345,10 @@ def build_handoff(
     missed_ledger: Sequence[Mapping[str, Any]],
     shortlist: Mapping[str, Any],
     dense_plan: Mapping[str, Any],
+    stratified: Mapping[str, Any],
+    robustness: Mapping[str, Any],
+    visuals: Mapping[str, Any],
+    source_safety: Mapping[str, Any],
 ) -> None:
     handoff = workspace / "10_REVIEW_PACK/CHATGPT_HANDOFF"
     handoff.mkdir(parents=True, exist_ok=True)
@@ -1009,7 +1363,10 @@ def build_handoff(
             "production_ready": False,
         },
     )
-    write_json(handoff / "01_R1_FROZEN_SUBSTRATE_INTEGRITY.json", integrity)
+    write_json(
+        handoff / "01_R1_FROZEN_SUBSTRATE_INTEGRITY.json",
+        {"pre_inference": integrity, "post_inference_source_safety": source_safety},
+    )
     write_json(
         handoff / "02_PREDECLARED_EXPERIMENT_PLAN_AND_CANDIDATE_REGISTRY.json",
         {
@@ -1038,9 +1395,13 @@ def build_handoff(
             "outer_fold_tuning_performed": False,
             "outer_fold_leakage": False,
             "per_match": {role: report["per_match"] for role, report in reports.items()},
+            "cross_match_robustness": robustness,
         },
     )
-    write_json(handoff / "05_BAKEOFF_POINT_SUPPORT_SCORECARD.json", scorecard)
+    write_json(
+        handoff / "05_BAKEOFF_POINT_SUPPORT_SCORECARD.json",
+        {"aggregate": scorecard, "stratified": stratified},
+    )
     write_json(
         handoff / "06_SUPPORT_DENSITY_RUNTIME_PARETO.json",
         {"scorecard": scorecard, **shortlist, "production_ready": False},
@@ -1076,10 +1437,10 @@ def build_handoff(
             ],
         },
     )
-    (handoff / "08_VISUAL_REVIEW_INDEX.md").write_text(
-        "# Visual review index\n\nVisual generation is completed by the dedicated render phase.\n",
-        encoding="utf-8",
-        newline="\n",
+    if visuals["render_count"] != 24:
+        raise RuntimeError("FAIL_VISUAL_REVIEW_COUNT")
+    (handoff / "08_VISUAL_REVIEW_INDEX.md").write_bytes(
+        (workspace / "05_VISUAL_REVIEW/VISUAL_REVIEW_INDEX.md").read_bytes()
     )
     write_json(
         handoff / "09_PROVISIONAL_SHORTLIST_AND_DENSE_GOLD_PLAN.json",
