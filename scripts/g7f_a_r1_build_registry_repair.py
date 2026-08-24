@@ -6,7 +6,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -514,6 +513,8 @@ def _build(args: argparse.Namespace, staging: Path) -> dict[str, Any]:
         },
     )
     _require(len(list(handoff.iterdir())) == 12, "R1 handoff must contain exactly 12 files")
+    if not passed:
+        print(json.dumps({"decision": decision, "bindings": bindings}, indent=2, sort_keys=True), file=sys.stderr)
     _require(passed, classification)
     return {"decision": decision, "bindings": bindings}
 
@@ -529,7 +530,9 @@ def main() -> int:
     workspace = args.workspace.resolve()
     _require(not workspace.exists(), f"target R1 workspace already exists: {workspace}")
     workspace.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{workspace.name}.staging-", dir=workspace.parent))
+    staging = workspace.with_name(f".{workspace.name}.staging")
+    _require(not staging.exists(), f"R1 staging workspace already exists: {staging}")
+    staging.mkdir()
     try:
         result = _build(args, staging)
         staging.rename(workspace)
