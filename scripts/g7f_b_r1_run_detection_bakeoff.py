@@ -1107,6 +1107,22 @@ def render_visual_review(
             best_by_burst[key[0]] = key
     mandatory = ("g7e_a_117092_03", "g7e_a_118577_14", "g7e_a_117092_10")
     selected = [best_by_burst[burst] for burst in mandatory]
+    for category in (
+        "recovered_missed_mark",
+        "lost_subject_support",
+        "multiplicity_reduction",
+        "multiplicity_increase",
+        "density_divergence",
+    ):
+        options = [key for key in frame_by_key if category in reasons[key]]
+        if options:
+            choice = max(options, key=lambda key: (frame_scores[key], key[0], -key[1]))
+            if choice not in selected:
+                selected.append(choice)
+    control = min(frame_by_key, key=lambda key: (frame_scores[key], key[0], key[1]))
+    reasons[control].add("clean_control")
+    if control not in selected:
+        selected.append(control)
     matches = ("117092", "117093", "118575", "118576", "118577", "128058")
     for match in matches:
         options = [key for key in best_by_burst.values() if frame_by_key[key]["match_id"] == match]
