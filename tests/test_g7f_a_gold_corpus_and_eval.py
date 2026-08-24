@@ -66,6 +66,28 @@ def _minimal_workspace(tmp_path: Path) -> Path:
             }
         ],
     )
+    write_jsonl(
+        gold / "gold_frame_instances.jsonl",
+        [common],
+    )
+    write_jsonl(
+        gold / "gold_source_frame_registry.jsonl",
+        [
+            {
+                "source_frame_sha256": FRAME_HASH,
+                "source_width": 100,
+                "source_height": 50,
+                "instance_count": 1,
+                "frame_instances": [
+                    {
+                        "burst_id": "burst-1",
+                        "frame_sequence": 0,
+                        "frame_reference_id": "frame-1",
+                    }
+                ],
+            }
+        ],
+    )
     write_json(harness / "metric_capabilities.json", metric_capabilities())
     return workspace
 

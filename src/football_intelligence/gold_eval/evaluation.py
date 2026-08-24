@@ -17,10 +17,18 @@ from football_intelligence.gold_eval.core import (
 )
 
 
+CANDIDATE_RUN_V1 = "football_intelligence.g7f_a.candidate_run.v1"
+CANDIDATE_RUN_V2 = "football_intelligence.g7f_a_r1.candidate_run.v2"
+
+
 def _bindings(workspace: Path, candidate_run_sha256: str | None) -> dict[str, Any]:
     workspace = workspace.resolve()
     validation = validate_gold(workspace)
-    binding = read_json(workspace / "04_EVALUATION_HARNESS" / "evaluator_binding.json")
+    r1_binding = workspace / "04_EVALUATION_HARNESS" / "evaluator_binding_r1.json"
+    binding_path = (
+        r1_binding if r1_binding.is_file() else workspace / "04_EVALUATION_HARNESS" / "evaluator_binding.json"
+    )
+    binding = read_json(binding_path)
     return {
         "gold_corpus_manifest_sha256": validation["manifest_sha256"],
         "split_manifest_sha256": validation["split_manifest_sha256"],
@@ -53,19 +61,110 @@ def require_supported_metric(workspace: Path, metric_name: str) -> str:
 
 
 def _known_frames(workspace: Path) -> dict[str, dict[str, Any]]:
-    rows = read_jsonl(workspace / "02_NORMALIZED_GOLD" / "gold_subject_frames.jsonl")
-    missed = read_jsonl(workspace / "02_NORMALIZED_GOLD" / "gold_missed_observations.jsonl")
+    registry_path = workspace / "02_NORMALIZED_GOLD" / "gold_source_frame_registry.jsonl"
+    if not registry_path.is_file():
+        raise GoldEvalError(
+            "full source-frame registry is required; reviewed-point rows cannot authorize candidate frames"
+        )
+    rows = read_jsonl(registry_path)
     known: dict[str, dict[str, Any]] = {}
-    for row in [*rows, *missed]:
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise GoldEvalError(f"source-frame registry row {index} must be an object")
+        required = {"source_frame_sha256", "source_width", "source_height", "instance_count", "frame_instances"}
+        missing = required - set(row)
+        if missing:
+            raise GoldEvalError(f"source-frame registry row {index} missing fields: {sorted(missing)}")
         frame_hash = row["source_frame_sha256"]
+        if (
+            not isinstance(frame_hash, str)
+            or len(frame_hash) != 64
+            or any(character not in "0123456789abcdef" for character in frame_hash.lower())
+        ):
+            raise GoldEvalError(f"source-frame registry row {index} has malformed source hash")
+        if frame_hash in known:
+            raise GoldEvalError(f"duplicate source-frame registry hash: {frame_hash}")
+        if (
+            not isinstance(row["source_width"], int)
+            or isinstance(row["source_width"], bool)
+            or row["source_width"] <= 0
+            or not isinstance(row["source_height"], int)
+            or isinstance(row["source_height"], bool)
+            or row["source_height"] <= 0
+        ):
+            raise GoldEvalError(f"source-frame registry row {index} has invalid dimensions")
+        if (
+            not isinstance(row["frame_instances"], list)
+            or row["instance_count"] != len(row["frame_instances"])
+            or row["instance_count"] <= 0
+        ):
+            raise GoldEvalError(f"source-frame registry row {index} has invalid instance membership")
+        membership: set[tuple[str, int]] = set()
+        for member in row["frame_instances"]:
+            if (
+                not isinstance(member, dict)
+                or not isinstance(member.get("burst_id"), str)
+                or not member["burst_id"]
+                or not isinstance(member.get("frame_sequence"), int)
+                or isinstance(member["frame_sequence"], bool)
+                or not 0 <= member["frame_sequence"] <= 8
+            ):
+                raise GoldEvalError(f"source-frame registry row {index} has malformed instance membership")
+            membership.add((member["burst_id"], member["frame_sequence"]))
+        if len(membership) != row["instance_count"]:
+            raise GoldEvalError(f"source-frame registry row {index} has duplicate instance membership")
         current = {
             "source_width": row["source_width"],
             "source_height": row["source_height"],
+            "frame_instances": membership,
         }
-        if frame_hash in known and known[frame_hash] != current:
-            raise GoldEvalError(f"conflicting dimensions for source frame {frame_hash}")
         known[frame_hash] = current
     return known
+
+
+def _known_frame_instances(
+    workspace: Path, known_frames: dict[str, dict[str, Any]]
+) -> dict[tuple[str, int], dict[str, Any]]:
+    registry_path = workspace / "02_NORMALIZED_GOLD" / "gold_frame_instances.jsonl"
+    if not registry_path.is_file():
+        raise GoldEvalError("full frame-instance registry is required for candidate-run coverage")
+    known_instances: dict[tuple[str, int], dict[str, Any]] = {}
+    required = {
+        "burst_id",
+        "frame_sequence",
+        "source_frame_sha256",
+        "source_width",
+        "source_height",
+    }
+    for index, row in enumerate(read_jsonl(registry_path)):
+        if not isinstance(row, dict):
+            raise GoldEvalError(f"frame-instance registry row {index} must be an object")
+        missing = required - set(row)
+        if missing:
+            raise GoldEvalError(f"frame-instance registry row {index} missing fields: {sorted(missing)}")
+        burst_id = row["burst_id"]
+        frame_sequence = row["frame_sequence"]
+        if not isinstance(burst_id, str) or not burst_id:
+            raise GoldEvalError(f"frame-instance registry row {index} has malformed burst_id")
+        if not isinstance(frame_sequence, int) or isinstance(frame_sequence, bool) or not 0 <= frame_sequence <= 8:
+            raise GoldEvalError(f"frame-instance registry row {index} has malformed frame_sequence")
+        key = (burst_id, frame_sequence)
+        if key in known_instances:
+            raise GoldEvalError(f"duplicate frame-instance registry key: {key}")
+        frame_hash = row["source_frame_sha256"]
+        if frame_hash not in known_frames:
+            raise GoldEvalError(f"frame-instance registry row {index} references unknown source hash")
+        expected = known_frames[frame_hash]
+        if row["source_width"] != expected["source_width"] or row["source_height"] != expected["source_height"]:
+            raise GoldEvalError(f"frame-instance registry row {index} conflicts with source-frame dimensions")
+        known_instances[key] = row
+    actual_membership: dict[str, set[tuple[str, int]]] = defaultdict(set)
+    for key, row in known_instances.items():
+        actual_membership[row["source_frame_sha256"]].add(key)
+    for frame_hash, expected in known_frames.items():
+        if actual_membership[frame_hash] != expected["frame_instances"]:
+            raise GoldEvalError(f"source/frame-instance registry membership mismatch: {frame_hash}")
+    return known_instances
 
 
 def _source_box(candidate: dict[str, Any]) -> list[float]:
@@ -97,17 +196,23 @@ def _source_box(candidate: dict[str, Any]) -> list[float]:
     return [box[0] * sx + tx, box[1] * sy + ty, box[2] * sx + tx, box[3] * sy + ty]
 
 
-def validate_candidate_run(workspace: Path, run_path: Path) -> dict[str, Any]:
+def validate_candidate_run(
+    workspace: Path, run_path: Path, *, require_exact_frame_coverage: bool = False
+) -> dict[str, Any]:
     workspace = workspace.resolve()
     run_path = run_path.resolve()
     run = read_json(run_path)
+    schema_version = run.get("schema_version")
+    if schema_version not in {CANDIDATE_RUN_V1, CANDIDATE_RUN_V2}:
+        raise GoldEvalError("candidate run schema_version is unsupported")
+    is_v2 = schema_version == CANDIDATE_RUN_V2
     required_top = {"schema_version", "run_id", "system_id", "code_commit", "candidates"}
+    if is_v2:
+        required_top.add("processed_frame_instances")
     allowed_top = required_top | {"weight_sha256", "run_metadata"}
     missing_top = required_top - set(run)
     if missing_top:
         raise GoldEvalError(f"candidate run missing provenance fields: {sorted(missing_top)}")
-    if run["schema_version"] != "football_intelligence.g7f_a.candidate_run.v1":
-        raise GoldEvalError("candidate run schema_version is unsupported")
     if set(run) - allowed_top:
         raise GoldEvalError(f"candidate run contains unknown fields: {sorted(set(run) - allowed_top)}")
     if not all(isinstance(run[field], str) and run[field] for field in ("run_id", "system_id", "code_commit")):
@@ -122,8 +227,73 @@ def validate_candidate_run(workspace: Path, run_path: Path) -> dict[str, Any]:
     ):
         raise GoldEvalError("weight_sha256 must be null or an exact SHA-256")
     known = _known_frames(workspace)
+    known_instances = _known_frame_instances(workspace, known)
+    declared_instances: dict[tuple[str, int], dict[str, Any]] = {}
+    normalized_processed: list[dict[str, Any]] = []
+    if is_v2:
+        processed = run["processed_frame_instances"]
+        if not isinstance(processed, list):
+            raise GoldEvalError("candidate run processed_frame_instances must be an array")
+        required_processed = {
+            "burst_id",
+            "frame_sequence",
+            "source_frame_sha256",
+            "source_width",
+            "source_height",
+        }
+        allowed_processed = required_processed | {"frame_reference_id", "processing_provenance"}
+        for index, row in enumerate(processed):
+            if not isinstance(row, dict):
+                raise GoldEvalError(f"processed frame instance row {index} must be an object")
+            missing = required_processed - set(row)
+            if missing:
+                raise GoldEvalError(f"processed frame instance row {index} missing fields: {sorted(missing)}")
+            if set(row) - allowed_processed:
+                raise GoldEvalError(
+                    f"processed frame instance row {index} contains unknown fields: "
+                    f"{sorted(set(row) - allowed_processed)}"
+                )
+            burst_id = row["burst_id"]
+            frame_sequence = row["frame_sequence"]
+            if not isinstance(burst_id, str) or not burst_id:
+                raise GoldEvalError(f"processed frame instance row {index} has malformed burst_id")
+            if not isinstance(frame_sequence, int) or isinstance(frame_sequence, bool) or not 0 <= frame_sequence <= 8:
+                raise GoldEvalError(f"processed frame instance row {index} has malformed frame_sequence")
+            key = (burst_id, frame_sequence)
+            if key in declared_instances:
+                raise GoldEvalError(f"duplicate processed frame instance: {key}")
+            expected = known_instances.get(key)
+            if expected is None:
+                raise GoldEvalError(f"processed frame instance row {index} references unknown instance {key}")
+            if (
+                row["source_frame_sha256"] != expected["source_frame_sha256"]
+                or row["source_width"] != expected["source_width"]
+                or row["source_height"] != expected["source_height"]
+            ):
+                raise GoldEvalError(f"processed frame instance row {index} has wrong burst/frame/hash association")
+            if "frame_reference_id" in row and row["frame_reference_id"] != expected.get("frame_reference_id"):
+                raise GoldEvalError(f"processed frame instance row {index} has wrong frame_reference_id")
+            if "processing_provenance" in row and (
+                not isinstance(row["processing_provenance"], dict) or not row["processing_provenance"]
+            ):
+                raise GoldEvalError(f"processed frame instance row {index} has malformed processing provenance")
+            declared_instances[key] = row
+            normalized_processed.append(dict(row))
+    elif require_exact_frame_coverage:
+        raise GoldEvalError("G7F-B exact frame coverage requires candidate-run v2")
+
+    missing_instances = sorted(set(known_instances) - set(declared_instances)) if is_v2 else sorted(known_instances)
+    exact_coverage = is_v2 and not missing_instances and len(declared_instances) == len(known_instances)
+    if require_exact_frame_coverage and not exact_coverage:
+        raise GoldEvalError(
+            f"candidate-run v2 exact coverage gate failed: {len(missing_instances)} required frame instances missing"
+        )
+
     normalized_rows = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[Any, ...]] = set()
+    candidate_scope_by_hash: dict[str, set[str]] = defaultdict(set)
+    instance_candidate_counts: Counter[tuple[str, int]] = Counter()
+    shared_candidate_counts: Counter[str] = Counter()
     required_row = {
         "source_frame_sha256",
         "source_width",
@@ -136,6 +306,8 @@ def validate_candidate_run(workspace: Path, run_path: Path) -> dict[str, Any]:
         "view_provenance",
     }
     allowed_row = required_row | {"transform_to_source", "runtime_metadata"}
+    if is_v2:
+        allowed_row |= {"burst_id", "frame_sequence"}
     for index, candidate in enumerate(run["candidates"]):
         if not isinstance(candidate, dict):
             raise GoldEvalError(f"candidate row {index} must be an object")
@@ -155,9 +327,50 @@ def validate_candidate_run(workspace: Path, run_path: Path) -> dict[str, Any]:
             or candidate["source_height"] != expected["source_height"]
         ):
             raise GoldEvalError(f"candidate row {index} source dimensions do not match Gold Corpus v1")
-        key = (frame_hash, candidate["candidate_id"])
+        candidate_id = candidate["candidate_id"]
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise GoldEvalError(f"candidate row {index} has malformed candidate_id")
+        evaluation_frame_keys: list[tuple[str, int]] = []
+        candidate_scope = "SOURCE_HASH"
+        if is_v2:
+            has_burst = "burst_id" in candidate
+            has_sequence = "frame_sequence" in candidate
+            if has_burst != has_sequence:
+                raise GoldEvalError(f"candidate row {index} must declare both burst_id and frame_sequence or neither")
+            if has_burst:
+                burst_id = candidate["burst_id"]
+                frame_sequence = candidate["frame_sequence"]
+                if not isinstance(burst_id, str) or not burst_id:
+                    raise GoldEvalError(f"candidate row {index} has malformed burst_id")
+                if (
+                    not isinstance(frame_sequence, int)
+                    or isinstance(frame_sequence, bool)
+                    or not 0 <= frame_sequence <= 8
+                ):
+                    raise GoldEvalError(f"candidate row {index} has malformed frame_sequence")
+                frame_key = (burst_id, frame_sequence)
+                declared = declared_instances.get(frame_key)
+                if declared is None:
+                    raise GoldEvalError(f"candidate row {index} references an undeclared processed frame instance")
+                if declared["source_frame_sha256"] != frame_hash:
+                    raise GoldEvalError(f"candidate row {index} has wrong burst/frame/hash association")
+                key = ("FRAME_INSTANCE", *frame_key, candidate_id)
+                evaluation_frame_keys = [frame_key]
+                candidate_scope = "FRAME_INSTANCE"
+                instance_candidate_counts[frame_key] += 1
+            else:
+                evaluation_frame_keys = [
+                    key for key, row in declared_instances.items() if row["source_frame_sha256"] == frame_hash
+                ]
+                if not evaluation_frame_keys:
+                    raise GoldEvalError(f"candidate row {index} source hash has no declared processed frame instance")
+                key = ("SOURCE_HASH", frame_hash, candidate_id)
+                shared_candidate_counts[frame_hash] += 1
+            candidate_scope_by_hash[frame_hash].add(candidate_scope)
+        else:
+            key = (frame_hash, candidate_id)
         if key in seen:
-            raise GoldEvalError(f"duplicate candidate ID within frame/run: {candidate['candidate_id']}")
+            raise GoldEvalError(f"duplicate candidate ID within frame/run: {candidate_id}")
         seen.add(key)
         if not isinstance(candidate["view_provenance"], dict) or not candidate["view_provenance"]:
             raise GoldEvalError(f"candidate row {index} has malformed view/provenance metadata")
@@ -169,10 +382,53 @@ def validate_candidate_run(workspace: Path, run_path: Path) -> dict[str, Any]:
         x1, y1, x2, y2 = source_box
         if not (0 <= x1 <= x2 <= expected["source_width"] and 0 <= y1 <= y2 <= expected["source_height"]):
             raise GoldEvalError(f"candidate row {index} has an out-of-bounds source box")
-        normalized_rows.append({**candidate, "source_box_xyxy": source_box})
+        normalized_rows.append(
+            {
+                **candidate,
+                "source_box_xyxy": source_box,
+                "_candidate_scope": candidate_scope,
+                "_evaluation_frame_keys": evaluation_frame_keys,
+            }
+        )
+    mixed_hashes = sorted(frame_hash for frame_hash, scopes in candidate_scope_by_hash.items() if len(scopes) > 1)
+    if mixed_hashes:
+        raise GoldEvalError(
+            "candidate-run v2 cannot mix shared-source and frame-instance candidate scopes for the same hash: "
+            f"{mixed_hashes}"
+        )
+
+    outcome_counts: Counter[str] = Counter()
+    if is_v2:
+        for row in normalized_processed:
+            key = (row["burst_id"], row["frame_sequence"])
+            candidate_count = instance_candidate_counts[key] + shared_candidate_counts[row["source_frame_sha256"]]
+            if candidate_count == 0:
+                outcome = "PROCESSED_ZERO_CANDIDATES"
+            elif shared_candidate_counts[row["source_frame_sha256"]]:
+                outcome = "PROCESSED_WITH_SHARED_SOURCE_CANDIDATES"
+            else:
+                outcome = "PROCESSED_WITH_CANDIDATES"
+            row["candidate_count"] = candidate_count
+            row["processing_outcome"] = outcome
+            outcome_counts[outcome] += 1
+    coverage = {
+        "state": (
+            "EXACT_FULL_FRAME_COVERAGE"
+            if exact_coverage
+            else "DECLARED_PARTIAL_FRAME_COVERAGE"
+            if is_v2
+            else "UNDECLARED_OR_PARTIAL_FRAME_COVERAGE"
+        ),
+        "required_instance_count": len(known_instances),
+        "declared_instance_count": len(declared_instances),
+        "missing_instance_count": len(missing_instances),
+        "outcome_counts": dict(sorted(outcome_counts.items())),
+    }
     return {
         "run": run,
         "normalized_candidates": normalized_rows,
+        "normalized_processed_frame_instances": normalized_processed,
+        "coverage": coverage,
         "run_sha256": sha256_file(run_path),
         "candidate_count": len(normalized_rows),
         "raw_run_preserved": True,
@@ -183,11 +439,11 @@ def _contains(box: list[float], point: list[float]) -> bool:
     return box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
 
 
-def _point_metrics(points: list[dict[str, Any]], candidates: dict[str, list[list[float]]]) -> dict[str, Any]:
+def _point_metrics(points: list[dict[str, Any]], candidates: dict[Any, list[list[float]]]) -> dict[str, Any]:
     multiplicity = Counter()
     supported = 0
     for point in points:
-        count = sum(_contains(box, point["coordinate"]) for box in candidates.get(point["source_frame_sha256"], []))
+        count = sum(_contains(box, point["coordinate"]) for box in candidates.get(point["evaluation_frame_key"], []))
         multiplicity[str(count)] += 1
         supported += count > 0
     denominator = len(points)
@@ -209,7 +465,7 @@ def _point_metrics(points: list[dict[str, Any]], candidates: dict[str, list[list
 
 
 def _group_candidate_metrics(
-    subject_points: list[dict[str, Any]], missed_points: list[dict[str, Any]], candidates: dict[str, list[list[float]]]
+    subject_points: list[dict[str, Any]], missed_points: list[dict[str, Any]], candidates: dict[Any, list[list[float]]]
 ) -> dict[str, Any]:
     subject = _point_metrics(subject_points, candidates)
     missed = _point_metrics(missed_points, candidates)
@@ -221,11 +477,22 @@ def _group_candidate_metrics(
     }
 
 
-def evaluate_candidate_run(workspace: Path, run_path: Path, output_path: Path | None = None) -> dict[str, Any]:
-    validated = validate_candidate_run(workspace, run_path)
-    candidates: dict[str, list[list[float]]] = defaultdict(list)
+def evaluate_candidate_run(
+    workspace: Path,
+    run_path: Path,
+    output_path: Path | None = None,
+    *,
+    require_exact_frame_coverage: bool = False,
+) -> dict[str, Any]:
+    validated = validate_candidate_run(workspace, run_path, require_exact_frame_coverage=require_exact_frame_coverage)
+    is_v2 = validated["run"]["schema_version"] == CANDIDATE_RUN_V2
+    candidates: dict[Any, list[list[float]]] = defaultdict(list)
     for row in validated["normalized_candidates"]:
-        candidates[row["source_frame_sha256"]].append(row["source_box_xyxy"])
+        if is_v2:
+            for key in row["_evaluation_frame_keys"]:
+                candidates[key].append(row["source_box_xyxy"])
+        else:
+            candidates[row["source_frame_sha256"]].append(row["source_box_xyxy"])
     burst_rows = read_jsonl(workspace / "02_NORMALIZED_GOLD" / "gold_bursts.jsonl")
     burst_meta = {row["burst_id"]: row for row in burst_rows}
     subject_rows = read_jsonl(workspace / "02_NORMALIZED_GOLD" / "gold_subject_frames.jsonl")
@@ -234,6 +501,7 @@ def evaluate_candidate_run(workspace: Path, run_path: Path, output_path: Path | 
         {
             **row,
             "coordinate": row["human_confirmed_source_coordinate"],
+            "evaluation_frame_key": (row["burst_id"], row["frame_sequence"]) if is_v2 else row["source_frame_sha256"],
             "perspective_band": burst_meta[row["burst_id"]]["perspective_band"],
             "primary_selection_class": burst_meta[row["burst_id"]]["primary_selection_class"],
         }
@@ -244,6 +512,7 @@ def evaluate_candidate_run(workspace: Path, run_path: Path, output_path: Path | 
         {
             **row,
             "coordinate": row["source_coordinate"],
+            "evaluation_frame_key": (row["burst_id"], row["frame_sequence"]) if is_v2 else row["source_frame_sha256"],
             "perspective_band": burst_meta[row["burst_id"]]["perspective_band"],
             "primary_selection_class": burst_meta[row["burst_id"]]["primary_selection_class"],
         }
@@ -262,7 +531,11 @@ def evaluate_candidate_run(workspace: Path, run_path: Path, output_path: Path | 
 
     matches = sorted({row["match_id"] for row in burst_rows})
     report = {
-        "schema_version": "football_intelligence.g7f_a.candidate_evaluation.v1",
+        "schema_version": (
+            "football_intelligence.g7f_a_r1.candidate_evaluation.v2"
+            if is_v2
+            else "football_intelligence.g7f_a.candidate_evaluation.v1"
+        ),
         "run_id": validated["run"]["run_id"],
         "system_id": validated["run"]["system_id"],
         "evaluation_bindings": _bindings(workspace, validated["run_sha256"]),
@@ -283,6 +556,9 @@ def evaluate_candidate_run(workspace: Path, run_path: Path, output_path: Path | 
             sorted({row["primary_selection_class"] for row in subject_points + missed_points}),
         ),
         "per_relative_frame_position": grouped("frame_sequence", range(9)),
+        "candidate_run_coverage": validated["coverage"],
+        "candidate_run_metrics_are_tier_b_point_support_only": True,
+        "historical_tier_a_candidate_supply_labels_recomputed": False,
         "raw_candidate_run_preserved": True,
         "identity_inferred": False,
         "precision_or_recall_emitted": False,

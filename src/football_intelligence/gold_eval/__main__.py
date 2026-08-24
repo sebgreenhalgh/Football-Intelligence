@@ -45,6 +45,7 @@ def _parser() -> argparse.ArgumentParser:
     candidate.add_argument("--workspace", required=True, type=_path)
     candidate.add_argument("--run", required=True, type=_path)
     candidate.add_argument("--output", required=True, type=_path)
+    candidate.add_argument("--require-exact-frame-coverage", action="store_true")
     compare = commands.add_parser("compare-runs")
     compare.add_argument("--reports", required=True, type=_path, nargs="+")
     compare.add_argument("--output", required=True, type=_path)
@@ -66,7 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "evaluate-frozen-baseline":
         result = evaluate_frozen_baseline(args.workspace, args.output)
     elif args.command == "evaluate-candidate-run":
-        result = evaluate_candidate_run(args.workspace, args.run, args.output)
+        result = evaluate_candidate_run(
+            args.workspace,
+            args.run,
+            args.output,
+            require_exact_frame_coverage=args.require_exact_frame_coverage,
+        )
     elif args.command == "compare-runs":
         result = compare_runs(args.reports, args.output)
     elif args.command == "build-error-ledger":
