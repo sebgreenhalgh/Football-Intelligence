@@ -107,6 +107,7 @@ def test_store_is_revisioned_idempotent_immutable_and_reveal_gated(tmp_path: Pat
         reviewer_release="reviewer-v1",
         reveal_payloads={"DG-001": {"runs": {"local": [{"candidate_id": "c1"}]}}},
     )
+    assert scan_blind_payload(store.state("DG-001")) == []
     draft_action = {
         "action_id": "save-1",
         "action_type": "SAVE_DRAFT",
@@ -118,6 +119,7 @@ def test_store_is_revisioned_idempotent_immutable_and_reveal_gated(tmp_path: Pat
     saved = store.apply_action(draft_action)
     assert saved["revision"] == 1
     assert store.apply_action(draft_action) == saved
+    assert scan_blind_payload(store.state("DG-001")) == []
 
     with pytest.raises(DensePersonConflictError) as stale:
         store.apply_action({**draft_action, "action_id": "save-stale"})

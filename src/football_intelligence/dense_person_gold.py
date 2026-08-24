@@ -374,7 +374,7 @@ class DensePersonDecisionStore:
             }
         if draft_path.is_file():
             draft = json.loads(draft_path.read_text(encoding="utf-8"))
-            return {**draft, "finalized": False, "read_only": False, "candidate_reveal_available": False}
+            return {**draft, "finalized": False, "read_only": False}
         return {
             "anonymous_dense_image_id": image_id,
             "pass_kind": pass_kind,
@@ -388,7 +388,6 @@ class DensePersonDecisionStore:
                 "unfinished_polygon": None,
                 "completion_assertion": None,
             },
-            "candidate_reveal_available": False,
         }
 
     def apply_action(self, action: Mapping[str, Any]) -> dict[str, Any]:

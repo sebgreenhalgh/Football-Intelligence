@@ -272,6 +272,18 @@ def main() -> int:
     paths = roots(repo)
     workspace = paths["workspace"]
     upstream_after = verify_upstream(paths)
+    reviewer_release_path = workspace / "05_REVIEWER/reviewer_release_manifest.json"
+    reviewer_release = read_json(reviewer_release_path)
+    reviewer_release["repository_commit"] = git(repo, "rev-parse", "HEAD")
+    for row in reviewer_release["files"]:
+        source = repo / row["path"]
+        row["byte_size"] = source.stat().st_size
+        row["sha256"] = sha256_file(source)
+    write_json(reviewer_release_path, reviewer_release)
+    binding_path = workspace / "05_REVIEWER/reviewer_binding_hashes.json"
+    binding_hashes = read_json(binding_path)
+    binding_hashes["reviewer_release_manifest_sha256"] = sha256_file(reviewer_release_path)
+    write_json(binding_path, binding_hashes)
     selection_path = workspace / "01_SELECTION/dense_gold_selection_manifest.json"
     selection = read_json(selection_path)
     if (
@@ -395,6 +407,7 @@ def main() -> int:
     release_gate.update(
         {
             "classification": PASS,
+            "bindings": binding_hashes,
             "engineering_acceptance_report_sha256": sha256_file(
                 workspace / "07_ACCEPTANCE/engineering_acceptance_report.json"
             ),
