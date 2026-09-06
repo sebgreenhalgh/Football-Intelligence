@@ -1,94 +1,933 @@
 "use strict";
 
 const ASSERTION = "I have reviewed the full image and annotated every individually evaluable visible human.";
+
+const InteractionMode = Object.freeze({
+  PAN_EDIT: "PAN_EDIT",
+  DRAW_PERSON: "DRAW_PERSON",
+  ADD_VISIBLE_COMPONENT: "ADD_VISIBLE_COMPONENT",
+  DRAW_IGNORE_REGION: "DRAW_IGNORE_REGION",
+});
+
+const DRAWING_MODES = new Set([
+  InteractionMode.DRAW_PERSON,
+  InteractionMode.ADD_VISIBLE_COMPONENT,
+  InteractionMode.DRAW_IGNORE_REGION,
+]);
+
+const MODE_LABELS = Object.freeze({
+  [InteractionMode.PAN_EDIT]: "PAN / EDIT",
+  [InteractionMode.DRAW_PERSON]: "DRAW PERSON",
+  [InteractionMode.ADD_VISIBLE_COMPONENT]: "ADD VISIBLE PART",
+  [InteractionMode.DRAW_IGNORE_REGION]: "DRAW IGNORE REGION",
+});
+
 const $ = id => document.getElementById(id);
+
 const state = {
-  bootstrap: null, queue: [], index: 0, serverRevision: 0, finalized: false, passKind: "FIRST_PASS",
-  document: null, image: new Image(), scale: 1, panX: 0, panY: 0,
-  mode: "none", working: [], selected: null, dragVertex: null, panning: null,
-  history: [], future: [], autosaveTimer: null, actionCounter: 0,
+  bootstrap: null,
+  queue: [],
+  index: 0,
+  serverRevision: 0,
+  finalized: false,
+  passKind: "FIRST_PASS",
+  document: null,
+  image: new Image(),
+  scale: 1,
+  panX: 0,
+  panY: 0,
+  mode: InteractionMode.PAN_EDIT,
+  working: [],
+  drawingContext: null,
+  contextTool: null,
+  spaceHeld: false,
+  selected: null,
+  dragVertex: null,
+  panning: null,
+  history: [],
+  future: [],
+  autosaveTimer: null,
+  actionCounter: 0,
+  dirty: false,
+  mutationVersion: 0,
+  saveInFlight: null,
+  loading: false,
 };
 
 function blankDocument() {
-  return {people: [], ignore_regions: [], reviewed_exhaustiveness_strips: [], unfinished_polygon: null, completion_assertion: null};
+  return {
+    people: [],
+    ignore_regions: [],
+    reviewed_exhaustiveness_strips: [],
+    unfinished_polygon: null,
+    completion_assertion: null,
+  };
 }
-function clone(value) { return JSON.parse(JSON.stringify(value)); }
-function actionId(prefix) { state.actionCounter += 1; return `${prefix}-${Date.now()}-${state.actionCounter}`; }
-function pushHistory() { state.history.push(clone(state.document)); if (state.history.length > 100) state.history.shift(); state.future=[]; }
-function mutate(callback) { if (state.finalized) return; pushHistory(); callback(); renderAll(); scheduleAutosave(); }
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function actionId(prefix) {
+  state.actionCounter += 1;
+  return `${prefix}-${Date.now()}-${state.actionCounter}`;
+}
+
+function currentItem() {
+  return state.queue[state.index];
+}
+
+function isDrawingMode(mode = state.mode) {
+  return DRAWING_MODES.has(mode);
+}
+
+function effectiveMode() {
+  return state.spaceHeld && isDrawingMode() ? "TEMPORARY_PAN" : state.mode;
+}
+
+function hasWorkingPolygon() {
+  return state.working.length > 0;
+}
+
+function pushHistory() {
+  state.history.push(clone(state.document));
+  if (state.history.length > 100) state.history.shift();
+  state.future = [];
+}
+
+function mutateDocument(callback) {
+  if (state.finalized) return false;
+  pushHistory();
+  callback();
+  state.mutationVersion += 1;
+  state.dirty = true;
+  renderAll();
+  scheduleAutosave();
+  return true;
+}
+
 function imagePoint(event) {
   const rect = $("canvas").getBoundingClientRect();
-  return {x:(event.clientX-rect.left-state.panX)/state.scale, y:(event.clientY-rect.top-state.panY)/state.scale};
+  return {
+    x: (event.clientX - rect.left - state.panX) / state.scale,
+    y: (event.clientY - rect.top - state.panY) / state.scale,
+  };
 }
-function canvasPoint(point) { return {x: point.x*state.scale+state.panX, y: point.y*state.scale+state.panY}; }
-function setStatus(message, error=false) { $("status").textContent=message; $("status").style.color=error?"#ff9d9d":""; }
 
-async function request(url, options={}) {
-  const response = await fetch(url, {...options, headers:{"Content-Type":"application/json", ...(options.headers||{})}});
+function boundedImagePoint(event) {
+  const point = imagePoint(event);
+  return {
+    x: Math.max(0, Math.min(state.image.width - 1, point.x)),
+    y: Math.max(0, Math.min(state.image.height - 1, point.y)),
+  };
+}
+
+function canvasPoint(point) {
+  return {x: point.x * state.scale + state.panX, y: point.y * state.scale + state.panY};
+}
+
+function setStatus(message, error = false) {
+  $("status").textContent = message;
+  $("status").classList.toggle("error", error);
+}
+
+let noticeTimer = null;
+function showNotice(message) {
+  clearTimeout(noticeTimer);
+  $("interactionNotice").textContent = message;
+  $("interactionNotice").hidden = false;
+  noticeTimer = setTimeout(() => { $("interactionNotice").hidden = true; }, 2600);
+}
+
+async function request(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {"Content-Type": "application/json", ...(options.headers || {})},
+  });
   const payload = await response.json();
-  if (!response.ok) { const error=new Error(payload.message||response.statusText); error.payload=payload; throw error; }
+  if (!response.ok) {
+    const error = new Error(payload.message || response.statusText);
+    error.payload = payload;
+    throw error;
+  }
   return payload;
 }
-async function loadBootstrap() {
-  state.bootstrap=await request("/api/bootstrap"); state.queue=state.bootstrap.queue; state.passKind=state.bootstrap.pass_kind;
-  $("imageSelect").innerHTML=state.queue.map((row,i)=>`<option value="${i}">${row.anonymous_dense_image_id} · ${row.workflow_group}</option>`).join("");
-  await loadImage(0);
-}
-async function loadImage(index) {
-  state.index=Math.max(0,Math.min(index,state.queue.length-1)); $("imageSelect").value=String(state.index);
-  const item=state.queue[state.index]; const saved=await request(`/api/state?image_id=${encodeURIComponent(item.anonymous_dense_image_id)}`);
-  state.serverRevision=saved.revision; state.finalized=saved.finalized; state.document=clone(saved.document||blankDocument());
-  state.history=[]; state.future=[]; state.working=[]; state.mode="none"; state.selected=null;
-  state.image=await new Promise((resolve,reject)=>{const image=new Image(); image.onload=()=>resolve(image); image.onerror=reject; image.src=item.image_url;});
-  fit("fitWidth"); renderAll(); setStatus(`${item.anonymous_dense_image_id} · revision ${state.serverRevision}${state.finalized?" · finalized":""}`);
-  $("reveal").hidden=!state.finalized; $("finalize").disabled=state.finalized; $("assertion").checked=state.document.completion_assertion===ASSERTION;
-}
-function fit(kind) {
-  const viewport=$("viewport"); const sx=viewport.clientWidth/state.image.width, sy=viewport.clientHeight/state.image.height;
-  state.scale=kind==="fitHeight"?sy:sx; state.panX=(viewport.clientWidth-state.image.width*state.scale)/2; state.panY=(viewport.clientHeight-state.image.height*state.scale)/2; render();
-}
-function drawPolygon(ctx, polygon, stroke, fill, selected=false) {
-  if (!polygon.length) return; ctx.beginPath(); const first=canvasPoint(polygon[0]); ctx.moveTo(first.x,first.y);
-  polygon.slice(1).forEach(point=>{const p=canvasPoint(point);ctx.lineTo(p.x,p.y);}); ctx.closePath(); ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=selected?3:2;ctx.stroke();
-  polygon.forEach(point=>{const p=canvasPoint(point);ctx.beginPath();ctx.arc(p.x,p.y,selected?5:3,0,Math.PI*2);ctx.fillStyle=stroke;ctx.fill();});
-}
-function render() {
-  const canvas=$("canvas"), viewport=$("viewport"), dpr=window.devicePixelRatio||1; canvas.width=viewport.clientWidth*dpr;canvas.height=viewport.clientHeight*dpr;canvas.style.width=`${viewport.clientWidth}px`;canvas.style.height=`${viewport.clientHeight}px`;
-  const ctx=canvas.getContext("2d");ctx.scale(dpr,dpr);ctx.clearRect(0,0,viewport.clientWidth,viewport.clientHeight);ctx.drawImage(state.image,state.panX,state.panY,state.image.width*state.scale,state.image.height*state.scale);
-  const stripWidth=state.image.width/8; for(let i=0;i<8;i++){if(state.document.reviewed_exhaustiveness_strips.includes(i)){const x=state.panX+i*stripWidth*state.scale;ctx.fillStyle="rgba(20,210,145,.06)";ctx.fillRect(x,state.panY,stripWidth*state.scale,state.image.height*state.scale);}}
-  state.document.people.forEach((person,pi)=>(person.visible_mask_components||person.canonical_components).forEach((polygon,ci)=>drawPolygon(ctx,polygon,"#66dcff","rgba(40,160,220,.18)",state.selected?.kind==="person"&&state.selected.i===pi&&state.selected.c===ci)));
-  state.document.ignore_regions.forEach((region,i)=>drawPolygon(ctx,region.polygon||(region.canonical_components||[])[0],"#ff9b53","rgba(255,110,40,.18)",state.selected?.kind==="ignore"&&state.selected.i===i));
-  if(state.working.length){drawPolygon(ctx,state.working,"#f8ef74","rgba(248,239,116,.08)",true);}
-}
-function renderAll(){render();renderLists();}
-function renderLists(){
-  $("instances").innerHTML=state.document.people.map((person,i)=>`<li data-kind="person" data-i="${i}" class="${state.selected?.kind==="person"&&state.selected.i===i?"selected":""}">${person.instance_id} · ${person.relevance||"relevance required"} · ${(person.visible_mask_components||person.canonical_components).length} component(s)</li>`).join("")+state.document.ignore_regions.map((region,i)=>`<li data-kind="ignore" data-i="${i}" class="${state.selected?.kind==="ignore"&&state.selected.i===i?"selected":""}">${region.ignore_region_id} · ${region.reason}</li>`).join("");
-  $("strips").innerHTML=Array.from({length:8},(_,i)=>`<button data-strip="${i}" class="${state.document.reviewed_exhaustiveness_strips.includes(i)?"reviewed":""}">${i+1}</button>`).join("");
-}
-function scheduleAutosave(){clearTimeout(state.autosaveTimer);state.autosaveTimer=setTimeout(saveDraft,500);}
-async function saveDraft(){clearTimeout(state.autosaveTimer);if(state.finalized)return;try{const response=await request("/api/action",{method:"POST",body:JSON.stringify({action_id:actionId("autosave"),action_type:"SAVE_DRAFT",anonymous_dense_image_id:state.queue[state.index].anonymous_dense_image_id,pass_kind:state.passKind,expected_revision:state.serverRevision,document:state.document})});state.serverRevision=response.revision;setStatus(`Autosaved revision ${state.serverRevision}`);}catch(error){setStatus(`${error.payload?.error_code||"SAVE_FAILED"}: ${error.message}`,true);throw error;}}
-function beginPerson(addComponent=false){
-  if(addComponent&&state.selected?.kind==="person"){state.mode="personComponent";}else{const relevance=$("relevance").value;if(!relevance){setStatus("Choose relevance before drawing a person",true);return;}mutate(()=>{const i=state.document.people.length;state.document.people.push({instance_id:`person-${String(i+1).padStart(3,"0")}`,relevance,visible_mask_components:[]});state.selected={kind:"person",i,c:0};});state.mode="personComponent";}
-  state.working=[];setStatus("Person mask mode: click visible-boundary vertices, Enter to finish");
-}
-function beginIgnore(){const reason=$("ignoreReason").value;if(!reason){setStatus("Choose an ignore reason",true);return;}state.mode="ignore";state.working=[];setStatus("Ignore-region mode: click vertices, Enter to finish");}
-function finishPolygon(){if(state.working.length<3){setStatus("Polygon needs at least three vertices",true);return;}const polygon=clone(state.working);mutate(()=>{if(state.mode==="personComponent"&&state.selected?.kind==="person"){const person=state.document.people[state.selected.i];person.visible_mask_components.push(polygon);state.selected.c=person.visible_mask_components.length-1;}else if(state.mode==="ignore"){const i=state.document.ignore_regions.length;state.document.ignore_regions.push({ignore_region_id:`ignore-${String(i+1).padStart(3,"0")}`,reason:$("ignoreReason").value,polygon});state.selected={kind:"ignore",i};}});state.working=[];state.mode="none";}
-function nearestVertex(point){let best=null;const consider=(kind,i,c,polygon)=>polygon.forEach((vertex,v)=>{const distance=Math.hypot(vertex.x-point.x,vertex.y-point.y);if(distance<10/state.scale&&(!best||distance<best.distance))best={kind,i,c,v,distance};});state.document.people.forEach((p,i)=>p.visible_mask_components.forEach((poly,c)=>consider("person",i,c,poly)));state.document.ignore_regions.forEach((r,i)=>consider("ignore",i,0,r.polygon));return best;}
-function selectedPolygon(){if(state.selected?.kind==="person"){const person=state.document.people[state.selected.i];return (person?.visible_mask_components||person?.canonical_components||[])[state.selected.c];}if(state.selected?.kind==="ignore"){const region=state.document.ignore_regions[state.selected.i];return region?.polygon||(region?.canonical_components||[])[0];}return null;}
-function undo(){if(!state.history.length)return;state.future.push(clone(state.document));state.document=state.history.pop();renderAll();scheduleAutosave();}
-function redo(){if(!state.future.length)return;state.history.push(clone(state.document));state.document=state.future.pop();renderAll();scheduleAutosave();}
-async function finalize(){try{await saveDraft();const response=await request("/api/action",{method:"POST",body:JSON.stringify({action_id:actionId("finalize"),action_type:"FINALIZE",anonymous_dense_image_id:state.queue[state.index].anonymous_dense_image_id,pass_kind:state.passKind,expected_revision:state.serverRevision,document:state.document})});state.serverRevision=response.revision;state.finalized=true;renderAll();$("reveal").hidden=false;$("finalize").disabled=true;setStatus(`Immutable event ${response.event_id}`);}catch(error){setStatus(`${error.payload?.error_code||"FINALIZE_FAILED"}: ${error.message}`,true);}}
-async function reveal(){try{const payload=await request("/api/action",{method:"POST",body:JSON.stringify({action_id:actionId("reveal"),action_type:"REVEAL_CANDIDATES",anonymous_dense_image_id:state.queue[state.index].anonymous_dense_image_id,pass_kind:state.passKind,expected_revision:state.serverRevision})});$("revealPayload").textContent=JSON.stringify(payload.candidate_comparison,null,2);$("revealPanel").hidden=false;document.querySelector("main").classList.add("revealed");}catch(error){setStatus(`${error.payload?.error_code||"REVEAL_FAILED"}: ${error.message}`,true);}}
 
-$("canvas").addEventListener("pointerdown",event=>{const point=imagePoint(event);if(state.finalized)return;if(state.mode!=="none"){state.working.push(point);render();return;}const hit=nearestVertex(point);if(hit){pushHistory();state.dragVertex=hit;state.selected={kind:hit.kind,i:hit.i,c:hit.c};renderAll();return;}state.panning={x:event.clientX,y:event.clientY,panX:state.panX,panY:state.panY};});
-window.addEventListener("pointermove",event=>{const point=imagePoint(event);$("cursor").textContent=`x ${point.x.toFixed(1)}, y ${point.y.toFixed(1)}`;if(state.dragVertex){const polygon=state.dragVertex.kind==="person"?state.document.people[state.dragVertex.i].visible_mask_components[state.dragVertex.c]:state.document.ignore_regions[state.dragVertex.i].polygon;polygon[state.dragVertex.v]={x:Math.max(0,Math.min(state.image.width-1,point.x)),y:Math.max(0,Math.min(state.image.height-1,point.y))};render();}else if(state.panning){state.panX=state.panning.panX+event.clientX-state.panning.x;state.panY=state.panning.panY+event.clientY-state.panning.y;render();}});
-window.addEventListener("pointerup",()=>{if(state.dragVertex){state.dragVertex=null;scheduleAutosave();renderAll();}state.panning=null;});
-$("instances").addEventListener("click",event=>{const li=event.target.closest("li");if(!li)return;state.selected={kind:li.dataset.kind,i:Number(li.dataset.i),c:0};renderAll();});
-$("strips").addEventListener("click",event=>{const button=event.target.closest("button");if(!button)return;const strip=Number(button.dataset.strip);mutate(()=>{const values=new Set(state.document.reviewed_exhaustiveness_strips);values.has(strip)?values.delete(strip):values.add(strip);state.document.reviewed_exhaustiveness_strips=[...values].sort();});});
-$("assertion").addEventListener("change",()=>mutate(()=>state.document.completion_assertion=$("assertion").checked?ASSERTION:null));
-$("imageSelect").addEventListener("change",()=>loadImage(Number($("imageSelect").value)));$("previous").onclick=()=>loadImage(state.index-1);$("next").onclick=()=>loadImage(state.index+1);
-$("newPerson").onclick=()=>beginPerson(false);$("addComponent").onclick=()=>beginPerson(true);$("newIgnore").onclick=beginIgnore;$("finishPolygon").onclick=finishPolygon;$("undo").onclick=undo;$("redo").onclick=redo;$("finalize").onclick=finalize;$("reveal").onclick=reveal;
-document.querySelectorAll("[data-view]").forEach(button=>button.onclick=()=>{const action=button.dataset.view;if(action==="fitWidth"||action==="fitHeight")fit(action);else if(action==="zoomIn")state.scale*=1.25;else if(action==="zoomOut")state.scale/=1.25;else{state.panX=0;state.panY=0;}render();});
-window.addEventListener("keydown",event=>{if(event.key==="Enter")finishPolygon();else if(event.key.toLowerCase()==="p")beginPerson(false);else if(event.key.toLowerCase()==="c")beginPerson(true);else if(event.key.toLowerCase()==="i")beginIgnore();else if(event.key.toLowerCase()==="z")undo();else if(event.key.toLowerCase()==="y")redo();else if(/^[1-8]$/.test(event.key))document.querySelector(`[data-strip="${Number(event.key)-1}"]`)?.click();else if(event.key==="Delete"){const polygon=selectedPolygon();if(polygon&&polygon.length){mutate(()=>polygon.pop());}}});
-window.addEventListener("resize",render);
-loadBootstrap().catch(error=>setStatus(error.message,true));
+async function loadBootstrap() {
+  state.bootstrap = await request("/api/bootstrap");
+  state.queue = state.bootstrap.queue;
+  state.passKind = state.bootstrap.pass_kind;
+  $("imageSelect").innerHTML = state.queue
+    .map((row, index) => `<option value="${index}">${row.anonymous_dense_image_id} - ${row.workflow_group}</option>`)
+    .join("");
+  await loadImage(0, true);
+}
+
+function blockForWorkingPolygon() {
+  if (!hasWorkingPolygon()) return false;
+  const message = "Finish or cancel the current polygon first.";
+  setStatus(message, true);
+  showNotice(message);
+  return true;
+}
+
+async function loadImage(index, initial = false) {
+  if (!initial && blockForWorkingPolygon()) {
+    $("imageSelect").value = String(state.index);
+    return false;
+  }
+  if (state.loading || !state.queue.length) return false;
+  state.loading = true;
+  try {
+    await saveDraft();
+    state.index = Math.max(0, Math.min(index, state.queue.length - 1));
+    $("imageSelect").value = String(state.index);
+    const item = currentItem();
+    const saved = await request(`/api/state?image_id=${encodeURIComponent(item.anonymous_dense_image_id)}`);
+    state.serverRevision = saved.revision;
+    state.finalized = saved.finalized;
+    state.document = clone(saved.document || blankDocument());
+    state.history = [];
+    state.future = [];
+    state.working = [];
+    state.drawingContext = null;
+    state.contextTool = null;
+    state.spaceHeld = false;
+    state.selected = null;
+    state.dragVertex = null;
+    state.panning = null;
+    state.dirty = false;
+    state.mutationVersion = 0;
+    state.mode = InteractionMode.PAN_EDIT;
+    state.image = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = item.image_url;
+    });
+    fit("fitWidth");
+    $("reveal").hidden = !state.finalized;
+    $("revealPanel").hidden = true;
+    $("assertion").checked = state.document.completion_assertion === ASSERTION;
+    setStatus(`${item.anonymous_dense_image_id} - revision ${state.serverRevision}${state.finalized ? " - finalized" : ""}`);
+    renderAll();
+    return true;
+  } catch (error) {
+    setStatus(error.message, true);
+    return false;
+  } finally {
+    state.loading = false;
+  }
+}
+
+function fit(kind) {
+  if (!state.image.width || !state.image.height) return;
+  const viewport = $("viewport");
+  const scaleX = viewport.clientWidth / state.image.width;
+  const scaleY = viewport.clientHeight / state.image.height;
+  state.scale = kind === "fitHeight" ? scaleY : scaleX;
+  state.panX = (viewport.clientWidth - state.image.width * state.scale) / 2;
+  state.panY = (viewport.clientHeight - state.image.height * state.scale) / 2;
+  render();
+}
+
+function zoomAt(factor, clientX, clientY) {
+  if (!state.image.width) return;
+  const rect = $("canvas").getBoundingClientRect();
+  const anchorX = clientX ?? rect.left + $("viewport").clientWidth / 2;
+  const anchorY = clientY ?? rect.top + $("viewport").clientHeight / 2;
+  const imageX = (anchorX - rect.left - state.panX) / state.scale;
+  const imageY = (anchorY - rect.top - state.panY) / state.scale;
+  const nextScale = Math.max(0.03, Math.min(40, state.scale * factor));
+  state.panX = anchorX - rect.left - imageX * nextScale;
+  state.panY = anchorY - rect.top - imageY * nextScale;
+  state.scale = nextScale;
+  render();
+}
+
+function drawPolygon(ctx, polygon, stroke, fill, selected = false) {
+  if (!polygon || !polygon.length) return;
+  ctx.beginPath();
+  const first = canvasPoint(polygon[0]);
+  ctx.moveTo(first.x, first.y);
+  polygon.slice(1).forEach(point => {
+    const current = canvasPoint(point);
+    ctx.lineTo(current.x, current.y);
+  });
+  if (polygon.length > 2) ctx.closePath();
+  ctx.fillStyle = fill;
+  if (polygon.length > 2) ctx.fill();
+  ctx.strokeStyle = selected ? "#f9ed78" : stroke;
+  ctx.lineWidth = selected ? 4 : 2;
+  ctx.stroke();
+  polygon.forEach(point => {
+    const current = canvasPoint(point);
+    ctx.beginPath();
+    ctx.arc(current.x, current.y, selected ? 5.5 : 3, 0, Math.PI * 2);
+    ctx.fillStyle = selected ? "#f9ed78" : stroke;
+    ctx.fill();
+  });
+}
+
+function personComponents(person) {
+  return person.visible_mask_components || person.canonical_components || [];
+}
+
+function regionPolygon(region) {
+  return region.polygon || (region.canonical_components || [])[0] || [];
+}
+
+function render() {
+  if (!state.document) return;
+  const canvas = $("canvas");
+  const viewport = $("viewport");
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = viewport.clientWidth * dpr;
+  canvas.height = viewport.clientHeight * dpr;
+  canvas.style.width = `${viewport.clientWidth}px`;
+  canvas.style.height = `${viewport.clientHeight}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, viewport.clientWidth, viewport.clientHeight);
+  ctx.drawImage(state.image, state.panX, state.panY, state.image.width * state.scale, state.image.height * state.scale);
+
+  const stripWidth = state.image.width / 8;
+  for (let index = 0; index < 8; index += 1) {
+    if (state.document.reviewed_exhaustiveness_strips.includes(index)) {
+      const x = state.panX + index * stripWidth * state.scale;
+      ctx.fillStyle = "rgba(20, 210, 145, .06)";
+      ctx.fillRect(x, state.panY, stripWidth * state.scale, state.image.height * state.scale);
+    }
+  }
+
+  state.document.people.forEach((person, personIndex) => {
+    personComponents(person).forEach(polygon => {
+      drawPolygon(
+        ctx,
+        polygon,
+        "#66dcff",
+        "rgba(40, 160, 220, .18)",
+        state.selected?.kind === "person" && state.selected.i === personIndex,
+      );
+    });
+  });
+  state.document.ignore_regions.forEach((region, regionIndex) => {
+    drawPolygon(
+      ctx,
+      regionPolygon(region),
+      "#ff9b53",
+      "rgba(255, 110, 40, .18)",
+      state.selected?.kind === "ignore" && state.selected.i === regionIndex,
+    );
+  });
+  if (state.working.length) drawPolygon(ctx, state.working, "#f8ef74", "rgba(248, 239, 116, .08)", true);
+}
+
+function renderMode() {
+  const effective = effectiveMode();
+  $("modeBadge").dataset.mode = state.mode;
+  $("modeBadge").textContent = `MODE: ${MODE_LABELS[state.mode]}`;
+  $("viewport").dataset.effectiveMode = effective;
+  $("viewport").classList.toggle("is-panning", Boolean(state.panning));
+  document.querySelectorAll("[data-mode-button]").forEach(button => {
+    button.classList.toggle("active", button.dataset.modeButton === state.mode);
+  });
+  const drawing = isDrawingMode();
+  $("finishPolygon").disabled = state.finalized || !drawing;
+  $("cancelPolygon").disabled = state.finalized || !drawing;
+  $("workingCount").textContent = drawing
+    ? `${state.working.length} point${state.working.length === 1 ? "" : "s"} - ${state.spaceHeld ? "temporary pan" : MODE_LABELS[state.mode].toLowerCase()}`
+    : "No active polygon";
+  $("help").textContent = state.spaceHeld
+    ? "Temporary pan: drag to move the image. Release Space to resume drawing; no point can be added now."
+    : drawing
+      ? "Click boundary points. Hold Space and drag to pan. Enter finishes; Escape cancels."
+      : "Pan: drag the background. Edit: drag a nearby vertex. Click a shape to select it.";
+}
+
+function selectedRecord() {
+  if (state.selected?.kind === "person") return state.document.people[state.selected.i] || null;
+  if (state.selected?.kind === "ignore") return state.document.ignore_regions[state.selected.i] || null;
+  return null;
+}
+
+function renderInspector() {
+  const personContextVisible = state.contextTool === "person" || state.mode === InteractionMode.DRAW_PERSON;
+  const ignoreContextVisible = state.contextTool === "ignore" || state.mode === InteractionMode.DRAW_IGNORE_REGION;
+  $("personContext").hidden = !personContextVisible;
+  $("ignoreContext").hidden = !ignoreContextVisible;
+
+  const selected = selectedRecord();
+  $("deletePerson").hidden = state.finalized || state.selected?.kind !== "person";
+  $("deleteIgnore").hidden = state.finalized || state.selected?.kind !== "ignore";
+  if (state.selected?.kind === "person" && selected) {
+    $("selectedKind").textContent = "Person";
+    $("selectionDetails").className = "";
+    $("selectionDetails").innerHTML = `<strong>${selected.instance_id}</strong><br>Relevance: ${selected.relevance}<br>Visible components: ${personComponents(selected).length}`;
+  } else if (state.selected?.kind === "ignore" && selected) {
+    $("selectedKind").textContent = "Ignore region";
+    $("selectionDetails").className = "";
+    $("selectionDetails").innerHTML = `<strong>${selected.ignore_region_id}</strong><br>Reason: ${selected.reason}`;
+  } else {
+    $("selectedKind").textContent = "None";
+    $("selectionDetails").className = "empty-state";
+    $("selectionDetails").textContent = "Click a person or ignore region to inspect it.";
+  }
+
+  const peopleRows = state.document.people.map((person, index) => (
+    `<li data-kind="person" data-i="${index}" class="${state.selected?.kind === "person" && state.selected.i === index ? "selected" : ""}">`
+      + `<strong>${person.instance_id}</strong><br>${person.relevance || "Relevance required"} - ${personComponents(person).length} visible part(s)</li>`
+  ));
+  const ignoreRows = state.document.ignore_regions.map((region, index) => (
+    `<li data-kind="ignore" data-i="${index}" class="${state.selected?.kind === "ignore" && state.selected.i === index ? "selected" : ""}">`
+      + `<strong>${region.ignore_region_id}</strong><br>${region.reason}</li>`
+  ));
+  $("instances").innerHTML = [...peopleRows, ...ignoreRows].join("") || '<li class="empty-state">No instances yet.</li>';
+  $("instanceCount").textContent = `${state.document.people.length} people / ${state.document.ignore_regions.length} ignore`;
+
+  $("strips").innerHTML = Array.from({length: 8}, (_, index) => (
+    `<button type="button" data-strip="${index}" class="${state.document.reviewed_exhaustiveness_strips.includes(index) ? "reviewed" : ""}"`
+      + ` aria-pressed="${state.document.reviewed_exhaustiveness_strips.includes(index)}">${index + 1}</button>`
+  )).join("");
+  $("stripProgress").textContent = `${state.document.reviewed_exhaustiveness_strips.length}/8 reviewed`;
+}
+
+function renderControls() {
+  const mutable = !state.finalized;
+  $("previous").disabled = state.loading || state.index <= 0;
+  $("next").disabled = state.loading || state.index >= state.queue.length - 1;
+  $("imageSelect").disabled = state.loading;
+  $("panEdit").disabled = !mutable;
+  $("newPerson").disabled = !mutable;
+  $("newIgnore").disabled = !mutable;
+  $("addComponent").disabled = !mutable || state.selected?.kind !== "person";
+  $("undo").disabled = !mutable || !state.history.length;
+  $("redo").disabled = !mutable || !state.future.length;
+  $("assertion").disabled = !mutable;
+  $("finalize").disabled = state.finalized;
+  $("reveal").hidden = !state.finalized;
+  $("workflowBadge").textContent = currentItem()?.workflow_group || "Loading";
+}
+
+function renderAll() {
+  if (!state.document) return;
+  render();
+  renderMode();
+  renderInspector();
+  renderControls();
+}
+
+function clearDrawingState() {
+  state.working = [];
+  state.drawingContext = null;
+  state.contextTool = null;
+  state.spaceHeld = false;
+}
+
+function enterPanEdit({discardWorking = false} = {}) {
+  if (hasWorkingPolygon() && !discardWorking) {
+    blockForWorkingPolygon();
+    return false;
+  }
+  clearDrawingState();
+  state.mode = InteractionMode.PAN_EDIT;
+  state.contextTool = null;
+  renderAll();
+  return true;
+}
+
+function enterDrawPerson() {
+  if (state.finalized || blockForWorkingPolygon()) return false;
+  const relevance = $("relevance").value;
+  if (!relevance) {
+    state.contextTool = "person";
+    renderAll();
+    $("relevance").focus();
+    setStatus("Choose relevance to start a person.", true);
+    return false;
+  }
+  state.mode = InteractionMode.DRAW_PERSON;
+  state.contextTool = "person";
+  state.drawingContext = {relevance};
+  state.working = [];
+  renderAll();
+  setStatus("Draw person: click boundary points; Enter finishes; hold Space to pan.");
+  return true;
+}
+
+function enterAddVisibleComponent() {
+  if (state.finalized || blockForWorkingPolygon()) return false;
+  const person = state.selected?.kind === "person" ? state.document.people[state.selected.i] : null;
+  if (!person) {
+    setStatus("Select an existing person before adding a visible part.", true);
+    showNotice("Select an existing person first.");
+    return false;
+  }
+  state.mode = InteractionMode.ADD_VISIBLE_COMPONENT;
+  state.contextTool = null;
+  state.drawingContext = {personInstanceId: person.instance_id};
+  state.working = [];
+  renderAll();
+  setStatus(`Add visible part to ${person.instance_id}: Enter finishes; hold Space to pan.`);
+  return true;
+}
+
+function enterDrawIgnoreRegion() {
+  if (state.finalized || blockForWorkingPolygon()) return false;
+  const reason = $("ignoreReason").value;
+  if (!reason) {
+    state.contextTool = "ignore";
+    renderAll();
+    $("ignoreReason").focus();
+    setStatus("Choose a reason to start an ignore region.", true);
+    return false;
+  }
+  state.mode = InteractionMode.DRAW_IGNORE_REGION;
+  state.contextTool = "ignore";
+  state.drawingContext = {reason};
+  state.working = [];
+  renderAll();
+  setStatus("Draw ignore region: click boundary points; Enter finishes; hold Space to pan.");
+  return true;
+}
+
+function addWorkingVertex(point) {
+  if (state.finalized || state.spaceHeld || !isDrawingMode()) return false;
+  state.working.push(point);
+  render();
+  renderMode();
+  return true;
+}
+
+function nextInstanceId(prefix, records, key) {
+  const pattern = new RegExp(`^${prefix}-(\\d+)$`);
+  const maximum = records.reduce((current, record) => {
+    const match = pattern.exec(record[key] || "");
+    return match ? Math.max(current, Number(match[1])) : current;
+  }, 0);
+  return `${prefix}-${String(maximum + 1).padStart(3, "0")}`;
+}
+
+function finishPolygon() {
+  if (!isDrawingMode()) return false;
+  if (state.working.length < 3) {
+    setStatus("Polygon needs at least three vertices.", true);
+    showNotice("Add at least three points, or Cancel.");
+    return false;
+  }
+  const polygon = clone(state.working);
+  const mode = state.mode;
+  const context = clone(state.drawingContext || {});
+  let committedSelection = null;
+  const changed = mutateDocument(() => {
+    if (mode === InteractionMode.DRAW_PERSON) {
+      const instanceId = nextInstanceId("person", state.document.people, "instance_id");
+      state.document.people.push({
+        instance_id: instanceId,
+        relevance: context.relevance,
+        visible_mask_components: [polygon],
+      });
+      committedSelection = {kind: "person", i: state.document.people.length - 1, c: 0};
+    } else if (mode === InteractionMode.ADD_VISIBLE_COMPONENT) {
+      const index = state.document.people.findIndex(person => person.instance_id === context.personInstanceId);
+      if (index < 0) throw new Error("Selected person no longer exists.");
+      state.document.people[index].visible_mask_components.push(polygon);
+      committedSelection = {
+        kind: "person",
+        i: index,
+        c: state.document.people[index].visible_mask_components.length - 1,
+      };
+    } else if (mode === InteractionMode.DRAW_IGNORE_REGION) {
+      const ignoreId = nextInstanceId("ignore", state.document.ignore_regions, "ignore_region_id");
+      state.document.ignore_regions.push({ignore_region_id: ignoreId, reason: context.reason, polygon});
+      committedSelection = {kind: "ignore", i: state.document.ignore_regions.length - 1, c: 0};
+    }
+  });
+  if (!changed) return false;
+  clearDrawingState();
+  state.mode = InteractionMode.PAN_EDIT;
+  state.selected = committedSelection;
+  renderAll();
+  setStatus("Polygon committed. Mode returned to Pan / Edit.");
+  return true;
+}
+
+function cancelPolygon() {
+  const hadWork = hasWorkingPolygon();
+  clearDrawingState();
+  state.mode = InteractionMode.PAN_EDIT;
+  renderAll();
+  setStatus(hadWork ? "Polygon canceled. Document unchanged; mode is Pan / Edit." : "Mode: Pan / Edit.");
+}
+
+function nearestVertex(point) {
+  let best = null;
+  const consider = (kind, index, component, polygon) => {
+    polygon.forEach((vertex, vertexIndex) => {
+      const distance = Math.hypot(vertex.x - point.x, vertex.y - point.y);
+      if (distance < 10 / state.scale && (!best || distance < best.distance)) {
+        best = {kind, i: index, c: component, v: vertexIndex, distance, changed: false};
+      }
+    });
+  };
+  state.document.people.forEach((person, index) => {
+    personComponents(person).forEach((polygon, component) => consider("person", index, component, polygon));
+  });
+  state.document.ignore_regions.forEach((region, index) => consider("ignore", index, 0, regionPolygon(region)));
+  return best;
+}
+
+function pointInsidePolygon(point, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const intersects = ((a.y > point.y) !== (b.y > point.y))
+      && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function instanceAt(point) {
+  for (let index = state.document.ignore_regions.length - 1; index >= 0; index -= 1) {
+    if (pointInsidePolygon(point, regionPolygon(state.document.ignore_regions[index]))) {
+      return {kind: "ignore", i: index, c: 0};
+    }
+  }
+  for (let index = state.document.people.length - 1; index >= 0; index -= 1) {
+    const components = personComponents(state.document.people[index]);
+    for (let component = components.length - 1; component >= 0; component -= 1) {
+      if (pointInsidePolygon(point, components[component])) return {kind: "person", i: index, c: component};
+    }
+  }
+  return null;
+}
+
+function beginPan(event) {
+  state.panning = {
+    x: event.clientX,
+    y: event.clientY,
+    panX: state.panX,
+    panY: state.panY,
+  };
+  renderMode();
+}
+
+function undo() {
+  if (state.finalized || !state.history.length || blockForWorkingPolygon()) return;
+  state.future.push(clone(state.document));
+  state.document = state.history.pop();
+  state.selected = null;
+  state.mutationVersion += 1;
+  state.dirty = true;
+  renderAll();
+  scheduleAutosave();
+}
+
+function redo() {
+  if (state.finalized || !state.future.length || blockForWorkingPolygon()) return;
+  state.history.push(clone(state.document));
+  state.document = state.future.pop();
+  state.selected = null;
+  state.mutationVersion += 1;
+  state.dirty = true;
+  renderAll();
+  scheduleAutosave();
+}
+
+function scheduleAutosave() {
+  clearTimeout(state.autosaveTimer);
+  state.autosaveTimer = setTimeout(() => {
+    saveDraft().catch(error => setStatus(`${error.payload?.error_code || "SAVE_FAILED"}: ${error.message}`, true));
+  }, 500);
+}
+
+async function saveDraft() {
+  clearTimeout(state.autosaveTimer);
+  if (state.saveInFlight) {
+    await state.saveInFlight;
+    return state.dirty ? saveDraft() : null;
+  }
+  if (state.finalized || !state.dirty || !state.document) return null;
+  const item = currentItem();
+  const savingVersion = state.mutationVersion;
+  setStatus("Saving draft...");
+  try {
+    state.saveInFlight = request("/api/action", {
+      method: "POST",
+      body: JSON.stringify({
+        action_id: actionId("autosave"),
+        action_type: "SAVE_DRAFT",
+        anonymous_dense_image_id: item.anonymous_dense_image_id,
+        pass_kind: state.passKind,
+        expected_revision: state.serverRevision,
+        document: state.document,
+      }),
+    });
+    const response = await state.saveInFlight;
+    state.serverRevision = response.revision;
+    state.dirty = state.mutationVersion !== savingVersion;
+    if (state.dirty) scheduleAutosave();
+    setStatus(`Saved revision ${state.serverRevision}`);
+    return response;
+  } catch (error) {
+    setStatus(`${error.payload?.error_code || "SAVE_FAILED"}: ${error.message}`, true);
+    throw error;
+  } finally {
+    state.saveInFlight = null;
+  }
+}
+
+async function finalize() {
+  if (state.finalized || blockForWorkingPolygon()) return;
+  try {
+    await saveDraft();
+    const response = await request("/api/action", {
+      method: "POST",
+      body: JSON.stringify({
+        action_id: actionId("finalize"),
+        action_type: "FINALIZE",
+        anonymous_dense_image_id: currentItem().anonymous_dense_image_id,
+        pass_kind: state.passKind,
+        expected_revision: state.serverRevision,
+        document: state.document,
+      }),
+    });
+    state.serverRevision = response.revision;
+    state.finalized = true;
+    clearDrawingState();
+    state.mode = InteractionMode.PAN_EDIT;
+    renderAll();
+    setStatus(`Immutable event ${response.event_id}`);
+  } catch (error) {
+    setStatus(`${error.payload?.error_code || "FINALIZE_FAILED"}: ${error.message}`, true);
+  }
+}
+
+async function reveal() {
+  try {
+    const payload = await request("/api/action", {
+      method: "POST",
+      body: JSON.stringify({
+        action_id: actionId("reveal"),
+        action_type: "REVEAL_CANDIDATES",
+        anonymous_dense_image_id: currentItem().anonymous_dense_image_id,
+        pass_kind: state.passKind,
+        expected_revision: state.serverRevision,
+      }),
+    });
+    $("revealPayload").textContent = JSON.stringify(payload.candidate_comparison, null, 2);
+    $("revealPanel").hidden = false;
+  } catch (error) {
+    setStatus(`${error.payload?.error_code || "REVEAL_FAILED"}: ${error.message}`, true);
+  }
+}
+
+function deleteSelected() {
+  if (state.finalized || blockForWorkingPolygon()) return;
+  const selected = selectedRecord();
+  if (!selected) return;
+  const label = state.selected.kind === "person" ? selected.instance_id : selected.ignore_region_id;
+  if (!window.confirm(`Delete ${label} from this mutable draft?`)) return;
+  const kind = state.selected.kind;
+  const index = state.selected.i;
+  mutateDocument(() => {
+    if (kind === "person") state.document.people.splice(index, 1);
+    else state.document.ignore_regions.splice(index, 1);
+  });
+  state.selected = null;
+  enterPanEdit({discardWorking: true});
+  setStatus(`${label} deleted; draft revision queued for save.`);
+}
+
+$("canvas").addEventListener("pointerdown", event => {
+  if (state.finalized || state.loading || (event.button !== 0 && event.button !== 1)) return;
+  event.preventDefault();
+  const point = boundedImagePoint(event);
+  if (event.button === 1 || state.spaceHeld) {
+    beginPan(event);
+    return;
+  }
+  if (state.mode === InteractionMode.PAN_EDIT) {
+    const vertex = nearestVertex(point);
+    if (vertex) {
+      pushHistory();
+      state.dragVertex = vertex;
+      state.selected = {kind: vertex.kind, i: vertex.i, c: vertex.c};
+      renderAll();
+      return;
+    }
+    const instance = instanceAt(point);
+    if (instance) {
+      state.selected = instance;
+      renderAll();
+      return;
+    }
+    beginPan(event);
+    return;
+  }
+  addWorkingVertex(point);
+});
+
+window.addEventListener("pointermove", event => {
+  if (!state.document) return;
+  const point = boundedImagePoint(event);
+  $("cursor").textContent = `x ${point.x.toFixed(1)}, y ${point.y.toFixed(1)}`;
+  if (state.dragVertex) {
+    const polygon = state.dragVertex.kind === "person"
+      ? personComponents(state.document.people[state.dragVertex.i])[state.dragVertex.c]
+      : regionPolygon(state.document.ignore_regions[state.dragVertex.i]);
+    polygon[state.dragVertex.v] = point;
+    state.dragVertex.changed = true;
+    state.dirty = true;
+    render();
+  } else if (state.panning) {
+    state.panX = state.panning.panX + event.clientX - state.panning.x;
+    state.panY = state.panning.panY + event.clientY - state.panning.y;
+    render();
+  }
+});
+
+window.addEventListener("pointerup", () => {
+  if (state.dragVertex) {
+    if (state.dragVertex.changed) {
+      state.mutationVersion += 1;
+      scheduleAutosave();
+    }
+    else state.history.pop();
+    state.dragVertex = null;
+    renderAll();
+  }
+  state.panning = null;
+  renderMode();
+});
+
+$("canvas").addEventListener("wheel", event => {
+  event.preventDefault();
+  zoomAt(event.deltaY < 0 ? 1.15 : 1 / 1.15, event.clientX, event.clientY);
+}, {passive: false});
+
+$("instances").addEventListener("click", event => {
+  const item = event.target.closest("li[data-kind]");
+  if (!item) return;
+  state.selected = {kind: item.dataset.kind, i: Number(item.dataset.i), c: 0};
+  renderAll();
+});
+
+$("strips").addEventListener("click", event => {
+  const button = event.target.closest("button[data-strip]");
+  if (!button || state.finalized || blockForWorkingPolygon()) return;
+  const strip = Number(button.dataset.strip);
+  mutateDocument(() => {
+    const values = new Set(state.document.reviewed_exhaustiveness_strips);
+    values.has(strip) ? values.delete(strip) : values.add(strip);
+    state.document.reviewed_exhaustiveness_strips = [...values].sort((a, b) => a - b);
+  });
+});
+
+$("assertion").addEventListener("change", () => {
+  if (blockForWorkingPolygon()) {
+    $("assertion").checked = state.document.completion_assertion === ASSERTION;
+    return;
+  }
+  mutateDocument(() => {
+    state.document.completion_assertion = $("assertion").checked ? ASSERTION : null;
+  });
+});
+
+$("relevance").addEventListener("change", () => {
+  if (state.contextTool === "person" && $("relevance").value) enterDrawPerson();
+});
+$("ignoreReason").addEventListener("change", () => {
+  if (state.contextTool === "ignore" && $("ignoreReason").value) enterDrawIgnoreRegion();
+});
+$("imageSelect").addEventListener("change", () => loadImage(Number($("imageSelect").value)));
+$("previous").addEventListener("click", () => loadImage(state.index - 1));
+$("next").addEventListener("click", () => loadImage(state.index + 1));
+$("panEdit").addEventListener("click", () => enterPanEdit());
+$("newPerson").addEventListener("click", enterDrawPerson);
+$("addComponent").addEventListener("click", enterAddVisibleComponent);
+$("newIgnore").addEventListener("click", enterDrawIgnoreRegion);
+$("finishPolygon").addEventListener("click", finishPolygon);
+$("cancelPolygon").addEventListener("click", cancelPolygon);
+$("deletePerson").addEventListener("click", deleteSelected);
+$("deleteIgnore").addEventListener("click", deleteSelected);
+$("undo").addEventListener("click", undo);
+$("redo").addEventListener("click", redo);
+$("finalize").addEventListener("click", finalize);
+$("reveal").addEventListener("click", reveal);
+
+document.querySelectorAll("[data-view]").forEach(button => {
+  button.addEventListener("click", () => {
+    const action = button.dataset.view;
+    if (action === "fitWidth" || action === "fitHeight") fit(action);
+    else if (action === "zoomIn") zoomAt(1.25);
+    else if (action === "zoomOut") zoomAt(1 / 1.25);
+    else if (action === "resetView") fit("fitWidth");
+  });
+});
+
+function shortcutTarget(event) {
+  return event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement;
+}
+
+window.addEventListener("keydown", event => {
+  if (event.code === "Space" && isDrawingMode() && !state.finalized) {
+    event.preventDefault();
+    if (!state.spaceHeld) {
+      state.spaceHeld = true;
+      renderMode();
+    }
+    return;
+  }
+  if (shortcutTarget(event)) {
+    if (event.key === "Escape") {
+      event.target.blur();
+      cancelPolygon();
+    }
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    finishPolygon();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    cancelPolygon();
+  } else if (event.key.toLowerCase() === "p") {
+    enterDrawPerson();
+  } else if (event.key.toLowerCase() === "c") {
+    enterAddVisibleComponent();
+  } else if (event.key.toLowerCase() === "i") {
+    enterDrawIgnoreRegion();
+  } else if (["v", "a"].includes(event.key.toLowerCase())) {
+    enterPanEdit();
+  } else if (event.key.toLowerCase() === "z") {
+    undo();
+  } else if (event.key.toLowerCase() === "y") {
+    redo();
+  } else if (/^[1-8]$/.test(event.key)) {
+    document.querySelector(`[data-strip="${Number(event.key) - 1}"]`)?.click();
+  } else if (event.key === "Delete") {
+    deleteSelected();
+  }
+});
+
+window.addEventListener("keyup", event => {
+  if (event.code === "Space" && state.spaceHeld) {
+    state.spaceHeld = false;
+    state.panning = null;
+    renderMode();
+  }
+});
+
+window.addEventListener("blur", () => {
+  if (state.spaceHeld) {
+    state.spaceHeld = false;
+    state.panning = null;
+    renderMode();
+  }
+});
+window.addEventListener("resize", render);
+
+loadBootstrap().catch(error => setStatus(error.message, true));

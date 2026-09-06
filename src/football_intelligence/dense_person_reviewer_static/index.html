@@ -3,53 +3,116 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Dense person gold reviewer</title>
+  <title>Dense person gold reviewer R1</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header>
-    <div><strong>Dense person gold</strong> <span id="blindBadge">Candidate-blind</span></div>
-    <div id="status">Loading…</div>
+  <header class="topbar">
+    <div class="brand">
+      <strong>Dense person gold</strong>
+      <span id="workflowBadge" class="badge workflow">Loading</span>
+    </div>
+    <nav class="image-navigation" aria-label="Image navigation">
+      <button id="previous" type="button" title="Previous image">Previous</button>
+      <label class="sr-only" for="imageSelect">Anonymous image</label>
+      <select id="imageSelect" aria-label="Anonymous image"></select>
+      <button id="next" type="button" title="Next image">Next</button>
+    </nav>
+    <div class="status-cluster">
+      <span id="blindBadge" class="badge blind">Candidate-blind</span>
+      <span id="modeBadge" class="badge mode" data-mode="PAN_EDIT">MODE: PAN / EDIT</span>
+      <span id="status" role="status">Loading...</span>
+    </div>
   </header>
+
+  <section id="annotationToolbar" class="annotation-toolbar" aria-label="Annotation tools">
+    <div class="toolbar-label">Annotate</div>
+    <button id="panEdit" type="button" data-mode-button="PAN_EDIT" class="mode-button active">Pan / Edit <kbd>V</kbd></button>
+    <button id="newPerson" type="button" data-mode-button="DRAW_PERSON" class="mode-button">Draw person <kbd>P</kbd></button>
+    <button id="addComponent" type="button" data-mode-button="ADD_VISIBLE_COMPONENT" class="mode-button">Add visible part <kbd>C</kbd></button>
+    <button id="newIgnore" type="button" data-mode-button="DRAW_IGNORE_REGION" class="mode-button">Ignore region <kbd>I</kbd></button>
+    <div class="toolbar-divider" aria-hidden="true"></div>
+    <button id="finishPolygon" type="button" class="commit-button" disabled>Finish <kbd>Enter</kbd></button>
+    <button id="cancelPolygon" type="button" class="cancel-button" disabled>Cancel <kbd>Esc</kbd></button>
+    <div id="workingCount" class="working-count" aria-live="polite">No active polygon</div>
+  </section>
+
   <main>
-    <aside>
-      <label>Anonymous image<select id="imageSelect"></select></label>
-      <div class="buttonRow">
-        <button id="previous">← Previous</button><button id="next">Next →</button>
-      </div>
-      <h3>View</h3>
-      <div class="buttonRow wrap">
-        <button data-view="fitWidth">Fit width</button><button data-view="fitHeight">Fit height</button>
-        <button data-view="zoomIn">Zoom +</button><button data-view="zoomOut">Zoom −</button>
-        <button data-view="resetPan">Reset pan</button>
-      </div>
-      <h3>Annotation mode</h3>
-      <div class="buttonRow wrap">
-        <button id="newPerson">New person (P)</button><button id="addComponent">Add component (C)</button>
-        <button id="newIgnore">Ignore region (I)</button><button id="finishPolygon">Finish polygon (Enter)</button>
-      </div>
-      <label>Relevance<select id="relevance">
-        <option value="">Choose…</option><option>MATCH_RELEVANT</option>
-        <option>NON_MATCH_RELEVANT</option><option>RELEVANCE_UNCERTAIN</option>
-      </select></label>
-      <label>Ignore reason<select id="ignoreReason">
-        <option value="">Choose…</option><option>DENSE_CROWD_UNRESOLVABLE</option>
-        <option>BENCH_CLUSTER_UNRESOLVABLE</option><option>TINY_AMBIGUOUS_PERSON_CLUSTER</option>
-        <option>SEVERE_VISUAL_ARTIFACT</option><option>OTHER_NON_EVALUABLE_REGION</option>
-      </select></label>
-      <div class="buttonRow"><button id="undo">Undo (Z)</button><button id="redo">Redo (Y)</button></div>
-      <h3>Instances</h3><ol id="instances"></ol>
-      <h3>Exhaustiveness strips</h3><div id="strips"></div>
-      <label class="assertion"><input type="checkbox" id="assertion"> I have reviewed the full image and annotated every individually evaluable visible human.</label>
-      <button id="finalize" class="primary">Finalize immutable frame</button>
-      <button id="reveal" hidden>Reveal candidate comparison (read-only)</button>
-    </aside>
-    <section id="viewport">
+    <section id="viewport" data-effective-mode="PAN_EDIT" aria-label="Annotation canvas">
       <canvas id="canvas"></canvas>
-      <div id="cursor">x —, y —</div>
-      <div id="help">Click to add vertices · drag a vertex to edit · Delete removes selected vertex/polygon · drag background to pan</div>
+      <div class="view-toolbar" aria-label="View controls">
+        <span>View</span>
+        <button type="button" data-view="fitWidth">Fit width</button>
+        <button type="button" data-view="fitHeight">Fit height</button>
+        <button type="button" data-view="zoomIn">Zoom +</button>
+        <button type="button" data-view="zoomOut">Zoom -</button>
+        <button type="button" data-view="resetView">Reset view</button>
+      </div>
+      <div id="cursor">x --, y --</div>
+      <div id="help">Pan: drag the background. Edit: drag a nearby vertex. Click a shape to select it.</div>
+      <div id="interactionNotice" role="alert" hidden></div>
     </section>
-    <aside id="revealPanel" hidden><h3>Read-only candidate comparison</h3><pre id="revealPayload"></pre></aside>
+
+    <aside id="inspector">
+      <section id="personContext" class="panel" hidden>
+        <h2>New person</h2>
+        <label for="relevance">Relevance</label>
+        <select id="relevance">
+          <option value="">Choose relevance...</option>
+          <option>MATCH_RELEVANT</option>
+          <option>NON_MATCH_RELEVANT</option>
+          <option>RELEVANCE_UNCERTAIN</option>
+        </select>
+        <p class="hint">Choose relevance to enter Draw person mode.</p>
+      </section>
+
+      <section id="ignoreContext" class="panel" hidden>
+        <h2>New ignore region</h2>
+        <label for="ignoreReason">Reason</label>
+        <select id="ignoreReason">
+          <option value="">Choose reason...</option>
+          <option>DENSE_CROWD_UNRESOLVABLE</option>
+          <option>BENCH_CLUSTER_UNRESOLVABLE</option>
+          <option>TINY_AMBIGUOUS_PERSON_CLUSTER</option>
+          <option>SEVERE_VISUAL_ARTIFACT</option>
+          <option>OTHER_NON_EVALUABLE_REGION</option>
+        </select>
+        <p class="hint">Choose a reason to enter Ignore region mode.</p>
+      </section>
+
+      <section class="panel selection-panel">
+        <div class="panel-heading">
+          <h2>Selected instance</h2>
+          <span id="selectedKind" class="subtle">None</span>
+        </div>
+        <div id="selectionDetails" class="empty-state">Click a person or ignore region to inspect it.</div>
+        <button id="deletePerson" type="button" class="danger" hidden>Delete selected person</button>
+        <button id="deleteIgnore" type="button" class="danger" hidden>Delete selected ignore region</button>
+      </section>
+
+      <section class="panel instances-panel">
+        <div class="panel-heading"><h2>Instances</h2><span id="instanceCount" class="subtle">0</span></div>
+        <ol id="instances"></ol>
+      </section>
+
+      <section class="panel progress-panel">
+        <div class="panel-heading"><h2>Review progress</h2><strong id="stripProgress">0/8 reviewed</strong></div>
+        <div id="strips" aria-label="Exhaustiveness strips"></div>
+        <label class="assertion"><input type="checkbox" id="assertion"> <span>I reviewed the full image and annotated every individually evaluable visible human.</span></label>
+        <button id="finalize" type="button" class="primary">Finalize immutable frame</button>
+        <button id="reveal" type="button" hidden>Reveal comparison (read-only)</button>
+      </section>
+
+      <section class="panel history-panel">
+        <button id="undo" type="button">Undo <kbd>Z</kbd></button>
+        <button id="redo" type="button">Redo <kbd>Y</kbd></button>
+      </section>
+
+      <section id="revealPanel" class="panel" hidden>
+        <h2>Read-only comparison</h2>
+        <pre id="revealPayload"></pre>
+      </section>
+    </aside>
   </main>
   <script src="/app.js"></script>
 </body>

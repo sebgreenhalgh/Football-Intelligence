@@ -85,6 +85,7 @@ class DensePersonReviewerConfig:
     pass_kind: str = "FIRST_PASS"
     repeat_manifest_path: Path | None = None
     require_completed_first_pass: bool = False
+    allowed_selection_statuses: tuple[str, ...] | None = None
     host: str = "127.0.0.1"
     port: int = 8791
 
@@ -119,7 +120,15 @@ class DensePersonHTTPServer(ThreadingHTTPServer):
                 repeat_reveals[repeat_id] = reveal_payloads[original_id]
             reveal_payloads = repeat_reveals
         elif config.pass_kind == "FIRST_PASS":
-            self.frames = selected_frames
+            if config.allowed_selection_statuses is None:
+                self.frames = selected_frames
+            else:
+                allowed = set(config.allowed_selection_statuses)
+                self.frames = {
+                    image_id: row for image_id, row in selected_frames.items() if row["selection_status"] in allowed
+                }
+                if not self.frames:
+                    raise RuntimeError("reviewer selection-status filter produced an empty queue")
         else:
             raise RuntimeError("review server pass kind must be FIRST_PASS or BLIND_REPEAT")
         self.store = DensePersonDecisionStore(
@@ -164,6 +173,15 @@ class DensePersonHTTPServer(ThreadingHTTPServer):
                 "undo_redo": True,
                 "autosave": True,
                 "exhaustiveness_strips": 8,
+                "persistent_interaction_modes": [
+                    "PAN_EDIT",
+                    "DRAW_PERSON",
+                    "ADD_VISIBLE_COMPONENT",
+                    "DRAW_IGNORE_REGION",
+                ],
+                "default_interaction_mode": "PAN_EDIT",
+                "temporary_pan": "SPACE_HOLD",
+                "delete_selected_draft_instance": True,
             },
             "candidate_blind": True,
             "production_ready": False,
