@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Dense person gold reviewer R1</title>
+  <title>Dense person reviewer</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -37,6 +37,11 @@
     <div id="workingCount" class="working-count" aria-live="polite">No active polygon</div>
   </section>
 
+  <section id="scopeReminder" class="scope-reminder" aria-label="Annotation scope" hidden>
+    <strong id="scopeReminderPrimary"></strong>
+    <span id="scopeReminderSecondary"></span>
+  </section>
+
   <main>
     <section id="viewport" data-effective-mode="PAN_EDIT" aria-label="Annotation canvas">
       <canvas id="canvas"></canvas>
@@ -54,6 +59,13 @@
     </section>
 
     <aside id="inspector">
+      <section id="auditChecklistPanel" class="panel audit-checklist" hidden>
+        <div class="panel-heading"><h2>Repair checklist</h2><span class="subtle">Current image</span></div>
+        <ul id="auditChecklist"></ul>
+        <p class="hint">Keep accepted masks unless a genuine issue is visible. Re-sweep all eight strips.</p>
+        <label class="assertion"><input type="checkbox" id="repairChecklistAddressed"> <span>I addressed every listed audit finding.</span></label>
+      </section>
+
       <section id="personContext" class="panel" hidden>
         <h2>New person</h2>
         <label for="relevance">Relevance</label>
@@ -86,6 +98,13 @@
           <span id="selectedKind" class="subtle">None</span>
         </div>
         <div id="selectionDetails" class="empty-state">Click a person or ignore region to inspect it.</div>
+        <label id="editRelevanceLabel" for="editRelevance" hidden>Person relevance
+          <select id="editRelevance">
+            <option>MATCH_RELEVANT</option>
+            <option>NON_MATCH_RELEVANT</option>
+            <option>RELEVANCE_UNCERTAIN</option>
+          </select>
+        </label>
         <button id="deletePerson" type="button" class="danger" hidden>Delete selected person</button>
         <button id="deleteIgnore" type="button" class="danger" hidden>Delete selected ignore region</button>
       </section>
@@ -99,6 +118,7 @@
         <div class="panel-heading"><h2>Review progress</h2><strong id="stripProgress">0/8 reviewed</strong></div>
         <div id="strips" aria-label="Exhaustiveness strips"></div>
         <label class="assertion"><input type="checkbox" id="assertion"> <span>I reviewed the full image and annotated every individually evaluable visible human.</span></label>
+        <label id="adjudicationAssertionLabel" class="assertion" hidden><input type="checkbox" id="adjudicationAssertion"> <span>I re-reviewed the full image, addressed the calibration audit findings, and annotated every individually evaluable visible human.</span></label>
         <button id="finalize" type="button" class="primary">Finalize immutable frame</button>
         <button id="reveal" type="button" hidden>Reveal comparison (read-only)</button>
       </section>

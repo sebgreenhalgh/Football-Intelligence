@@ -1,6 +1,7 @@
 "use strict";
 
 const ASSERTION = "I have reviewed the full image and annotated every individually evaluable visible human.";
+const ADJUDICATION_ASSERTION = "I re-reviewed the full image, addressed the calibration audit findings, and annotated every individually evaluable visible human.";
 
 const InteractionMode = Object.freeze({
   PAN_EDIT: "PAN_EDIT",
@@ -32,6 +33,8 @@ const state = {
   finalized: false,
   passKind: "FIRST_PASS",
   document: null,
+  adjudicationMetadata: null,
+  repairChecklist: [],
   image: new Image(),
   scale: 1,
   panX: 0,
@@ -79,6 +82,10 @@ function currentItem() {
 
 function isDrawingMode(mode = state.mode) {
   return DRAWING_MODES.has(mode);
+}
+
+function isAdjudication() {
+  return state.passKind === "CALIBRATION_ADJUDICATION";
 }
 
 function effectiveMode() {
@@ -157,6 +164,15 @@ async function loadBootstrap() {
   state.bootstrap = await request("/api/bootstrap");
   state.queue = state.bootstrap.queue;
   state.passKind = state.bootstrap.pass_kind;
+  const reminder = state.bootstrap.scope_reminder;
+  const showReminder = Array.isArray(reminder) && reminder.length === 2;
+  $("scopeReminder").hidden = !showReminder;
+  document.body.classList.toggle("has-scope-reminder", showReminder);
+  if (showReminder) {
+    $("scopeReminderPrimary").textContent = reminder[0];
+    $("scopeReminderSecondary").textContent = reminder[1];
+  }
+  $("blindBadge").textContent = isAdjudication() ? "Candidate-free" : "Candidate-blind";
   $("imageSelect").innerHTML = state.queue
     .map((row, index) => `<option value="${index}">${row.anonymous_dense_image_id} - ${row.workflow_group}</option>`)
     .join("");
@@ -187,6 +203,11 @@ async function loadImage(index, initial = false) {
     state.serverRevision = saved.revision;
     state.finalized = saved.finalized;
     state.document = clone(saved.document || blankDocument());
+    state.adjudicationMetadata = clone(saved.adjudication_metadata || {
+      adjudication_assertion: null,
+      repair_checklist_addressed: false,
+    });
+    state.repairChecklist = clone(saved.repair_checklist || item.repair_checklist || []);
     state.history = [];
     state.future = [];
     state.working = [];
@@ -206,9 +227,11 @@ async function loadImage(index, initial = false) {
       image.src = item.image_url;
     });
     fit("fitWidth");
-    $("reveal").hidden = !state.finalized;
+    $("reveal").hidden = isAdjudication() || !state.finalized;
     $("revealPanel").hidden = true;
     $("assertion").checked = state.document.completion_assertion === ASSERTION;
+    $("adjudicationAssertion").checked = state.adjudicationMetadata.adjudication_assertion === ADJUDICATION_ASSERTION;
+    $("repairChecklistAddressed").checked = state.adjudicationMetadata.repair_checklist_addressed === true;
     setStatus(`${item.anonymous_dense_image_id} - revision ${state.serverRevision}${state.finalized ? " - finalized" : ""}`);
     renderAll();
     return true;
@@ -361,10 +384,12 @@ function renderInspector() {
   const selected = selectedRecord();
   $("deletePerson").hidden = state.finalized || state.selected?.kind !== "person";
   $("deleteIgnore").hidden = state.finalized || state.selected?.kind !== "ignore";
+  $("editRelevanceLabel").hidden = state.selected?.kind !== "person" || !selected;
   if (state.selected?.kind === "person" && selected) {
     $("selectedKind").textContent = "Person";
     $("selectionDetails").className = "";
     $("selectionDetails").innerHTML = `<strong>${selected.instance_id}</strong><br>Relevance: ${selected.relevance}<br>Visible components: ${personComponents(selected).length}`;
+    $("editRelevance").value = selected.relevance;
   } else if (state.selected?.kind === "ignore" && selected) {
     $("selectedKind").textContent = "Ignore region";
     $("selectionDetails").className = "";
@@ -391,6 +416,21 @@ function renderInspector() {
       + ` aria-pressed="${state.document.reviewed_exhaustiveness_strips.includes(index)}">${index + 1}</button>`
   )).join("");
   $("stripProgress").textContent = `${state.document.reviewed_exhaustiveness_strips.length}/8 reviewed`;
+
+  const adjudication = isAdjudication();
+  $("auditChecklistPanel").hidden = !adjudication;
+  $("adjudicationAssertionLabel").hidden = !adjudication;
+  if (adjudication) {
+    const rows = state.repairChecklist.map(finding => {
+      const item = document.createElement("li");
+      const region = document.createElement("span");
+      region.className = "region";
+      region.textContent = finding.source_region;
+      item.append(region, document.createTextNode(` ${finding.required_correction_type}`));
+      return item;
+    });
+    $("auditChecklist").replaceChildren(...rows);
+  }
 }
 
 function renderControls() {
@@ -405,8 +445,19 @@ function renderControls() {
   $("undo").disabled = !mutable || !state.history.length;
   $("redo").disabled = !mutable || !state.future.length;
   $("assertion").disabled = !mutable;
-  $("finalize").disabled = state.finalized;
-  $("reveal").hidden = !state.finalized;
+  $("editRelevance").disabled = !mutable;
+  $("repairChecklistAddressed").disabled = !mutable;
+  $("adjudicationAssertion").disabled = !mutable;
+  const adjudicationReady = !isAdjudication() || (
+    state.document.reviewed_exhaustiveness_strips.length === 8
+    && state.document.completion_assertion === ASSERTION
+    && state.adjudicationMetadata?.repair_checklist_addressed === true
+    && state.adjudicationMetadata?.adjudication_assertion === ADJUDICATION_ASSERTION
+    && !hasWorkingPolygon()
+  );
+  $("finalize").disabled = state.finalized || !adjudicationReady;
+  $("finalize").textContent = isAdjudication() ? "Finalize immutable adjudication" : "Finalize immutable frame";
+  $("reveal").hidden = isAdjudication() || !state.finalized;
   $("workflowBadge").textContent = currentItem()?.workflow_group || "Loading";
 }
 
@@ -664,6 +715,7 @@ async function saveDraft() {
         pass_kind: state.passKind,
         expected_revision: state.serverRevision,
         document: state.document,
+        ...(isAdjudication() ? {adjudication_metadata: state.adjudicationMetadata} : {}),
       }),
     });
     const response = await state.saveInFlight;
@@ -693,6 +745,7 @@ async function finalize() {
         pass_kind: state.passKind,
         expected_revision: state.serverRevision,
         document: state.document,
+        ...(isAdjudication() ? {adjudication_metadata: state.adjudicationMetadata} : {}),
       }),
     });
     state.serverRevision = response.revision;
@@ -835,6 +888,38 @@ $("assertion").addEventListener("change", () => {
   mutateDocument(() => {
     state.document.completion_assertion = $("assertion").checked ? ASSERTION : null;
   });
+});
+
+function mutateAdjudicationMetadata(callback) {
+  if (!isAdjudication() || state.finalized || blockForWorkingPolygon()) return false;
+  callback();
+  state.mutationVersion += 1;
+  state.dirty = true;
+  renderAll();
+  scheduleAutosave();
+  return true;
+}
+
+$("repairChecklistAddressed").addEventListener("change", () => {
+  const checked = $("repairChecklistAddressed").checked;
+  if (!mutateAdjudicationMetadata(() => { state.adjudicationMetadata.repair_checklist_addressed = checked; })) {
+    $("repairChecklistAddressed").checked = state.adjudicationMetadata?.repair_checklist_addressed === true;
+  }
+});
+
+$("adjudicationAssertion").addEventListener("change", () => {
+  const checked = $("adjudicationAssertion").checked;
+  if (!mutateAdjudicationMetadata(() => {
+    state.adjudicationMetadata.adjudication_assertion = checked ? ADJUDICATION_ASSERTION : null;
+  })) {
+    $("adjudicationAssertion").checked = state.adjudicationMetadata?.adjudication_assertion === ADJUDICATION_ASSERTION;
+  }
+});
+
+$("editRelevance").addEventListener("change", () => {
+  if (state.selected?.kind !== "person") return;
+  const index = state.selected.i;
+  mutateDocument(() => { state.document.people[index].relevance = $("editRelevance").value; });
 });
 
 $("relevance").addEventListener("change", () => {

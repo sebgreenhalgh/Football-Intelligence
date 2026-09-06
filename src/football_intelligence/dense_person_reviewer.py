@@ -30,6 +30,10 @@ BLIND_FORBIDDEN_TOKENS = {
     "subject_marker",
 }
 BLIND_ALLOWED_KEYS = {"candidate_blind"}
+VISIBLE_PERSON_SCOPE_REMINDER = (
+    "ALL visible people count: pitch + touchlines + benches/technical areas + " "foreground/background + frame edges."
+)
+VISIBLE_PERSON_SCOPE_SECOND_LINE = "Annotate the person first; classify relevance second."
 
 
 def scan_blind_payload(value: Any, path: tuple[str, ...] = ()) -> list[str]:
@@ -164,6 +168,7 @@ class DensePersonHTTPServer(ThreadingHTTPServer):
             "reviewer_release": self.config.reviewer_release,
             "pass_kind": self.config.pass_kind,
             "queue": queue,
+            "scope_reminder": [VISIBLE_PERSON_SCOPE_REMINDER, VISIBLE_PERSON_SCOPE_SECOND_LINE],
             "tools": {
                 "visible_mask_polygon": True,
                 "multiple_components": True,

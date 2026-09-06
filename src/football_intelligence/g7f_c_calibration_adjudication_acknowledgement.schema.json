@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "football_intelligence.g7f_c.calibration_superseding_acknowledgement.v1",
+  "title": "G7F-C calibration superseding acknowledgement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "acknowledgement_id",
+    "acknowledgement_sha256",
+    "event_id",
+    "event_sha256",
+    "anonymous_dense_image_id",
+    "pass_kind",
+    "adjudication_sequence",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"const": "football_intelligence.g7f_c.calibration_superseding_acknowledgement.v1"},
+    "acknowledgement_id": {"type": "string", "pattern": "^ack-[0-9a-f]{24}$"},
+    "acknowledgement_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "event_id": {"type": "string", "pattern": "^calibration-adjudication-[0-9a-f]{24}$"},
+    "event_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "anonymous_dense_image_id": {"enum": ["DG-001", "DG-002", "DG-003", "DG-004", "DG-005", "DG-006"]},
+    "pass_kind": {"const": "CALIBRATION_ADJUDICATION"},
+    "adjudication_sequence": {"type": "integer", "minimum": 1},
+    "status": {"const": "IMMUTABLY_FINALIZED"}
+  }
+}

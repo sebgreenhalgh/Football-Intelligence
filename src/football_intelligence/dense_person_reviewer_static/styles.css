@@ -55,6 +55,22 @@ button:disabled { cursor: default; opacity: .42; }
 .toolbar-divider { width: 1px; height: 34px; margin: 0 3px; background: var(--border); }
 .working-count { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 
+.scope-reminder {
+  min-height: 54px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 18px;
+  color: #fff1c2;
+  background: #3a311c;
+  border-bottom: 1px solid #796535;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.scope-reminder[hidden] { display: none; }
+.scope-reminder span { color: #e7d8ad; }
+
 button, select {
   min-height: 35px;
   border: 1px solid #465b6b;
@@ -73,6 +89,7 @@ button.danger { width: 100%; margin-top: 10px; color: var(--danger); background:
 kbd { margin-left: 5px; color: #b9cad4; font-family: inherit; font-size: 10px; font-weight: 700; }
 
 main { height: calc(100vh - 122px); display: grid; grid-template-columns: minmax(0, 1fr) 330px; }
+body.has-scope-reminder main { height: calc(100vh - 176px); }
 #viewport { position: relative; overflow: hidden; background: #050709; cursor: grab; user-select: none; touch-action: none; }
 #viewport[data-effective-mode="PAN_EDIT"] { cursor: grab; }
 #viewport[data-effective-mode="PAN_EDIT"].is-panning,
@@ -131,6 +148,10 @@ label + select, label select { width: 100%; margin-top: 5px; }
 #strips button.reviewed { color: #dffbef; background: #17684c; border-color: #4bab82; }
 .assertion { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; line-height: 1.42; }
 .assertion input { flex: 0 0 auto; width: 17px; height: 17px; margin: 1px 0 0; }
+.audit-checklist { border-color: #6b5b32; background: #272315; }
+.audit-checklist ul { margin: 0; padding-left: 18px; color: #eadfbf; font-size: 12px; line-height: 1.45; }
+.audit-checklist li + li { margin-top: 8px; }
+.audit-checklist .region { display: block; color: #fff1c2; font-weight: 750; }
 .history-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
