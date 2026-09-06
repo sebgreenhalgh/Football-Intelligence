@@ -217,6 +217,7 @@ async function loadImage(index, initial = false) {
     return false;
   } finally {
     state.loading = false;
+    renderControls();
   }
 }
 
