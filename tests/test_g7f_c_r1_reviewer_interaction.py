@@ -108,7 +108,7 @@ def test_client_has_single_guarded_vertex_boundary_and_explicit_controls() -> No
         assert mode in page
     assert script.count("state.working.push(") == 1
     assert "function addWorkingVertex(point)" in script
-    assert "state.finalized || state.spaceHeld || !isDrawingMode()" in script
+    assert "state.finalized || isBusy() || state.coherenceFailure || state.spaceHeld || !isDrawingMode()" in script
     assert "Finish or cancel the current polygon first." in script
     assert "state.mode = InteractionMode.PAN_EDIT" in script
     assert "window.confirm" in script

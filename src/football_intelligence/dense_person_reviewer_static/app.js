@@ -23,6 +23,15 @@ const MODE_LABELS = Object.freeze({
   [InteractionMode.DRAW_IGNORE_REGION]: "DRAW IGNORE REGION",
 });
 
+const OperationState = Object.freeze({
+  IDLE: "IDLE",
+  SAVING_FOR_NAVIGATION: "SAVING_FOR_NAVIGATION",
+  LOADING_IMAGE: "LOADING_IMAGE",
+  FINALIZING: "FINALIZING",
+});
+
+const BUSY_REJECTION_MESSAGE = "Please wait for the current save/load to finish.";
+
 const $ = id => document.getElementById(id);
 
 const state = {
@@ -54,8 +63,18 @@ const state = {
   dirty: false,
   mutationVersion: 0,
   saveInFlight: null,
-  loading: false,
+  operation: OperationState.IDLE,
+  operationToken: 0,
+  currentImageId: null,
+  revisionImageId: null,
+  statusImageId: null,
+  coherenceFailure: false,
+  lastInvariant: null,
 };
+
+Object.defineProperty(state, "loading", {
+  get: () => state.operation !== OperationState.IDLE,
+});
 
 function blankDocument() {
   return {
@@ -78,6 +97,14 @@ function actionId(prefix) {
 
 function currentItem() {
   return state.queue[state.index];
+}
+
+function isBusy() {
+  return state.operation !== OperationState.IDLE;
+}
+
+function syncSelector() {
+  if ($("imageSelect")) $("imageSelect").value = String(state.index);
 }
 
 function isDrawingMode(mode = state.mode) {
@@ -103,7 +130,7 @@ function pushHistory() {
 }
 
 function mutateDocument(callback) {
-  if (state.finalized) return false;
+  if (state.finalized || isBusy() || state.coherenceFailure) return false;
   pushHistory();
   callback();
   state.mutationVersion += 1;
@@ -134,8 +161,90 @@ function canvasPoint(point) {
 }
 
 function setStatus(message, error = false) {
+  state.statusImageId = null;
   $("status").textContent = message;
   $("status").classList.toggle("error", error);
+}
+
+function setImageStatus(imageId, message, error = false) {
+  state.statusImageId = imageId;
+  $("status").textContent = message;
+  $("status").classList.toggle("error", error);
+}
+
+function beginOperation(operation, message) {
+  state.operation = operation;
+  state.operationToken += 1;
+  state.panning = null;
+  state.dragVertex = null;
+  state.spaceHeld = false;
+  syncSelector();
+  if (message) {
+    const imageId = state.currentImageId || currentItem()?.anonymous_dense_image_id || null;
+    if (imageId) setImageStatus(imageId, message);
+    else setStatus(message);
+  }
+  renderAll();
+  renderControls();
+  return state.operationToken;
+}
+
+function transitionOperation(token, operation, message) {
+  if (token !== state.operationToken || !isBusy()) throw new Error("STALE_OPERATION_TOKEN");
+  state.operation = operation;
+  syncSelector();
+  if (message) {
+    const imageId = state.currentImageId || currentItem()?.anonymous_dense_image_id || null;
+    if (imageId) setImageStatus(imageId, message);
+    else setStatus(message);
+  }
+  renderAll();
+  renderControls();
+}
+
+function leaveOperation(token) {
+  if (token !== state.operationToken) return false;
+  state.operation = OperationState.IDLE;
+  syncSelector();
+  renderAll();
+  renderControls();
+  return true;
+}
+
+function rejectBusyOperation() {
+  if (!isBusy()) return false;
+  syncSelector();
+  setStatus(BUSY_REJECTION_MESSAGE, true);
+  showNotice(BUSY_REJECTION_MESSAGE);
+  renderControls();
+  return true;
+}
+
+function clientStateInvariant() {
+  if (isBusy() || !state.document) return {ok: true, checked: false, operation: state.operation};
+  const item = currentItem();
+  const option = $("imageSelect").selectedOptions[0];
+  const checks = {
+    current_item_exists: Boolean(item),
+    selector_index_matches: $("imageSelect").value === String(state.index),
+    selector_text_matches: Boolean(item && option?.textContent.includes(item.anonymous_dense_image_id)),
+    current_image_matches: Boolean(item && state.currentImageId === item.anonymous_dense_image_id),
+    revision_image_matches: Boolean(item && state.revisionImageId === item.anonymous_dense_image_id),
+    status_image_matches: Boolean(!state.statusImageId || (item && state.statusImageId === item.anonymous_dense_image_id)),
+    workflow_badge_matches: Boolean(item && $("workflowBadge").textContent === item.workflow_group),
+  };
+  return {ok: Object.values(checks).every(Boolean), checked: true, image_id: item?.anonymous_dense_image_id, checks};
+}
+
+function enforceClientStateInvariant() {
+  const result = clientStateInvariant();
+  state.lastInvariant = result;
+  if (result.ok) return true;
+  state.coherenceFailure = true;
+  syncSelector();
+  setStatus("Client image state is inconsistent. Reload the reviewer before editing.", true);
+  renderControls();
+  return false;
 }
 
 let noticeTimer = null;
@@ -188,26 +297,73 @@ function blockForWorkingPolygon() {
 }
 
 async function loadImage(index, initial = false) {
-  if (!initial && blockForWorkingPolygon()) {
-    $("imageSelect").value = String(state.index);
+  if (!state.queue.length) {
+    syncSelector();
     return false;
   }
-  if (state.loading || !state.queue.length) return false;
-  state.loading = true;
+  if (rejectBusyOperation()) return false;
+  if (!initial && blockForWorkingPolygon()) {
+    syncSelector();
+    return false;
+  }
+  const requestedIndex = Number.isInteger(index) ? index : state.index;
+  const targetIndex = Math.max(0, Math.min(requestedIndex, state.queue.length - 1));
+  if (!initial && state.document && targetIndex === state.index) {
+    syncSelector();
+    return true;
+  }
+  const sourceId = state.currentImageId;
+  const targetItem = state.queue[targetIndex];
+  const token = beginOperation(
+    OperationState.SAVING_FOR_NAVIGATION,
+    sourceId ? `${sourceId} - saving before navigation...` : `Loading ${targetItem.anonymous_dense_image_id}...`,
+  );
   try {
     await saveDraft();
-    state.index = Math.max(0, Math.min(index, state.queue.length - 1));
-    $("imageSelect").value = String(state.index);
-    const item = currentItem();
-    const saved = await request(`/api/state?image_id=${encodeURIComponent(item.anonymous_dense_image_id)}`);
-    state.serverRevision = saved.revision;
-    state.finalized = saved.finalized;
-    state.document = clone(saved.document || blankDocument());
-    state.adjudicationMetadata = clone(saved.adjudication_metadata || {
+    transitionOperation(
+      token,
+      OperationState.LOADING_IMAGE,
+      sourceId
+        ? `${sourceId} - loading ${targetItem.anonymous_dense_image_id}...`
+        : `Loading ${targetItem.anonymous_dense_image_id}...`,
+    );
+    const saved = await request(
+      `/api/state?image_id=${encodeURIComponent(targetItem.anonymous_dense_image_id)}`,
+    );
+    if (
+      saved.anonymous_dense_image_id !== targetItem.anonymous_dense_image_id
+      || saved.pass_kind !== state.passKind
+    ) {
+      throw new Error("Target state response named a different image.");
+    }
+    if (!Number.isInteger(saved.revision) || !saved.document) {
+      throw new Error("Target state response is incomplete.");
+    }
+    const nextDocument = clone(saved.document || blankDocument());
+    const nextMetadata = clone(saved.adjudication_metadata || {
       adjudication_assertion: null,
       repair_checklist_addressed: false,
     });
-    state.repairChecklist = clone(saved.repair_checklist || item.repair_checklist || []);
+    const nextChecklist = clone(saved.repair_checklist || targetItem.repair_checklist || []);
+    const nextImage = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`Image asset failed to load for ${targetItem.anonymous_dense_image_id}.`));
+      image.src = targetItem.image_url;
+    });
+    if (token !== state.operationToken || state.operation !== OperationState.LOADING_IMAGE) {
+      throw new Error("Navigation transaction was superseded.");
+    }
+
+    state.index = targetIndex;
+    state.currentImageId = targetItem.anonymous_dense_image_id;
+    state.revisionImageId = targetItem.anonymous_dense_image_id;
+    state.serverRevision = saved.revision;
+    state.finalized = saved.finalized;
+    state.document = nextDocument;
+    state.adjudicationMetadata = nextMetadata;
+    state.repairChecklist = nextChecklist;
+    state.image = nextImage;
     state.history = [];
     state.future = [];
     state.working = [];
@@ -220,27 +376,32 @@ async function loadImage(index, initial = false) {
     state.dirty = false;
     state.mutationVersion = 0;
     state.mode = InteractionMode.PAN_EDIT;
-    state.image = await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = reject;
-      image.src = item.image_url;
-    });
+    syncSelector();
     fit("fitWidth");
     $("reveal").hidden = isAdjudication() || !state.finalized;
     $("revealPanel").hidden = true;
     $("assertion").checked = state.document.completion_assertion === ASSERTION;
     $("adjudicationAssertion").checked = state.adjudicationMetadata.adjudication_assertion === ADJUDICATION_ASSERTION;
     $("repairChecklistAddressed").checked = state.adjudicationMetadata.repair_checklist_addressed === true;
-    setStatus(`${item.anonymous_dense_image_id} - revision ${state.serverRevision}${state.finalized ? " - finalized" : ""}`);
+    leaveOperation(token);
+    setImageStatus(
+      targetItem.anonymous_dense_image_id,
+      `${targetItem.anonymous_dense_image_id} - revision ${state.serverRevision}${state.finalized ? " - finalized" : ""}`,
+    );
     renderAll();
-    return true;
+    return enforceClientStateInvariant();
   } catch (error) {
-    setStatus(error.message, true);
-    return false;
-  } finally {
-    state.loading = false;
+    leaveOperation(token);
+    syncSelector();
+    const imageId = state.currentImageId;
+    const errorCode = error.payload?.error_code;
+    const errorDetail = errorCode ? `${errorCode}: ${error.message}` : error.message;
+    if (imageId) setImageStatus(imageId, `${imageId} - navigation failed: ${errorDetail}`, true);
+    else setStatus(`Image load failed: ${error.message}`, true);
+    renderAll();
     renderControls();
+    enforceClientStateInvariant();
+    return false;
   }
 }
 
@@ -357,8 +518,8 @@ function renderMode() {
     button.classList.toggle("active", button.dataset.modeButton === state.mode);
   });
   const drawing = isDrawingMode();
-  $("finishPolygon").disabled = state.finalized || !drawing;
-  $("cancelPolygon").disabled = state.finalized || !drawing;
+  $("finishPolygon").disabled = state.finalized || isBusy() || state.coherenceFailure || !drawing;
+  $("cancelPolygon").disabled = state.finalized || isBusy() || state.coherenceFailure || !drawing;
   $("workingCount").textContent = drawing
     ? `${state.working.length} point${state.working.length === 1 ? "" : "s"} - ${state.spaceHeld ? "temporary pan" : MODE_LABELS[state.mode].toLowerCase()}`
     : "No active polygon";
@@ -434,10 +595,13 @@ function renderInspector() {
 }
 
 function renderControls() {
-  const mutable = !state.finalized;
-  $("previous").disabled = state.loading || state.index <= 0;
-  $("next").disabled = state.loading || state.index >= state.queue.length - 1;
-  $("imageSelect").disabled = state.loading;
+  const busy = isBusy();
+  const coherent = !state.coherenceFailure;
+  const hasDocument = Boolean(state.document);
+  const mutable = hasDocument && !state.finalized && !busy && coherent;
+  $("previous").disabled = busy || !coherent || !hasDocument || state.index <= 0;
+  $("next").disabled = busy || !coherent || !hasDocument || state.index >= state.queue.length - 1;
+  $("imageSelect").disabled = busy || !coherent || !hasDocument;
   $("panEdit").disabled = !mutable;
   $("newPerson").disabled = !mutable;
   $("newIgnore").disabled = !mutable;
@@ -448,21 +612,31 @@ function renderControls() {
   $("editRelevance").disabled = !mutable;
   $("repairChecklistAddressed").disabled = !mutable;
   $("adjudicationAssertion").disabled = !mutable;
-  const adjudicationReady = !isAdjudication() || (
+  $("deletePerson").disabled = !mutable;
+  $("deleteIgnore").disabled = !mutable;
+  $("relevance").disabled = !mutable;
+  $("ignoreReason").disabled = !mutable;
+  $("strips").querySelectorAll("button").forEach(button => { button.disabled = !mutable; });
+  document.querySelectorAll("[data-view]").forEach(button => { button.disabled = busy || !coherent; });
+  const adjudicationReady = hasDocument && (!isAdjudication() || (
     state.document.reviewed_exhaustiveness_strips.length === 8
     && state.document.completion_assertion === ASSERTION
     && state.adjudicationMetadata?.repair_checklist_addressed === true
     && state.adjudicationMetadata?.adjudication_assertion === ADJUDICATION_ASSERTION
     && !hasWorkingPolygon()
-  );
-  $("finalize").disabled = state.finalized || !adjudicationReady;
+  ));
+  $("finalize").disabled = !mutable || !adjudicationReady;
   $("finalize").textContent = isAdjudication() ? "Finalize immutable adjudication" : "Finalize immutable frame";
   $("reveal").hidden = isAdjudication() || !state.finalized;
+  $("reveal").disabled = busy || !coherent;
   $("workflowBadge").textContent = currentItem()?.workflow_group || "Loading";
 }
 
 function renderAll() {
-  if (!state.document) return;
+  if (!state.document) {
+    renderControls();
+    return;
+  }
   render();
   renderMode();
   renderInspector();
@@ -477,6 +651,7 @@ function clearDrawingState() {
 }
 
 function enterPanEdit({discardWorking = false} = {}) {
+  if (isBusy() || state.coherenceFailure) return false;
   if (hasWorkingPolygon() && !discardWorking) {
     blockForWorkingPolygon();
     return false;
@@ -489,7 +664,7 @@ function enterPanEdit({discardWorking = false} = {}) {
 }
 
 function enterDrawPerson() {
-  if (state.finalized || blockForWorkingPolygon()) return false;
+  if (state.finalized || isBusy() || state.coherenceFailure || blockForWorkingPolygon()) return false;
   const relevance = $("relevance").value;
   if (!relevance) {
     state.contextTool = "person";
@@ -508,7 +683,7 @@ function enterDrawPerson() {
 }
 
 function enterAddVisibleComponent() {
-  if (state.finalized || blockForWorkingPolygon()) return false;
+  if (state.finalized || isBusy() || state.coherenceFailure || blockForWorkingPolygon()) return false;
   const person = state.selected?.kind === "person" ? state.document.people[state.selected.i] : null;
   if (!person) {
     setStatus("Select an existing person before adding a visible part.", true);
@@ -525,7 +700,7 @@ function enterAddVisibleComponent() {
 }
 
 function enterDrawIgnoreRegion() {
-  if (state.finalized || blockForWorkingPolygon()) return false;
+  if (state.finalized || isBusy() || state.coherenceFailure || blockForWorkingPolygon()) return false;
   const reason = $("ignoreReason").value;
   if (!reason) {
     state.contextTool = "ignore";
@@ -544,7 +719,7 @@ function enterDrawIgnoreRegion() {
 }
 
 function addWorkingVertex(point) {
-  if (state.finalized || state.spaceHeld || !isDrawingMode()) return false;
+  if (state.finalized || isBusy() || state.coherenceFailure || state.spaceHeld || !isDrawingMode()) return false;
   state.working.push(point);
   render();
   renderMode();
@@ -561,7 +736,7 @@ function nextInstanceId(prefix, records, key) {
 }
 
 function finishPolygon() {
-  if (!isDrawingMode()) return false;
+  if (isBusy() || state.coherenceFailure || !isDrawingMode()) return false;
   if (state.working.length < 3) {
     setStatus("Polygon needs at least three vertices.", true);
     showNotice("Add at least three points, or Cancel.");
@@ -605,11 +780,13 @@ function finishPolygon() {
 }
 
 function cancelPolygon() {
+  if (isBusy() || state.coherenceFailure) return false;
   const hadWork = hasWorkingPolygon();
   clearDrawingState();
   state.mode = InteractionMode.PAN_EDIT;
   renderAll();
   setStatus(hadWork ? "Polygon canceled. Document unchanged; mode is Pan / Edit." : "Mode: Pan / Edit.");
+  return true;
 }
 
 function nearestVertex(point) {
@@ -667,7 +844,7 @@ function beginPan(event) {
 }
 
 function undo() {
-  if (state.finalized || !state.history.length || blockForWorkingPolygon()) return;
+  if (state.finalized || isBusy() || state.coherenceFailure || !state.history.length || blockForWorkingPolygon()) return;
   state.future.push(clone(state.document));
   state.document = state.history.pop();
   state.selected = null;
@@ -678,7 +855,7 @@ function undo() {
 }
 
 function redo() {
-  if (state.finalized || !state.future.length || blockForWorkingPolygon()) return;
+  if (state.finalized || isBusy() || state.coherenceFailure || !state.future.length || blockForWorkingPolygon()) return;
   state.history.push(clone(state.document));
   state.document = state.future.pop();
   state.selected = null;
@@ -697,69 +874,176 @@ function scheduleAutosave() {
 
 async function saveDraft() {
   clearTimeout(state.autosaveTimer);
+  if (state.coherenceFailure) throw new Error("Client image state is inconsistent; reload before saving.");
   if (state.saveInFlight) {
-    await state.saveInFlight;
+    await state.saveInFlight.promise;
     return state.dirty ? saveDraft() : null;
   }
   if (state.finalized || !state.dirty || !state.document) return null;
-  const item = currentItem();
+  const imageId = state.currentImageId;
+  if (!imageId || state.revisionImageId !== imageId || currentItem()?.anonymous_dense_image_id !== imageId) {
+    state.coherenceFailure = true;
+    renderControls();
+    throw new Error("Client image identity is inconsistent; draft was not sent.");
+  }
+  const expectedRevision = state.serverRevision;
   const savingVersion = state.mutationVersion;
-  setStatus("Saving draft...");
+  const documentSnapshot = clone(state.document);
+  const metadataSnapshot = clone(state.adjudicationMetadata);
+  const passKind = state.passKind;
+  const saveRecord = {imageId, expectedRevision, document: documentSnapshot, mutationVersion: savingVersion, promise: null};
+  state.saveInFlight = saveRecord;
+  setImageStatus(imageId, `Saving ${imageId} draft...`);
+  saveRecord.promise = (async () => {
+    try {
+      const response = await request("/api/action", {
+        method: "POST",
+        body: JSON.stringify({
+          action_id: actionId("autosave"),
+          action_type: "SAVE_DRAFT",
+          anonymous_dense_image_id: imageId,
+          pass_kind: passKind,
+          expected_revision: expectedRevision,
+          document: documentSnapshot,
+          ...(passKind === "CALIBRATION_ADJUDICATION"
+            ? {adjudication_metadata: metadataSnapshot}
+            : {}),
+        }),
+      });
+      if (
+        response.anonymous_dense_image_id !== imageId
+        || response.pass_kind !== passKind
+        || response.revision !== expectedRevision + 1
+      ) {
+        state.coherenceFailure = true;
+        throw new Error(`Stale save response rejected for ${imageId}.`);
+      }
+      if (
+        state.currentImageId !== imageId
+        || state.revisionImageId !== imageId
+        || state.serverRevision !== expectedRevision
+      ) {
+        state.coherenceFailure = true;
+        throw new Error(`Save response for ${imageId} no longer matches the authoritative image.`);
+      }
+      state.serverRevision = response.revision;
+      state.revisionImageId = imageId;
+      state.dirty = state.mutationVersion !== savingVersion;
+      if (state.dirty && !isBusy()) scheduleAutosave();
+      setImageStatus(imageId, `Saved ${imageId} revision ${state.serverRevision}`);
+      if (!isBusy()) {
+        renderControls();
+        enforceClientStateInvariant();
+      }
+      return response;
+    } catch (error) {
+      setImageStatus(imageId, `${imageId} - ${error.payload?.error_code || "SAVE_FAILED"}: ${error.message}`, true);
+      throw error;
+    } finally {
+      if (state.saveInFlight === saveRecord) state.saveInFlight = null;
+    }
+  })();
+  return saveRecord.promise;
+}
+
+async function recoverAfterFinalizeFailure(imageId) {
+  if (state.currentImageId !== imageId) return false;
   try {
-    state.saveInFlight = request("/api/action", {
-      method: "POST",
-      body: JSON.stringify({
-        action_id: actionId("autosave"),
-        action_type: "SAVE_DRAFT",
-        anonymous_dense_image_id: item.anonymous_dense_image_id,
-        pass_kind: state.passKind,
-        expected_revision: state.serverRevision,
-        document: state.document,
-        ...(isAdjudication() ? {adjudication_metadata: state.adjudicationMetadata} : {}),
-      }),
-    });
-    const response = await state.saveInFlight;
-    state.serverRevision = response.revision;
-    state.dirty = state.mutationVersion !== savingVersion;
-    if (state.dirty) scheduleAutosave();
-    setStatus(`Saved revision ${state.serverRevision}`);
-    return response;
-  } catch (error) {
-    setStatus(`${error.payload?.error_code || "SAVE_FAILED"}: ${error.message}`, true);
-    throw error;
-  } finally {
-    state.saveInFlight = null;
+    const saved = await request(`/api/state?image_id=${encodeURIComponent(imageId)}`);
+    if (saved.anonymous_dense_image_id !== imageId || !Number.isInteger(saved.revision) || !saved.document) {
+      return false;
+    }
+    if (state.currentImageId !== imageId) return false;
+    state.serverRevision = saved.revision;
+    state.revisionImageId = imageId;
+    state.finalized = saved.finalized;
+    state.document = clone(saved.document);
+    state.adjudicationMetadata = clone(saved.adjudication_metadata || state.adjudicationMetadata);
+    state.repairChecklist = clone(saved.repair_checklist || state.repairChecklist);
+    state.dirty = false;
+    state.history = [];
+    state.future = [];
+    if (state.finalized) {
+      clearDrawingState();
+      state.mode = InteractionMode.PAN_EDIT;
+      state.selected = null;
+    }
+    $("assertion").checked = state.document.completion_assertion === ASSERTION;
+    $("adjudicationAssertion").checked = state.adjudicationMetadata?.adjudication_assertion === ADJUDICATION_ASSERTION;
+    $("repairChecklistAddressed").checked = state.adjudicationMetadata?.repair_checklist_addressed === true;
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 
 async function finalize() {
-  if (state.finalized || blockForWorkingPolygon()) return;
+  if (rejectBusyOperation()) return false;
+  if (state.finalized || state.coherenceFailure || blockForWorkingPolygon()) return false;
+  const imageId = state.currentImageId;
+  const token = beginOperation(OperationState.FINALIZING, `${imageId} - finalizing...`);
   try {
     await saveDraft();
+    if (
+      token !== state.operationToken
+      || state.operation !== OperationState.FINALIZING
+      || state.currentImageId !== imageId
+      || state.revisionImageId !== imageId
+    ) {
+      throw new Error("Finalization transaction lost its image binding.");
+    }
+    const expectedRevision = state.serverRevision;
+    const documentSnapshot = clone(state.document);
+    const metadataSnapshot = clone(state.adjudicationMetadata);
+    const passKind = state.passKind;
     const response = await request("/api/action", {
       method: "POST",
       body: JSON.stringify({
         action_id: actionId("finalize"),
         action_type: "FINALIZE",
-        anonymous_dense_image_id: currentItem().anonymous_dense_image_id,
-        pass_kind: state.passKind,
-        expected_revision: state.serverRevision,
-        document: state.document,
-        ...(isAdjudication() ? {adjudication_metadata: state.adjudicationMetadata} : {}),
+        anonymous_dense_image_id: imageId,
+        pass_kind: passKind,
+        expected_revision: expectedRevision,
+        document: documentSnapshot,
+        ...(passKind === "CALIBRATION_ADJUDICATION" ? {adjudication_metadata: metadataSnapshot} : {}),
       }),
     });
+    if (
+      response.anonymous_dense_image_id !== imageId
+      || response.pass_kind !== passKind
+      || response.revision !== expectedRevision + 1
+      || state.currentImageId !== imageId
+      || state.serverRevision !== expectedRevision
+      || token !== state.operationToken
+    ) {
+      state.coherenceFailure = true;
+      throw new Error(`Stale finalization response rejected for ${imageId}.`);
+    }
     state.serverRevision = response.revision;
+    state.revisionImageId = imageId;
     state.finalized = true;
+    state.dirty = false;
     clearDrawingState();
     state.mode = InteractionMode.PAN_EDIT;
+    leaveOperation(token);
     renderAll();
-    setStatus(`Immutable event ${response.event_id}`);
+    setImageStatus(imageId, `Finalized ${imageId} - immutable event ${response.event_id}`);
+    renderControls();
+    enforceClientStateInvariant();
+    return true;
   } catch (error) {
-    setStatus(`${error.payload?.error_code || "FINALIZE_FAILED"}: ${error.message}`, true);
+    await recoverAfterFinalizeFailure(imageId);
+    leaveOperation(token);
+    syncSelector();
+    setImageStatus(imageId, `${imageId} - ${error.payload?.error_code || "FINALIZE_FAILED"}: ${error.message}`, true);
+    renderAll();
+    enforceClientStateInvariant();
+    return false;
   }
 }
 
 async function reveal() {
+  if (isBusy() || state.coherenceFailure) return false;
   try {
     const payload = await request("/api/action", {
       method: "POST",
@@ -773,13 +1057,15 @@ async function reveal() {
     });
     $("revealPayload").textContent = JSON.stringify(payload.candidate_comparison, null, 2);
     $("revealPanel").hidden = false;
+    return true;
   } catch (error) {
     setStatus(`${error.payload?.error_code || "REVEAL_FAILED"}: ${error.message}`, true);
+    return false;
   }
 }
 
 function deleteSelected() {
-  if (state.finalized || blockForWorkingPolygon()) return;
+  if (state.finalized || isBusy() || state.coherenceFailure || blockForWorkingPolygon()) return;
   const selected = selectedRecord();
   if (!selected) return;
   const label = state.selected.kind === "person" ? selected.instance_id : selected.ignore_region_id;
@@ -796,7 +1082,7 @@ function deleteSelected() {
 }
 
 $("canvas").addEventListener("pointerdown", event => {
-  if (state.finalized || state.loading || (event.button !== 0 && event.button !== 1)) return;
+  if (state.finalized || isBusy() || state.coherenceFailure || (event.button !== 0 && event.button !== 1)) return;
   event.preventDefault();
   const point = boundedImagePoint(event);
   if (event.button === 1 || state.spaceHeld) {
@@ -859,10 +1145,12 @@ window.addEventListener("pointerup", () => {
 
 $("canvas").addEventListener("wheel", event => {
   event.preventDefault();
+  if (isBusy() || state.coherenceFailure) return;
   zoomAt(event.deltaY < 0 ? 1.15 : 1 / 1.15, event.clientX, event.clientY);
 }, {passive: false});
 
 $("instances").addEventListener("click", event => {
+  if (isBusy() || state.coherenceFailure) return;
   const item = event.target.closest("li[data-kind]");
   if (!item) return;
   state.selected = {kind: item.dataset.kind, i: Number(item.dataset.i), c: 0};
@@ -871,7 +1159,7 @@ $("instances").addEventListener("click", event => {
 
 $("strips").addEventListener("click", event => {
   const button = event.target.closest("button[data-strip]");
-  if (!button || state.finalized || blockForWorkingPolygon()) return;
+  if (!button || state.finalized || isBusy() || state.coherenceFailure || blockForWorkingPolygon()) return;
   const strip = Number(button.dataset.strip);
   mutateDocument(() => {
     const values = new Set(state.document.reviewed_exhaustiveness_strips);
@@ -881,6 +1169,10 @@ $("strips").addEventListener("click", event => {
 });
 
 $("assertion").addEventListener("change", () => {
+  if (isBusy() || state.coherenceFailure) {
+    $("assertion").checked = state.document.completion_assertion === ASSERTION;
+    return;
+  }
   if (blockForWorkingPolygon()) {
     $("assertion").checked = state.document.completion_assertion === ASSERTION;
     return;
@@ -891,7 +1183,7 @@ $("assertion").addEventListener("change", () => {
 });
 
 function mutateAdjudicationMetadata(callback) {
-  if (!isAdjudication() || state.finalized || blockForWorkingPolygon()) return false;
+  if (!isAdjudication() || state.finalized || isBusy() || state.coherenceFailure || blockForWorkingPolygon()) return false;
   callback();
   state.mutationVersion += 1;
   state.dirty = true;
@@ -917,7 +1209,7 @@ $("adjudicationAssertion").addEventListener("change", () => {
 });
 
 $("editRelevance").addEventListener("change", () => {
-  if (state.selected?.kind !== "person") return;
+  if (isBusy() || state.coherenceFailure || state.selected?.kind !== "person") return;
   const index = state.selected.i;
   mutateDocument(() => { state.document.people[index].relevance = $("editRelevance").value; });
 });
@@ -946,6 +1238,7 @@ $("reveal").addEventListener("click", reveal);
 
 document.querySelectorAll("[data-view]").forEach(button => {
   button.addEventListener("click", () => {
+    if (isBusy() || state.coherenceFailure) return;
     const action = button.dataset.view;
     if (action === "fitWidth" || action === "fitHeight") fit(action);
     else if (action === "zoomIn") zoomAt(1.25);
@@ -959,7 +1252,7 @@ function shortcutTarget(event) {
 }
 
 window.addEventListener("keydown", event => {
-  if (event.code === "Space" && isDrawingMode() && !state.finalized) {
+  if (event.code === "Space" && isDrawingMode() && !state.finalized && !isBusy() && !state.coherenceFailure) {
     event.preventDefault();
     if (!state.spaceHeld) {
       state.spaceHeld = true;

@@ -318,7 +318,8 @@ def test_static_reviewer_supports_adjudication_metadata_and_relevance_editing() 
         assert f'id="{element_id}"' in page
     assert ADJUDICATION_ASSERTION in script
     assert "CALIBRATION_ADJUDICATION" in script
-    assert "adjudication_metadata: state.adjudicationMetadata" in script
+    assert "const metadataSnapshot = clone(state.adjudicationMetadata)" in script
+    assert "adjudication_metadata: metadataSnapshot" in script
     assert "state.document.people[index].relevance" in script
     assert "body.has-scope-reminder main" in styles
 

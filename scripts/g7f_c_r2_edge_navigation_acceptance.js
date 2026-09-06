@@ -10,6 +10,21 @@ const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
 
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+async function stopEdge(edge, profile) {
+  const exited = new Promise(resolve => edge.once("exit", resolve));
+  edge.kill();
+  await Promise.race([exited, sleep(3000)]);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      fs.rmSync(profile, {recursive: true, force: true});
+      return;
+    } catch (error) {
+      if (attempt === 19) throw error;
+      await sleep(100);
+    }
+  }
+}
+
 async function freePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -223,9 +238,7 @@ async function main() {
     console.log(JSON.stringify({browser: "Microsoft Edge", passed: true, checks}, null, 2));
   } finally {
     client.close();
-    edge.kill();
-    await sleep(200);
-    fs.rmSync(profile, {recursive: true, force: true});
+    await stopEdge(edge, profile);
   }
 }
 
