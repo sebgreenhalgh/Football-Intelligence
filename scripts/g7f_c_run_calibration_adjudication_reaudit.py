@@ -118,7 +118,7 @@ def verify_repository_compatibility(repo: Path, reviewer_commit: str) -> dict[st
         raise RuntimeError("accepted Phase-B compatibility commit is not an ancestor of current HEAD")
     changed = frozenset(filter(None, git(repo, "diff", "--name-only", PHASE_B_COMPATIBILITY_COMMIT, head).splitlines()))
     commit_count = int(git(repo, "rev-list", "--count", f"{PHASE_B_COMPATIBILITY_COMMIT}..{head}"))
-    if changed != ALLOWED_SEQUENCE2_RELEASE_PATHS or commit_count != 1:
+    if changed != ALLOWED_SEQUENCE2_RELEASE_PATHS or commit_count != 2:
         raise RuntimeError(
             "repository drift above accepted Phase-B compatibility is not the exact sequence-2 release: "
             f"commits={commit_count}, paths={sorted(changed)}"

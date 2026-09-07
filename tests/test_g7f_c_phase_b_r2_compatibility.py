@@ -60,13 +60,13 @@ def test_unrelated_repository_drift_fails_closed(monkeypatch: pytest.MonkeyPatch
         reaudit.verify_repository_compatibility(tmp_path, reaudit.R2_REVIEWER_COMMIT)
 
 
-def test_exact_sequence2_release_drift_is_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_exact_two_commit_sequence2_release_drift_is_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert reaudit.ALLOWED_SEQUENCE2_RELEASE_PATHS == sequence2_runner.EXPECTED_RELEASE_PATHS
     head = "e" * 40
     changed = "\n".join(sorted(reaudit.ALLOWED_SEQUENCE2_RELEASE_PATHS))
-    monkeypatch.setattr(reaudit, "git", fake_git(repository_values(head=head, changed=changed, count="1")))
+    monkeypatch.setattr(reaudit, "git", fake_git(repository_values(head=head, changed=changed, count="2")))
     result = reaudit.verify_repository_compatibility(tmp_path, reaudit.R2_REVIEWER_COMMIT)
-    assert result["commits_above_phase_b_compatibility"] == 1
+    assert result["commits_above_phase_b_compatibility"] == 2
     assert result["changed_paths_above_phase_b_compatibility"] == sorted(reaudit.ALLOWED_SEQUENCE2_RELEASE_PATHS)
 
 

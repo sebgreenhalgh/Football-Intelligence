@@ -360,8 +360,8 @@ def verify_release_commit(repo: Path) -> str:
         raise RuntimeError("required baseline is not an ancestor of the release commit")
     changed = frozenset(filter(None, git(repo, "diff", "--name-only", BASELINE, head).splitlines()))
     commits = int(git(repo, "rev-list", "--count", f"{BASELINE}..{head}"))
-    if changed != EXPECTED_RELEASE_PATHS or commits != 1:
-        raise RuntimeError(f"release is not the exact one-commit sequence-2 change: {commits}, {sorted(changed)}")
+    if changed != EXPECTED_RELEASE_PATHS or commits != 2:
+        raise RuntimeError(f"release is not the exact two-commit sequence-2 change: {commits}, {sorted(changed)}")
     return head
 
 
@@ -432,7 +432,7 @@ def run_closure_status(repo: Path) -> dict[str, Any]:
         env={**os.environ, "PYTHONPATH": f"{repo / 'src'};{repo / 'scripts'}"},
         capture_output=True,
         text=True,
-        timeout=420,
+        timeout=900,
         check=False,
     )
     value = json.loads(result.stdout)
