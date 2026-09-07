@@ -25,6 +25,11 @@ from football_intelligence.dense_person_reviewer import (
     VISIBLE_PERSON_SCOPE_REMINDER,
     VISIBLE_PERSON_SCOPE_SECOND_LINE,
 )
+from football_intelligence.dg005_sequence2_reviewer import (
+    REVIEWER_RELEASE as SEQUENCE2_REVIEWER_RELEASE,
+    TARGET_IMAGE_ID,
+    sequence2_truth_delta,
+)
 from g7f_c_run_calibration_adjudication_reviewer_r2 import (
     BASELINE as R2_BASELINE,
     EXPECTED_HASHES,
@@ -41,13 +46,24 @@ from g7f_c_run_calibration_adjudication_reviewer_r2 import (
 INCOMPLETE = "HOLD_G7F_C_CALIBRATION_ADJUDICATION_INCOMPLETE"
 VISUAL_REQUIRED = "HOLD_G7F_C_CALIBRATION_ADJUDICATION_VISUAL_REAUDIT_REQUIRED"
 PASS = "PASS_G7F_C_CALIBRATION_SUPERSEDING_ADJUDICATION_REAUDIT_READY_FOR_SCORED_DENSE_GOLD_ANNOTATION"
+SEQUENCE2_INCOMPLETE = "HOLD_G7F_C_DG005_SEQUENCE2_RELEVANCE_ADJUDICATION_INCOMPLETE"
 R1_REVIEWER_RELEASE = "G7F_C_CALIBRATION_ADJUDICATION_REVIEWER_R1"
 R2_REVIEWER_COMMIT = "55a6e31cba26174324cdd6b84c2b7579462d3a0d"
+PHASE_B_COMPATIBILITY_COMMIT = "770d5b35466d6e4fb68d45abd907adef2c7dff73"
 R2_RELEASE_MANIFEST_SHA256 = "871d558913aafd59f844162e98b3946ee66580a6a6a59ec39510a8f39b1faa40"
-SUPPORTED_EVENT_REVIEWER_RELEASES = frozenset({R1_REVIEWER_RELEASE, CLOSURE_REVIEWER_RELEASE})
-ALLOWED_COMPATIBILITY_PATHS = frozenset(
+SUPPORTED_EVENT_REVIEWER_RELEASES = frozenset(
+    {R1_REVIEWER_RELEASE, CLOSURE_REVIEWER_RELEASE, SEQUENCE2_REVIEWER_RELEASE}
+)
+ALLOWED_SEQUENCE2_RELEASE_PATHS = frozenset(
     {
         "scripts/g7f_c_run_calibration_adjudication_reaudit.py",
+        "scripts/g7f_c_run_dg005_sequence2_reviewer.py",
+        "scripts/g7f_c_dg005_sequence2_edge_acceptance.js",
+        "src/football_intelligence/dg005_sequence2_reviewer.py",
+        "src/football_intelligence/dg005_sequence2_reviewer_static/app.js",
+        "src/football_intelligence/dg005_sequence2_reviewer_static/index.html",
+        "src/football_intelligence/dg005_sequence2_reviewer_static/styles.css",
+        "tests/test_g7f_c_dg005_sequence2.py",
         "tests/test_g7f_c_phase_b_r2_compatibility.py",
     }
 )
@@ -80,11 +96,16 @@ def phase_b_paths(repo: Path) -> dict[str, Path]:
         "phase_a": r2["phase_a"],
         "stage": r2["phase_a"],
         "r2_stage": r2["stage"],
+        "sequence2_stage": (
+            repo.parent
+            / "experiments/football_observation_reasoner/part 9"
+            / "G7F_C_DG005_SEQUENCE2_RELEVANCE_ADJUDICATION_AND_PHASE_B_CLOSURE_v1"
+        ),
     }
 
 
 def verify_repository_compatibility(repo: Path, reviewer_commit: str) -> dict[str, Any]:
-    """Allow only this one Phase-B repair commit above the accepted R2 release."""
+    """Require the exact sequence-2 release commit above accepted Phase-B compatibility."""
     head = git(repo, "rev-parse", "HEAD")
     origin = git(repo, "rev-parse", "origin/main")
     if head != origin:
@@ -93,22 +114,22 @@ def verify_repository_compatibility(repo: Path, reviewer_commit: str) -> dict[st
         raise RuntimeError("Phase B requires a clean repository")
     if git(repo, "merge-base", reviewer_commit, head) != reviewer_commit:
         raise RuntimeError(f"accepted R2 reviewer commit is not an ancestor of current HEAD: {reviewer_commit}")
-    changed = frozenset(filter(None, git(repo, "diff", "--name-only", reviewer_commit, head).splitlines()))
-    commit_count = int(git(repo, "rev-list", "--count", f"{reviewer_commit}..{head}"))
-    if head == reviewer_commit:
-        if changed or commit_count:
-            raise RuntimeError("R2 baseline repository comparison is incoherent")
-    elif changed != ALLOWED_COMPATIBILITY_PATHS or commit_count != 1:
+    if git(repo, "merge-base", PHASE_B_COMPATIBILITY_COMMIT, head) != PHASE_B_COMPATIBILITY_COMMIT:
+        raise RuntimeError("accepted Phase-B compatibility commit is not an ancestor of current HEAD")
+    changed = frozenset(filter(None, git(repo, "diff", "--name-only", PHASE_B_COMPATIBILITY_COMMIT, head).splitlines()))
+    commit_count = int(git(repo, "rev-list", "--count", f"{PHASE_B_COMPATIBILITY_COMMIT}..{head}"))
+    if changed != ALLOWED_SEQUENCE2_RELEASE_PATHS or commit_count != 1:
         raise RuntimeError(
-            "repository drift above the accepted R2 reviewer is not the exact Phase-B compatibility repair: "
+            "repository drift above accepted Phase-B compatibility is not the exact sequence-2 release: "
             f"commits={commit_count}, paths={sorted(changed)}"
         )
     return {
         "accepted_r2_reviewer_commit": reviewer_commit,
+        "accepted_phase_b_compatibility_commit": PHASE_B_COMPATIBILITY_COMMIT,
         "head": head,
         "origin_main": origin,
-        "commits_above_r2": commit_count,
-        "changed_paths_above_r2": sorted(changed),
+        "commits_above_phase_b_compatibility": commit_count,
+        "changed_paths_above_phase_b_compatibility": sorted(changed),
     }
 
 
@@ -150,6 +171,36 @@ def verify_r2_release(paths: dict[str, Path]) -> tuple[dict[str, Any], dict[str,
     )
 
 
+def verify_sequence2_release(
+    paths: dict[str, Path], repository_compatibility: dict[str, Any], truth_bindings: dict[str, str]
+) -> dict[str, str]:
+    """Verify the targeted release independently from per-event reviewer provenance."""
+
+    manifest_path = paths["sequence2_stage"] / "05_REVIEWER/reviewer_release_manifest.json"
+    binding_path = paths["sequence2_stage"] / "05_REVIEWER/reviewer_binding_hashes.json"
+    manifest, binding = read_json(manifest_path), read_json(binding_path)
+    if (
+        manifest.get("reviewer_release") != SEQUENCE2_REVIEWER_RELEASE
+        or manifest.get("required_baseline") != PHASE_B_COMPATIBILITY_COMMIT
+        or manifest.get("repository_commit") != repository_compatibility["head"]
+    ):
+        raise RuntimeError("DG-005 sequence-2 reviewer release identity or repository binding mismatch")
+    for row in manifest.get("files", []):
+        path = Path(row["path"])
+        if not path.is_file() or path.stat().st_size != row["byte_size"] or sha256_file(path) != row["sha256"]:
+            raise RuntimeError(f"DG-005 sequence-2 reviewer release file mismatch: {path}")
+    manifest_sha256 = sha256_file(manifest_path)
+    if binding.get("reviewer_release_manifest_sha256") != manifest_sha256:
+        raise RuntimeError("DG-005 sequence-2 binding does not bind its release manifest")
+    if binding.get("adjudication_truth_bindings") != truth_bindings:
+        raise RuntimeError("DG-005 sequence-2 release changed stable adjudication truth bindings")
+    return {
+        "sequence2_reviewer_release": SEQUENCE2_REVIEWER_RELEASE,
+        "sequence2_reviewer_release_manifest_sha256": manifest_sha256,
+        "sequence2_repository_commit": str(manifest["repository_commit"]),
+    }
+
+
 def validate_event_reviewer_releases(rows: list[dict[str, Any]]) -> tuple[dict[str, str], list[str]]:
     releases: dict[str, str] = {}
     for row in rows:
@@ -157,6 +208,10 @@ def validate_event_reviewer_releases(rows: list[dict[str, Any]]) -> tuple[dict[s
         release = str(row["event"].get("reviewer_release", ""))
         if release not in SUPPORTED_EVENT_REVIEWER_RELEASES:
             raise RuntimeError(f"unsupported adjudication reviewer release for {image_id}: {release!r}")
+        if release == SEQUENCE2_REVIEWER_RELEASE and (
+            image_id != TARGET_IMAGE_ID or row["event"].get("adjudication_sequence") != 2
+        ):
+            raise RuntimeError("targeted sequence-2 reviewer release may appear only on DG-005 sequence 2")
         if image_id in releases:
             raise RuntimeError(f"duplicate authoritative adjudication image: {image_id}")
         releases[image_id] = release
@@ -169,84 +224,149 @@ def source_image_path(source: Path, image_id: str) -> Path:
     return source / "05_REVIEWER/assets" / f"{image_id}.png"
 
 
-def phase_b_state(repo: Path) -> dict[str, Any]:
-    paths = phase_b_paths(repo)
-    repository_compatibility = verify_repository_compatibility(repo, R2_REVIEWER_COMMIT)
-    verify_frozen_contracts(paths["source"])
-    release, bindings, closure_release = verify_r2_release(paths)
-    frozen = verify_original_inventory(paths)
-    frames = load_selection(paths["source"])
-    original_root = paths["source"] / "06_DENSE_DECISIONS"
-    adjudication_root = original_root / "calibration_adjudication"
-    rows, missing = [], []
+def validated_adjudication_chains(
+    *,
+    adjudication_root: Path,
+    original_root: Path,
+    frames: dict[str, dict[str, Any]],
+    frozen: dict[str, dict[str, str]],
+    bindings: dict[str, str],
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """Validate all contiguous event/ack chains and the targeted sequence-2 delta."""
+
+    chains: dict[str, list[dict[str, Any]]] = {}
+    missing = []
     for image_id in CALIBRATION_IDS:
-        key = f"calibration_adjudication_001__{image_id}.json"
-        event_path = adjudication_root / "events" / key
-        ack_path = adjudication_root / "acknowledgements" / key
-        if not event_path.is_file() or not ack_path.is_file():
-            missing.append(image_id)
-            continue
         parent = load_original_parent(
             original_root,
             frames[image_id],
             expected_event_file_sha256=frozen[image_id]["event_file_sha256"],
             expected_ack_file_sha256=frozen[image_id]["acknowledgement_file_sha256"],
         )
-        event, acknowledgement = validate_adjudication_pair(
-            event_path,
-            ack_path,
-            frame=frames[image_id],
-            parent=parent,
-            expected_binding_hashes=bindings,
-        )
-        rows.append(
-            {
+        event_sequences = {
+            int(path.name.split("__", 1)[0].rsplit("_", 1)[1])
+            for path in (adjudication_root / "events").glob(f"calibration_adjudication_*__{image_id}.json")
+        }
+        acknowledgement_sequences = {
+            int(path.name.split("__", 1)[0].rsplit("_", 1)[1])
+            for path in (adjudication_root / "acknowledgements").glob(f"calibration_adjudication_*__{image_id}.json")
+        }
+        if event_sequences != acknowledgement_sequences:
+            raise RuntimeError(f"incomplete adjudication event/acknowledgement pair for {image_id}")
+        if not event_sequences:
+            missing.append(image_id)
+            continue
+        expected_sequences = set(range(1, max(event_sequences) + 1))
+        if event_sequences != expected_sequences:
+            raise RuntimeError(f"non-contiguous adjudication chain for {image_id}: {sorted(event_sequences)}")
+        rows_for_image = []
+        supersedes_id, supersedes_sha = parent.event_id, parent.event_sha256
+        for sequence in sorted(event_sequences):
+            key = f"calibration_adjudication_{sequence:03d}__{image_id}.json"
+            event_path = adjudication_root / "events" / key
+            acknowledgement_path = adjudication_root / "acknowledgements" / key
+            event, acknowledgement = validate_adjudication_pair(
+                event_path,
+                acknowledgement_path,
+                frame=frames[image_id],
+                parent=parent,
+                expected_binding_hashes=bindings,
+                expected_adjudication_sequence=sequence,
+                expected_supersedes_event_id=supersedes_id,
+                expected_supersedes_event_sha256=supersedes_sha,
+            )
+            row = {
                 "anonymous_dense_image_id": image_id,
+                "adjudication_sequence": sequence,
                 "event": event,
                 "acknowledgement": acknowledgement,
                 "event_path": event_path,
-                "acknowledgement_path": ack_path,
+                "acknowledgement_path": acknowledgement_path,
                 "event_file_sha256": sha256_file(event_path),
-                "acknowledgement_file_sha256": sha256_file(ack_path),
+                "acknowledgement_file_sha256": sha256_file(acknowledgement_path),
                 "parent_event_file_sha256": parent.event_file_sha256,
             }
+            rows_for_image.append(row)
+            supersedes_id, supersedes_sha = event["event_id"], event["event_sha256"]
+        chains[image_id] = rows_for_image
+    if TARGET_IMAGE_ID in chains and len(chains[TARGET_IMAGE_ID]) >= 2:
+        sequence1, sequence2 = chains[TARGET_IMAGE_ID][0], chains[TARGET_IMAGE_ID][1]
+        if sequence2["event"].get("reviewer_release") != SEQUENCE2_REVIEWER_RELEASE:
+            raise RuntimeError("DG-005 sequence 2 was not produced by the targeted reviewer release")
+        sequence2["truth_delta"] = sequence2_truth_delta(
+            sequence1["event"]["annotation"], sequence2["event"]["annotation"]
         )
-    event_releases, observed_releases = validate_event_reviewer_releases(rows)
+    all_rows = [row for image_id in CALIBRATION_IDS for row in chains.get(image_id, [])]
     existing_events = sorted((adjudication_root / "events").glob("*.json")) if adjudication_root.is_dir() else []
     existing_acks = (
         sorted((adjudication_root / "acknowledgements").glob("*.json")) if adjudication_root.is_dir() else []
     )
-    unexpected = [
-        str(path) for path in (*existing_events, *existing_acks) if "calibration_adjudication_001__" not in path.name
-    ]
-    if unexpected:
-        raise RuntimeError(f"unexpected adjudication lineage files require explicit chain review: {unexpected}")
+    if len(existing_events) != len(all_rows) or len(existing_acks) != len(all_rows):
+        raise RuntimeError("unrecognized adjudication lineage files exist outside the validated contiguous chains")
+    return chains, missing
+
+
+def phase_b_state(repo: Path) -> dict[str, Any]:
+    paths = phase_b_paths(repo)
+    repository_compatibility = verify_repository_compatibility(repo, R2_REVIEWER_COMMIT)
+    verify_frozen_contracts(paths["source"])
+    release, bindings, closure_release = verify_r2_release(paths)
+    sequence2_release = verify_sequence2_release(paths, repository_compatibility, bindings)
+    frozen = verify_original_inventory(paths)
+    frames = load_selection(paths["source"])
+    original_root = paths["source"] / "06_DENSE_DECISIONS"
+    adjudication_root = original_root / "calibration_adjudication"
+    chains, missing = validated_adjudication_chains(
+        adjudication_root=adjudication_root,
+        original_root=original_root,
+        frames=frames,
+        frozen=frozen,
+        bindings=bindings,
+    )
+    rows = [chains[image_id][-1] for image_id in CALIBRATION_IDS if image_id in chains]
+    all_rows = [row for image_id in CALIBRATION_IDS for row in chains.get(image_id, [])]
+    event_releases, observed_releases = validate_event_reviewer_releases(rows)
+    authoritative_sequences = {row["anonymous_dense_image_id"]: row["adjudication_sequence"] for row in rows}
     return {
         "paths": paths,
         "bindings": bindings,
         "closure_release": closure_release,
+        "sequence2_release": sequence2_release,
         "closure_release_manifest": release,
         "repository_compatibility": repository_compatibility,
         "frames": frames,
         "rows": rows,
+        "all_rows": all_rows,
+        "chains": chains,
+        "authoritative_sequences": authoritative_sequences,
         "authoritative_event_reviewer_releases": event_releases,
         "adjudication_reviewer_releases_observed": observed_releases,
         "missing": missing,
-        "event_count": len(existing_events),
-        "acknowledgement_count": len(existing_acks),
+        "event_count": len(all_rows),
+        "acknowledgement_count": len(all_rows),
+        "dg005_sequence2_complete": authoritative_sequences.get(TARGET_IMAGE_ID, 0) >= 2,
     }
 
 
 def status_result(state: dict[str, Any]) -> dict[str, Any]:
-    complete = not state["missing"] and state["event_count"] == state["acknowledgement_count"] == 6
+    structurally_complete = not state["missing"] and len(state["rows"]) == 6
+    if not structurally_complete:
+        decision = INCOMPLETE
+    elif not state["dg005_sequence2_complete"]:
+        decision = SEQUENCE2_INCOMPLETE
+    else:
+        decision = VISUAL_REQUIRED
     return {
-        "decision": VISUAL_REQUIRED if complete else INCOMPLETE,
+        "decision": decision,
         "required_adjudications": 6,
-        "valid_event_ack_pairs": len(state["rows"]),
+        "valid_event_ack_pairs": len(state["all_rows"]),
+        "authoritative_adjudications": len(state["rows"]),
+        "authoritative_sequences": state["authoritative_sequences"],
         "missing_anonymous_dense_image_ids": state["missing"],
         "authoritative_event_reviewer_releases": state["authoritative_event_reviewer_releases"],
         "adjudication_reviewer_releases_observed": state["adjudication_reviewer_releases_observed"],
         **state["closure_release"],
+        **state["sequence2_release"],
         "qa_assets_generated": False,
         "scored_annotation_authorized": False,
         "scored_annotation_started": False,
@@ -337,6 +457,7 @@ def structural_summary(state: dict[str, Any]) -> dict[str, Any]:
                 "acknowledgement_sha256": row["acknowledgement"]["acknowledgement_sha256"],
                 "acknowledgement_file_sha256": row["acknowledgement_file_sha256"],
                 "event_reviewer_release": row["event"]["reviewer_release"],
+                "adjudication_sequence": row["adjudication_sequence"],
                 "final_revision": row["event"]["final_revision"],
                 "superseded_parent_sha256": row["event"]["supersedes_event_sha256"],
                 "server_validation": row["event"]["server_validation"],
@@ -347,7 +468,9 @@ def structural_summary(state: dict[str, Any]) -> dict[str, Any]:
         "all_six_structurally_valid": len(images) == 6,
         "authoritative_event_reviewer_releases": state["authoritative_event_reviewer_releases"],
         "adjudication_reviewer_releases_observed": state["adjudication_reviewer_releases_observed"],
+        "authoritative_sequences": state["authoritative_sequences"],
         **state["closure_release"],
+        **state["sequence2_release"],
         "stable_adjudication_truth_bindings": state["bindings"],
         "candidate_data_used": False,
         "production_ready": False,
@@ -356,7 +479,12 @@ def structural_summary(state: dict[str, Any]) -> dict[str, Any]:
 
 def prepare(repo: Path, *, verified_state: dict[str, Any] | None = None) -> dict[str, Any]:
     state = verified_state or phase_b_state(repo)
-    if state["missing"] or state["event_count"] != 6 or state["acknowledgement_count"] != 6:
+    if (
+        state["missing"]
+        or len(state["rows"]) != 6
+        or not state["dg005_sequence2_complete"]
+        or state["event_count"] != state["acknowledgement_count"]
+    ):
         return status_result(state)
     output = state["paths"]["stage"] / "11_PHASE_B/07_QA_ASSETS"
     assets = []
@@ -405,10 +533,13 @@ def prepare(repo: Path, *, verified_state: dict[str, Any] | None = None) -> dict
     write_json(state["paths"]["stage"] / "11_PHASE_B/03_STRUCTURAL_REAUDIT.json", structural_summary(state))
     return {
         "decision": VISUAL_REQUIRED,
-        "valid_event_ack_pairs": 6,
+        "valid_event_ack_pairs": len(state["all_rows"]),
+        "authoritative_adjudications": 6,
+        "authoritative_sequences": state["authoritative_sequences"],
         "qa_asset_manifest": str(output / "qa_asset_manifest.json"),
         "authoritative_event_reviewer_releases": state["authoritative_event_reviewer_releases"],
         **state["closure_release"],
+        **state["sequence2_release"],
         "candidate_data_used": False,
         "scored_annotation_authorized": False,
         "scored_annotation_started": False,
@@ -493,6 +624,9 @@ def write_phase_b_handoff(
             },
             "original_calibration_parents": original_freeze["calibration_parents"],
             "valid_superseding_event_ack_pairs": 6,
+            "total_append_only_adjudication_event_ack_pairs": len(state["all_rows"]),
+            "authoritative_adjudications": 6,
+            "authoritative_sequences": state["authoritative_sequences"],
             "exact_parent_bindings": True,
             "originals_byte_identical": True,
             "append_only": True,
@@ -554,7 +688,7 @@ def write_phase_b_handoff(
             },
             "original_files_all_exact": True,
             "new_files_confined_to_calibration_adjudication_namespace": True,
-            "event_ack_pairs_added": 6,
+            "event_ack_pairs_added": len(state["all_rows"]),
             "production_ready": False,
         },
     )
@@ -589,7 +723,7 @@ def write_phase_b_handoff(
 def finalize(repo: Path, visual_assessment_path: Path) -> dict[str, Any]:
     state = phase_b_state(repo)
     prepared = prepare(repo, verified_state=state)
-    if prepared["decision"] != VISUAL_REQUIRED or prepared.get("valid_event_ack_pairs") != 6:
+    if prepared["decision"] != VISUAL_REQUIRED or prepared.get("authoritative_adjudications") != 6:
         return prepared
     visual = validate_visual_assessment(visual_assessment_path)
     dg005 = next(row for row in state["rows"] if row["anonymous_dense_image_id"] == "DG-005")
@@ -614,15 +748,18 @@ def finalize(repo: Path, visual_assessment_path: Path) -> dict[str, Any]:
                 "acknowledgement_sha256": row["acknowledgement"]["acknowledgement_sha256"],
                 "acknowledgement_file_sha256": row["acknowledgement_file_sha256"],
                 "event_reviewer_release": row["event"]["reviewer_release"],
+                "adjudication_sequence": row["adjudication_sequence"],
                 "final_revision": row["event"]["final_revision"],
-                "original_parent_event_sha256": row["event"]["supersedes_event_sha256"],
+                "superseded_parent_event_sha256": row["event"]["supersedes_event_sha256"],
             }
             for row in state["rows"]
         ],
         "frozen_contract_hashes": EXPECTED_HASHES,
         "authoritative_event_reviewer_releases": state["authoritative_event_reviewer_releases"],
         "adjudication_reviewer_releases_observed": state["adjudication_reviewer_releases_observed"],
+        "authoritative_sequences": state["authoritative_sequences"],
         **state["closure_release"],
+        **state["sequence2_release"],
         "phase_b_compatibility_repository_commit": state["repository_compatibility"]["head"],
         "stable_adjudication_truth_bindings": state["bindings"],
         "stable_truth_binding_repository_commit": state["bindings"]["repository_commit"],
