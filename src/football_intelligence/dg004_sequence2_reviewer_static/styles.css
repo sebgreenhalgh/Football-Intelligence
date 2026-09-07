@@ -1,0 +1,65 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0b1017;
+  color: #e9f0f7;
+  --panel: #141c26;
+  --line: #2a3949;
+  --muted: #96a6b6;
+  --cyan: #49d8e8;
+  --yellow: #ffd15b;
+  --green: #62dc9b;
+  --danger: #ff7f73;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 10% 0%, #142334, #0b1017 40%); }
+header { min-height: 78px; padding: 15px 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+h1, h2, p { margin: 0; }
+h1 { font-size: clamp(1.2rem, 2vw, 1.7rem); }
+h2 { font-size: 1rem; }
+.eyebrow { margin-bottom: 5px; color: var(--cyan); font-size: .72rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.mode-badge, .value-badge { border: 1px solid var(--cyan); border-radius: 999px; padding: 7px 11px; color: var(--cyan); font-size: .76rem; font-weight: 800; white-space: nowrap; }
+.scope-reminder { padding: 10px 22px; border-bottom: 1px solid #654f16; background: #2b2515; color: #ffe7a4; font-size: .85rem; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 16px; padding: 16px; }
+.viewer-card, .panel { border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 95%, transparent); box-shadow: 0 14px 40px #0005; }
+.viewer-card { overflow: hidden; align-self: start; }
+.guidance { display: grid; gap: 4px; padding: 12px 15px; border-bottom: 1px solid #654f16; background: #2b2515; color: #ffe7a4; }
+.guidance span { color: #f6d46f; }
+.toolbar, .view-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.view-controls { background: #0e151e; color: var(--muted); font-size: .76rem; }
+button { min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #0e151e; color: #c9d4de; font: inherit; cursor: pointer; }
+button.active { border-color: var(--cyan); background: #17313a; color: #b9f5fb; font-weight: 800; }
+.canvas-shell { overflow: auto; height: calc(100vh - 280px); min-height: 430px; padding: 8px; background: #06090d; cursor: grab; }
+.canvas-shell.drawing { cursor: crosshair; }
+.canvas-shell.panning { cursor: grabbing; }
+canvas { display: block; max-width: none; height: auto; background: #050709; }
+.legend { display: flex; gap: 18px; padding: 9px 14px; color: var(--muted); font-size: .76rem; }
+.swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 3px; }
+.swatch.existing { background: var(--cyan); }
+.swatch.new { background: var(--yellow); }
+.swatch.draft { background: #ff7f73; }
+aside { display: grid; gap: 11px; align-content: start; }
+.panel { padding: 14px; }
+.panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin-bottom: 11px; }
+.choice, .assertions label { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; padding: 10px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--yellow); background: #312b18; }
+.choice.correction:has(input:checked) { border-color: var(--green); background: #173126; }
+input { accent-color: var(--green); }
+.guard-note { margin-top: 11px; color: var(--muted); font-size: .78rem; line-height: 1.4; }
+.strip-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.strip-grid button { min-height: 40px; }
+.strip-grid button.reviewed { border-color: var(--green); background: #173126; color: #aef4cc; font-weight: 800; }
+.strip-grid button.target-strip { box-shadow: inset 0 0 0 1px var(--yellow); }
+.assertions label { color: #d7e1ea; font-size: .84rem; line-height: 1.35; }
+.finalize { width: 100%; padding: 12px; border: 0; background: var(--green); color: #082016; font-weight: 900; }
+.finalize:disabled, button:disabled, input:disabled { cursor: not-allowed; opacity: .5; }
+.status { margin-top: 11px; min-height: 38px; color: var(--muted); line-height: 1.4; }
+.status.error { color: var(--danger); }
+.status.success { color: var(--green); }
+.revision { margin-top: 4px; color: #687a8b; font-size: .72rem; }
+
+@media (max-width: 1050px) {
+  main { grid-template-columns: 1fr; }
+  .canvas-shell { height: 58vh; }
+}

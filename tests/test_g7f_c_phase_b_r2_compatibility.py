@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import g7f_c_run_calibration_adjudication_reaudit as reaudit
-import g7f_c_run_dg005_sequence2_reviewer as sequence2_runner
+import g7f_c_run_dg004_sequence2_reviewer as dg004_sequence2_runner
 
 
 def write_json(path: Path, value: object) -> None:
@@ -29,26 +29,28 @@ def fake_git(values: dict[tuple[str, ...], str]):
 def repository_values(*, head: str, changed: str = "", count: str = "0") -> dict[tuple[str, ...], str]:
     r2 = reaudit.R2_REVIEWER_COMMIT
     baseline = reaudit.PHASE_B_COMPATIBILITY_COMMIT
+    dg005 = reaudit.DG005_SEQUENCE2_RELEASE_COMMIT
     return {
         ("rev-parse", "HEAD"): head,
         ("rev-parse", "origin/main"): head,
         ("status", "--porcelain"): "",
         ("merge-base", r2, head): r2,
         ("merge-base", baseline, head): baseline,
-        ("diff", "--name-only", baseline, head): changed,
-        ("rev-list", "--count", f"{baseline}..{head}"): count,
+        ("merge-base", dg005, head): dg005,
+        ("diff", "--name-only", dg005, head): changed,
+        ("rev-list", "--count", f"{dg005}..{head}"): count,
     }
 
 
-def test_phase_b_compatibility_baseline_without_sequence2_release_is_rejected(
+def test_accepted_dg005_baseline_without_dg004_release_is_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
         reaudit,
         "git",
-        fake_git(repository_values(head=reaudit.PHASE_B_COMPATIBILITY_COMMIT)),
+        fake_git(repository_values(head=reaudit.DG005_SEQUENCE2_RELEASE_COMMIT)),
     )
-    with pytest.raises(RuntimeError, match="exact sequence-2 release"):
+    with pytest.raises(RuntimeError, match="exact DG-004 release"):
         reaudit.verify_repository_compatibility(tmp_path, reaudit.R2_REVIEWER_COMMIT)
 
 
@@ -56,18 +58,18 @@ def test_unrelated_repository_drift_fails_closed(monkeypatch: pytest.MonkeyPatch
     head = "f" * 40
     values = repository_values(head=head, changed="docs/unrelated.md", count="1")
     monkeypatch.setattr(reaudit, "git", fake_git(values))
-    with pytest.raises(RuntimeError, match="not the exact sequence-2 release"):
+    with pytest.raises(RuntimeError, match="not the exact DG-004 release"):
         reaudit.verify_repository_compatibility(tmp_path, reaudit.R2_REVIEWER_COMMIT)
 
 
-def test_exact_two_commit_sequence2_release_drift_is_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    assert reaudit.ALLOWED_SEQUENCE2_RELEASE_PATHS == sequence2_runner.EXPECTED_RELEASE_PATHS
+def test_exact_one_commit_dg004_release_drift_is_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    assert reaudit.DG004_SEQUENCE2_RELEASE_PATHS == dg004_sequence2_runner.EXPECTED_RELEASE_PATHS
     head = "e" * 40
-    changed = "\n".join(sorted(reaudit.ALLOWED_SEQUENCE2_RELEASE_PATHS))
-    monkeypatch.setattr(reaudit, "git", fake_git(repository_values(head=head, changed=changed, count="2")))
+    changed = "\n".join(sorted(reaudit.DG004_SEQUENCE2_RELEASE_PATHS))
+    monkeypatch.setattr(reaudit, "git", fake_git(repository_values(head=head, changed=changed, count="1")))
     result = reaudit.verify_repository_compatibility(tmp_path, reaudit.R2_REVIEWER_COMMIT)
-    assert result["commits_above_phase_b_compatibility"] == 2
-    assert result["changed_paths_above_phase_b_compatibility"] == sorted(reaudit.ALLOWED_SEQUENCE2_RELEASE_PATHS)
+    assert result["commits_above_dg005_sequence2_release"] == 1
+    assert result["changed_paths_above_dg005_sequence2_release"] == sorted(reaudit.DG004_SEQUENCE2_RELEASE_PATHS)
 
 
 def test_r2_manifest_and_stable_phase_a_truth_bindings_are_verified(
@@ -130,27 +132,35 @@ def test_r1_r2_authoritative_event_lineage_is_valid(releases: list[str]) -> None
     assert observed == sorted(set(releases))
 
 
-def test_targeted_release_is_valid_only_for_dg005_sequence2() -> None:
+def test_targeted_releases_are_image_and_sequence_scoped() -> None:
     rows = [
         {
             "anonymous_dense_image_id": image_id,
             "event": {
                 "reviewer_release": (
-                    reaudit.SEQUENCE2_REVIEWER_RELEASE if image_id == "DG-005" else reaudit.CLOSURE_REVIEWER_RELEASE
+                    reaudit.DG004_SEQUENCE2_REVIEWER_RELEASE
+                    if image_id == "DG-004"
+                    else (
+                        reaudit.DG005_SEQUENCE2_REVIEWER_RELEASE
+                        if image_id == "DG-005"
+                        else reaudit.CLOSURE_REVIEWER_RELEASE
+                    )
                 ),
-                "adjudication_sequence": 2 if image_id == "DG-005" else 1,
+                "adjudication_sequence": 2 if image_id in {"DG-004", "DG-005"} else 1,
             },
         }
         for image_id in reaudit.CALIBRATION_IDS
     ]
     by_image, observed = reaudit.validate_event_reviewer_releases(rows)
-    assert by_image["DG-005"] == reaudit.SEQUENCE2_REVIEWER_RELEASE
-    assert reaudit.SEQUENCE2_REVIEWER_RELEASE in observed
+    assert by_image["DG-004"] == reaudit.DG004_SEQUENCE2_REVIEWER_RELEASE
+    assert by_image["DG-005"] == reaudit.DG005_SEQUENCE2_REVIEWER_RELEASE
+    assert reaudit.DG004_SEQUENCE2_REVIEWER_RELEASE in observed
+    assert reaudit.DG005_SEQUENCE2_REVIEWER_RELEASE in observed
     rows[0]["event"] = {
-        "reviewer_release": reaudit.SEQUENCE2_REVIEWER_RELEASE,
+        "reviewer_release": reaudit.DG004_SEQUENCE2_REVIEWER_RELEASE,
         "adjudication_sequence": 2,
     }
-    with pytest.raises(RuntimeError, match="only on DG-005"):
+    with pytest.raises(RuntimeError, match="only on DG-004"):
         reaudit.validate_event_reviewer_releases(rows)
 
 
@@ -159,10 +169,13 @@ def test_phase_b_output_stays_in_original_adjudication_stage(tmp_path: Path) -> 
     assert paths["stage"] == paths["phase_a"]
     assert paths["stage"].name == "G7F_C_CALIBRATION_SUPERSEDING_ADJUDICATION_AND_REAUDIT_v1"
     assert paths["stage"] != paths["r2_stage"]
-    assert paths["sequence2_stage"].name == "G7F_C_DG005_SEQUENCE2_RELEVANCE_ADJUDICATION_AND_PHASE_B_CLOSURE_v1"
+    assert paths["dg005_sequence2_stage"].name == (
+        "G7F_C_DG005_SEQUENCE2_RELEVANCE_ADJUDICATION_AND_PHASE_B_CLOSURE_v1"
+    )
+    assert paths["dg004_sequence2_stage"].name == ("G7F_C_DG004_SEQUENCE2_OMISSION_ADJUDICATION_AND_PHASE_B_CLOSURE_v1")
 
 
-def test_status_requires_dg005_sequence2_then_reports_seven_pairs_and_six_authoritative() -> None:
+def test_status_requires_both_targeted_sequence2_events_then_reports_eight_pairs() -> None:
     base = {
         "missing": [],
         "rows": [{"anonymous_dense_image_id": image_id} for image_id in reaudit.CALIBRATION_IDS],
@@ -171,21 +184,35 @@ def test_status_requires_dg005_sequence2_then_reports_seven_pairs_and_six_author
         "authoritative_event_reviewer_releases": {},
         "adjudication_reviewer_releases_observed": [],
         "closure_release": {},
-        "sequence2_release": {},
+        "dg005_sequence2_release": {},
+        "dg004_sequence2_release": {},
+        "dg004_sequence2_complete": False,
         "dg005_sequence2_complete": False,
     }
     blocked = reaudit.status_result(base)
-    assert blocked["decision"] == reaudit.SEQUENCE2_INCOMPLETE
+    assert blocked["decision"] == reaudit.DG005_SEQUENCE2_INCOMPLETE
     assert blocked["valid_event_ack_pairs"] == 6
-    complete = {
+    dg005_complete = {
         **base,
         "all_rows": [{} for _ in range(7)],
         "authoritative_sequences": {**base["authoritative_sequences"], "DG-005": 2},
         "dg005_sequence2_complete": True,
     }
+    blocked = reaudit.status_result(dg005_complete)
+    assert blocked["decision"] == reaudit.DG004_SEQUENCE2_INCOMPLETE
+    assert blocked["valid_event_ack_pairs"] == 7
+    complete = {
+        **dg005_complete,
+        "all_rows": [{} for _ in range(8)],
+        "authoritative_sequences": {
+            **dg005_complete["authoritative_sequences"],
+            "DG-004": 2,
+        },
+        "dg004_sequence2_complete": True,
+    }
     ready = reaudit.status_result(complete)
     assert ready["decision"] == reaudit.VISUAL_REQUIRED
-    assert ready["valid_event_ack_pairs"] == 7
+    assert ready["valid_event_ack_pairs"] == 8
     assert ready["authoritative_adjudications"] == 6
 
 
@@ -198,3 +225,58 @@ def test_temp_decisions_remain_byte_identical_and_source_assets_are_candidate_fr
         assert path == tmp_path / "source/05_REVIEWER/assets" / f"{image_id}.png"
         assert "candidate" not in path.as_posix().lower()
     assert reaudit.decisions_inventory(decisions) == before
+
+
+def test_visual_assessment_requires_both_repairs_and_exact_authoritative_event_bindings(tmp_path: Path) -> None:
+    required = {
+        "no_clear_material_human_omission": True,
+        "no_merged_person_mask": True,
+        "no_material_shadow_or_background_contamination": True,
+        "no_major_visible_body_omission": True,
+        "no_improper_amodal_bridge": True,
+        "ignore_regions_justified": True,
+        "coverage_rule_consistent": True,
+    }
+    authoritative = [
+        {
+            "anonymous_dense_image_id": image_id,
+            "event": {"event_sha256": f"{index:064x}"},
+        }
+        for index, image_id in enumerate(reaudit.CALIBRATION_IDS, start=1)
+    ]
+    value = {
+        "candidate_data_used": False,
+        "dg004_sequence2_omitted_person_resolved": True,
+        "dg005_person_030_assistant_referee_relevance_resolved": True,
+        "images": [
+            {
+                "anonymous_dense_image_id": row["anonymous_dense_image_id"],
+                "authoritative_event_sha256": row["event"]["event_sha256"],
+                "visual_status": "PASS",
+                **required,
+            }
+            for row in authoritative
+        ],
+    }
+    assessment = tmp_path / "assessment.json"
+    write_json(assessment, value)
+    assert reaudit.validate_visual_assessment(assessment, authoritative_rows=authoritative) == value
+    value["images"][0]["authoritative_event_sha256"] = "f" * 64
+    write_json(assessment, value)
+    with pytest.raises(RuntimeError, match="event binding mismatch"):
+        reaudit.validate_visual_assessment(assessment, authoritative_rows=authoritative)
+
+
+def test_decision_inventory_comparison_ignores_only_capture_provenance() -> None:
+    inventory = {
+        "file_count": 1,
+        "total_bytes": 12,
+        "ordered_inventory_sha256": "a" * 64,
+        "files": [{"relative_path": "events/example.json", "byte_size": 12, "sha256": "b" * 64}],
+    }
+    frozen = {**inventory, "root": r"C:\frozen\capture\root"}
+    assert dg004_sequence2_runner.inventories_are_byte_identical(frozen, inventory)
+    assert not dg004_sequence2_runner.inventories_are_byte_identical(
+        frozen,
+        {**inventory, "ordered_inventory_sha256": "c" * 64},
+    )

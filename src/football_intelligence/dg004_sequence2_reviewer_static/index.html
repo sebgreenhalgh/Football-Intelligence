@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DG-004 sequence-2 omission adjudication</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Calibration adjudication - sequence 2</p>
+      <h1>DG-004 - add one omitted visible person</h1>
+    </div>
+    <div id="modeBadge" class="mode-badge">PAN / REVIEW</div>
+  </header>
+
+  <div class="scope-reminder" role="note">
+    <strong>ALL visible people count:</strong> pitch + touchlines + benches/technical areas +
+    foreground/background + frame edges. Annotate the person first; classify relevance second.
+  </div>
+
+  <main>
+    <section class="viewer-card">
+      <div class="guidance" role="note">
+        <strong id="guidancePrimary"></strong>
+        <span id="guidanceAction"></span>
+      </div>
+      <div class="toolbar" aria-label="Annotation tools">
+        <button type="button" id="panEdit" class="active">Pan / Review</button>
+        <button type="button" id="drawNewPerson">Draw omitted person</button>
+        <button type="button" id="addComponent">Add visible component</button>
+        <button type="button" id="finishPolygon">Finish polygon</button>
+        <button type="button" id="cancelPolygon">Cancel polygon</button>
+      </div>
+      <div class="view-controls" aria-label="View controls">
+        <button type="button" id="zoomOut">Zoom -</button>
+        <button type="button" id="zoomIn">Zoom +</button>
+        <button type="button" id="fitView">Fit</button>
+        <button type="button" id="targetStrip">Go to strip 2</button>
+        <span id="zoomValue">100%</span>
+        <span>Hold Space to pan while drawing</span>
+      </div>
+      <div class="canvas-shell" id="canvasShell">
+        <canvas id="annotationCanvas" aria-label="Candidate-free DG-004 human annotation overlay"></canvas>
+      </div>
+      <div class="legend">
+        <span><i class="swatch existing"></i>Locked sequence-1 people</span>
+        <span><i class="swatch new"></i>New sequence-2 person</span>
+        <span><i class="swatch draft"></i>Unfinished polygon</span>
+      </div>
+    </section>
+
+    <aside>
+      <section class="panel target-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Only permitted truth addition</p>
+            <h2 id="newPersonHeading">Loading new person ID...</h2>
+          </div>
+          <span id="personState" class="value-badge">Not drawn</span>
+        </div>
+        <label class="choice">
+          <input type="radio" name="targetRelevance" id="targetNonMatch" value="NON_MATCH_RELEVANT">
+          <span>NON_MATCH_RELEVANT</span>
+        </label>
+        <label class="choice correction">
+          <input type="radio" name="targetRelevance" id="targetMatch" value="MATCH_RELEVANT">
+          <span>MATCH_RELEVANT</span>
+        </label>
+        <p class="guard-note">Draw the person before selecting relevance. All 50 sequence-1 people and all ignore regions are server-locked.</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Fresh sequence-2 confirmation</p>
+            <h2>Full-image strips (0-7)</h2>
+          </div>
+          <span id="stripProgress" class="value-badge">0 / 8</span>
+        </div>
+        <div id="stripButtons" class="strip-grid" aria-label="Eight image strip confirmations"></div>
+      </section>
+
+      <section class="panel assertions">
+        <label>
+          <input type="checkbox" id="omissionConfirmed">
+          <span>I added exactly the omitted standing person in strip 2 and did not change existing truth.</span>
+        </label>
+        <label>
+          <input type="checkbox" id="denseAssertion">
+          <span>I make the exact Dense-Gold completion assertion for this sequence.</span>
+        </label>
+        <label>
+          <input type="checkbox" id="adjudicationAssertion">
+          <span>I make the exact adjudication completion assertion.</span>
+        </label>
+      </section>
+
+      <section class="panel finish-panel">
+        <button type="button" id="finalizeSequence2" class="finalize">Finalize immutable sequence 2</button>
+        <p id="status" class="status" aria-live="polite">Loading locked sequence-2 state...</p>
+        <p id="revision" class="revision"></p>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
