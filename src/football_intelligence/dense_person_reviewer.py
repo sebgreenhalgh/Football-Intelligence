@@ -34,6 +34,15 @@ VISIBLE_PERSON_SCOPE_REMINDER = (
     "ALL visible people count: pitch + touchlines + benches/technical areas + " "foreground/background + frame edges."
 )
 VISIBLE_PERSON_SCOPE_SECOND_LINE = "Annotate the person first; classify relevance second."
+REVIEW_FRAME_KEYS = (
+    "anonymous_dense_image_id",
+    "selection_status",
+    "source_frame_sha256",
+    "source_width",
+    "source_height",
+    "review_queue_position",
+    "all_frame_instance_lineage",
+)
 
 
 def scan_blind_payload(value: Any, path: tuple[str, ...] = ()) -> list[str]:
@@ -85,11 +94,12 @@ class DensePersonReviewerConfig:
     decisions_root: Path
     binding_hashes: dict[str, str]
     reviewer_release: str
-    reveal_payload_path: Path
+    reveal_payload_path: Path | None
     pass_kind: str = "FIRST_PASS"
     repeat_manifest_path: Path | None = None
     require_completed_first_pass: bool = False
     allowed_selection_statuses: tuple[str, ...] | None = None
+    candidate_reveal_enabled: bool = True
     host: str = "127.0.0.1"
     port: int = 8791
 
@@ -98,9 +108,16 @@ class DensePersonHTTPServer(ThreadingHTTPServer):
     def __init__(self, config: DensePersonReviewerConfig):
         selection = json.loads(config.selection_manifest_path.read_text(encoding="utf-8"))
         self.config = config
-        selected_frames = {row["anonymous_dense_image_id"]: row for row in selection["images"]}
-        reveal = json.loads(config.reveal_payload_path.read_text(encoding="utf-8"))
-        reveal_payloads = reveal["reveal_payloads"]
+        selected_frames = {
+            row["anonymous_dense_image_id"]: {key: row[key] for key in REVIEW_FRAME_KEYS}
+            for row in selection["images"]
+        }
+        reveal_payloads: dict[str, Any] = {}
+        if config.candidate_reveal_enabled:
+            if config.reveal_payload_path is None:
+                raise RuntimeError("candidate reveal is enabled but no sealed reveal payload was configured")
+            reveal = json.loads(config.reveal_payload_path.read_text(encoding="utf-8"))
+            reveal_payloads = reveal["reveal_payloads"]
         if config.pass_kind == "BLIND_REPEAT":
             if config.repeat_manifest_path is None:
                 raise RuntimeError("blind-repeat mode requires a sealed repeat manifest")
@@ -187,6 +204,7 @@ class DensePersonHTTPServer(ThreadingHTTPServer):
                 "default_interaction_mode": "PAN_EDIT",
                 "temporary_pan": "SPACE_HOLD",
                 "delete_selected_draft_instance": True,
+                "post_finalize_comparison": self.config.candidate_reveal_enabled,
             },
             "candidate_blind": True,
             "production_ready": False,
@@ -238,6 +256,8 @@ class DensePersonRequestHandler(SimpleHTTPRequestHandler):
             return
         try:
             action = _body(self)
+            if action.get("action_type") == "REVEAL_CANDIDATES" and not self.server.config.candidate_reveal_enabled:
+                raise DensePersonValidationError("post-finalization comparison is disabled for this reviewer release")
             if action.get("pass_kind", self.server.config.pass_kind) != self.server.config.pass_kind:
                 raise DensePersonValidationError("action pass kind differs from locked reviewer workflow")
             action["pass_kind"] = self.server.config.pass_kind

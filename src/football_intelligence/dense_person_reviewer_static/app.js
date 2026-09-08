@@ -378,7 +378,7 @@ async function loadImage(index, initial = false) {
     state.mode = InteractionMode.PAN_EDIT;
     syncSelector();
     fit("fitWidth");
-    $("reveal").hidden = isAdjudication() || !state.finalized;
+    $("reveal").hidden = state.bootstrap?.tools?.post_finalize_comparison !== true || isAdjudication() || !state.finalized;
     $("revealPanel").hidden = true;
     $("assertion").checked = state.document.completion_assertion === ASSERTION;
     $("adjudicationAssertion").checked = state.adjudicationMetadata.adjudication_assertion === ADJUDICATION_ASSERTION;
@@ -627,7 +627,7 @@ function renderControls() {
   ));
   $("finalize").disabled = !mutable || !adjudicationReady;
   $("finalize").textContent = isAdjudication() ? "Finalize immutable adjudication" : "Finalize immutable frame";
-  $("reveal").hidden = isAdjudication() || !state.finalized;
+  $("reveal").hidden = state.bootstrap?.tools?.post_finalize_comparison !== true || isAdjudication() || !state.finalized;
   $("reveal").disabled = busy || !coherent;
   $("workflowBadge").textContent = currentItem()?.workflow_group || "Loading";
 }

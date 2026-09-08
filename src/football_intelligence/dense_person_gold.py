@@ -146,18 +146,12 @@ def _rasterize(polygons: Sequence[Sequence[Mapping[str, float]]], width: int, he
 
 
 def coco_uncompressed_rle(mask: np.ndarray) -> dict[str, Any]:
-    flattened = np.asarray(mask, dtype=np.uint8).reshape(-1, order="F")
-    counts: list[int] = []
-    current, run = 0, 0
-    for value in flattened:
-        bit = int(value > 0)
-        if bit == current:
-            run += 1
-        else:
-            counts.append(run)
-            current = bit
-            run = 1
-    counts.append(run)
+    flattened = np.asarray(mask, dtype=np.uint8).reshape(-1, order="F") > 0
+    transitions = np.flatnonzero(flattened[1:] != flattened[:-1]) + 1
+    boundaries = np.concatenate(([0], transitions, [flattened.size]))
+    counts = np.diff(boundaries).astype(int).tolist()
+    if flattened.size and bool(flattened[0]):
+        counts.insert(0, 0)
     return {"size": [int(mask.shape[0]), int(mask.shape[1])], "counts": counts}
 
 
