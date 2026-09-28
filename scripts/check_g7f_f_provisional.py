@@ -63,9 +63,17 @@ def check() -> dict:
     operator = read(STAGE / "operator_decision.json")
     mapping = read(STAGE / "candidate_identity_mapping.json")
 
-    require(status["current_stage"].startswith("G7F_F_"), "wrong current stage")
+    require(status["current_stage"] in {
+        "G7F_F_OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_DETECTOR_FREEZE_v1",
+        "G7G_A_TEMPORAL_GOLD_CORPUS_AND_SEQUENCE_FOUNDATION_v1",
+    }, "wrong current stage")
     require(status["stage_status"] == "COMPLETE", "stage is incomplete")
-    require(status["next_authorized_stage"].startswith("G7G_A_TEMPORAL_GOLD_"), "wrong next stage")
+    expected_next = (
+        "G7G_A_TEMPORAL_GOLD_CORPUS_AND_SEQUENCE_FOUNDATION_v1_SEPARATE_REQUEST_REQUIRED"
+        if status["current_stage"].startswith("G7F_F_")
+        else "G7G_B_TEMPORAL_GOLD_HUMAN_PILOT_v1_SEPARATE_REQUEST_REQUIRED"
+    )
+    require(status["next_authorized_stage"] == expected_next, "wrong next stage")
     require(status["annotation_campaign"]["status"] == "INTENTIONALLY_PAUSED_BY_OPERATOR", "annotation pause changed")
     require(status["annotation_campaign"]["completed_scored_first_pass_frames"] == 10, "scored frame count changed")
     require(status["annotation_campaign"]["planned_total"] == 48, "planned campaign size changed")

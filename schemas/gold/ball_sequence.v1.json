@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "football_intelligence.gold.ball_sequence.v1",
+  "type": "object",
+  "required": ["schema_version", "layer", "gold_sequence_id", "ordered_gold_frame_ids", "annotation", "completion_assertion", "selection_sha256", "source_video_sha256", "reviewer_sha256", "schema_sha256", "event_id", "event_sha256", "immutable", "production_ready"],
+  "properties": {
+    "schema_version": {"const": "football_intelligence.gold.ball_sequence.v1"},
+    "layer": {"const": "BALL"},
+    "annotation": {"type": "object", "required": ["frames"], "properties": {"frames": {"type": "array", "minItems": 9, "maxItems": 9, "items": {"type": "object", "required": ["gold_frame_id", "visibility", "human_reviewed"], "properties": {"visibility": {"enum": ["VISIBLE", "OCCLUDED", "OFF_SCREEN", "UNCERTAIN"]}, "human_reviewed": {"const": true}}}}}},
+    "immutable": {"const": true},
+    "production_ready": {"const": false}
+  }
+}

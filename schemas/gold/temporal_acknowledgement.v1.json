@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "football_intelligence.gold.temporal_acknowledgement.v1",
+  "type": "object",
+  "required": ["schema_version", "layer", "gold_sequence_id", "event_id", "event_sha256", "status", "acknowledgement_id", "acknowledgement_sha256"],
+  "properties": {
+    "schema_version": {"const": "football_intelligence.gold.temporal_acknowledgement.v1"},
+    "layer": {"enum": ["TRACKLET", "BALL", "MATCH_STATE"]},
+    "status": {"const": "IMMUTABLY_FINALIZED"}
+  }
+}

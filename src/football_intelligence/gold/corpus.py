@@ -156,6 +156,20 @@ class GoldCorpus:
             "annotation_index": sorted(rows, key=lambda r: (r["gold_annotation_id"], r["sequence"])),
             "source_registry": sorted(sources, key=lambda r: r["source_id"]),
         }
+        sequences = {}
+        for row in rows:
+            if row["layer"] not in ("TRACKLET", "BALL", "MATCH_STATE") or row["status"] != "ACTIVE":
+                continue
+            sequence_id = row["gold_sequence_id"]
+            sequence = {
+                "gold_sequence_id": sequence_id,
+                "ordered_gold_frame_ids": row["ordered_gold_frame_ids"],
+                "source_video_sha256": row["source_video_sha256"],
+                "selection_sha256": row["selection_sha256"],
+            }
+            require(sequences.setdefault(sequence_id, sequence) == sequence, "Conflicting sequence bindings")
+        if sequences:
+            content["sequences"] = sorted(sequences.values(), key=lambda r: r["gold_sequence_id"])
         snapshot_id = digest(canonical(content))
         for name, values in content.items():
             data = b"".join(canonical(v) for v in values)
@@ -173,8 +187,9 @@ class GoldCorpus:
             "detection_gold_frames": sum(r["layer"] == "DETECTION" for r in active),
             "detection_gold_people": sum(r["evaluable_people"] for r in active if r["layer"] == "DETECTION"),
             "detection_visible_people": sum(r["visible_people"] for r in active if r["layer"] == "DETECTION"),
-            "scored_frames": sum(r["split"] == "DENSE_GOLD_INTERNAL_VALIDATION" for r in active),
-            "calibration_frames": sum(r["split"] == "CALIBRATION_ONLY" for r in active),
+            "scored_frames": sum(r["layer"] == "DETECTION" and r["split"] == "DENSE_GOLD_INTERNAL_VALIDATION" for r in active),
+            "calibration_frames": sum(r["layer"] == "DETECTION" and r["split"] == "CALIBRATION_ONLY" for r in active),
+            "temporal_sequences": len(sequences),
         }
         manifest = {
             "schema_version": "fi.gold.corpus.v1",
@@ -310,6 +325,129 @@ class GoldCorpus:
                 "manifest_sha256": file_hash(self.root / "corpus_manifest.json"),
             }
 
+    def ingest_temporal(self, decision_root, selection_manifest, *, code_commit, external_root=None):
+        """Future-stage ingest of complete acknowledged temporal layer events.
+
+        This method is not invoked by G7G-A. New DETECTION frames must already
+        have been ingested through the existing dense adapter.
+        """
+        from .temporal_ingest import prepare_temporal
+
+        require(re.fullmatch(r"[0-9a-f]{40}", code_commit), "Exact code commit required")
+        with self.writer():
+            current = self.manifest()
+            self.validate()
+            prepared = prepare_temporal(self, Path(decision_root), Path(selection_manifest), external_root=external_root)
+            rows = self._rows(current, "annotation_index")
+            sources = self._rows(current, "source_registry")
+            old_by_hash = {row["annotation_event_sha256"]: row for row in rows}
+            latest = {row["gold_annotation_id"]: row for row in rows if row["status"] == "ACTIVE"}
+            additions = []
+            for row in prepared["rows"]:
+                file_sha = row["annotation_event_sha256"]
+                if file_sha in old_by_hash:
+                    require(old_by_hash[file_sha]["gold_annotation_id"] == row["gold_annotation_id"], "Duplicate temporal event has conflicting lineage")
+                    continue
+                previous = latest.get(row["gold_annotation_id"])
+                require(row["supersedes_event_sha256"] == (previous["annotation_event_sha256"] if previous else None), "Temporal correction must supersede the current event")
+                row["sequence"] = previous["sequence"] + 1 if previous else 0
+                additions.append(row)
+                latest[row["gold_annotation_id"]] = row
+            source = prepared["source"]
+            source_new = source["source_id"] not in {item["source_id"] for item in sources}
+            if not additions and not source_new:
+                return {"added_events": 0, "idempotent": True, "manifest_sha256": file_hash(self.root / "corpus_manifest.json")}
+            merged = self.resolve(rows + additions)
+            for sha, data in prepared["objects"].items():
+                require(self.put(data) == sha, "Prepared temporal object changed")
+            if source_new:
+                sources.append(source)
+            receipt = {
+                "schema_version": "fi.gold.temporal_ingestion.v1",
+                "source_id": source["source_id"],
+                "added_event_hashes": sorted(row["annotation_event_sha256"] for row in additions),
+                "source_manifest_sha256": prepared["selection_sha256"],
+                "code_commit": code_commit,
+                "created_at": utc_now(),
+                "source_bytes_unchanged": True,
+                "production_ready": False,
+            }
+            receipt_data = canonical(receipt)
+            receipt_sha = self.put(receipt_data)
+            immutable_write(self.root / "audit/ingestion_receipts" / f"{receipt_sha}.json", receipt_data)
+            manifest = self._publish(
+                merged, sources, current["ingestion_receipts"] + [receipt_sha],
+                file_hash(self.root / "corpus_manifest.json"), code_commit,
+            )
+            return {"added_events": len(additions), "idempotent": False, "statistics": manifest["statistics"], "manifest_sha256": file_hash(self.root / "corpus_manifest.json")}
+
+    def ingest_temporal_detection(self, decision_root, selection_manifest, *, code_commit):
+        """Future-stage exact-schema DETECTION ingestion for new sequence frames.
+
+        This adapter is not invoked in G7G-A and never redraws/copies an anchor.
+        """
+        from .temporal_ingest import prepare_temporal_detection
+
+        require(re.fullmatch(r"[0-9a-f]{40}", code_commit), "Exact code commit required")
+        with self.writer():
+            current = self.manifest()
+            self.validate()
+            prepared = prepare_temporal_detection(self, Path(decision_root), Path(selection_manifest))
+            rows = self._rows(current, "annotation_index")
+            sources = self._rows(current, "source_registry")
+            by_hash = {row["annotation_event_sha256"]: row for row in rows}
+            by_frame = {row["gold_frame_id"]: row for row in rows if row["layer"] == "DETECTION" and row["status"] == "ACTIVE"}
+            additions = []
+            for row in prepared["rows"]:
+                old = by_hash.get(row["annotation_event_sha256"])
+                if old:
+                    require(old["gold_frame_id"] == row["gold_frame_id"] and old["layer"] == "DETECTION", "Conflicting duplicate temporal DETECTION event")
+                    continue
+                require(row["gold_frame_id"] not in by_frame, "Temporal DETECTION must not overwrite an existing frame")
+                additions.append(row)
+            source = prepared["source"]
+            source_new = source["source_id"] not in {item["source_id"] for item in sources}
+            if not additions and not source_new:
+                return {"added_events": 0, "idempotent": True, "manifest_sha256": file_hash(self.root / "corpus_manifest.json")}
+            merged = self.resolve(rows + additions)
+            for sha, data in prepared["objects"].items():
+                require(self.put(data) == sha, "Prepared temporal DETECTION object changed")
+            if source_new:
+                sources.append(source)
+            receipt = {
+                "schema_version": "fi.gold.temporal_detection_ingestion.v1",
+                "source_id": source["source_id"],
+                "added_event_hashes": sorted(row["annotation_event_sha256"] for row in additions),
+                "source_manifest_sha256": prepared["selection_sha256"],
+                "code_commit": code_commit, "created_at": utc_now(),
+                "source_bytes_unchanged": True, "production_ready": False,
+            }
+            receipt_data = canonical(receipt)
+            receipt_sha = self.put(receipt_data)
+            immutable_write(self.root / "audit/ingestion_receipts" / f"{receipt_sha}.json", receipt_data)
+            manifest = self._publish(merged, sources, current["ingestion_receipts"] + [receipt_sha], file_hash(self.root / "corpus_manifest.json"), code_commit)
+            return {"added_events": len(additions), "idempotent": False, "statistics": manifest["statistics"], "manifest_sha256": file_hash(self.root / "corpus_manifest.json")}
+
+    def list_sequences(self, *, release=None):
+        manifest = self._view(release)
+        if "sequences" not in manifest["registries"]:
+            return []
+        return self._rows(manifest, "sequences")
+
+    def authoritative_sequence(self, gold_sequence_id, *, layer, release=None):
+        require(layer in ("TRACKLET", "BALL", "MATCH_STATE"), "Expected a temporal Gold layer")
+        rows = [row for row in self.annotations(layer=layer, release=release) if row.get("gold_sequence_id") == gold_sequence_id]
+        require(len(rows) == 1, "Expected one authoritative sequence/layer event")
+        return json.loads(self.get(rows[0]["annotation_event_sha256"]))
+
+    def export_temporal(self, *, layer, release):
+        require(layer in ("TRACKLET", "BALL", "MATCH_STATE"), "Expected a temporal Gold layer")
+        self.validate(release=release)
+        return [
+            {"gold_sequence_id": row["gold_sequence_id"], "event_file_sha256": row["annotation_event_sha256"], "gold_release": release, "event": json.loads(self.get(row["annotation_event_sha256"]))}
+            for row in self.annotations(layer=layer, release=release)
+        ]
+
     def release_manifest(self, version):
         require(re.fullmatch(r"gold-v\d+\.\d+\.\d+", version), "Invalid release name")
         path = self.root / "releases" / version / "manifest.json"
@@ -418,6 +556,15 @@ class GoldCorpus:
         frame_map = {r["gold_frame_id"]: r for r in frames}
         require(len(frame_map) == len(frames), "Duplicate frame IDs")
         from .dense import validate_index_pair, validate_source_image
+        from .temporal import validate_event_pair
+
+        sequence_rows = self._rows(manifest, "sequences") if "sequences" in manifest["registries"] else []
+        sequence_map = {row["gold_sequence_id"]: row for row in sequence_rows}
+        require(len(sequence_map) == len(sequence_rows), "Duplicate sequence ID")
+        for sequence in sequence_rows:
+            ordered = sequence["ordered_gold_frame_ids"]
+            require(len(ordered) == 9 and len(set(ordered)) == 9, "Temporal sequence must bind nine unique frames")
+            require(all(frame_id in frame_map for frame_id in ordered), "Temporal sequence references absent DETECTION frame")
 
         events_by_hash = {}
         for row in rows:
@@ -425,7 +572,17 @@ class GoldCorpus:
                 self.get(row[field])
             event = json.loads(self.get(row["annotation_event_sha256"]))
             ack = json.loads(self.get(row["acknowledgement_sha256"]))
-            validate_index_pair(row, event, ack)
+            if row["layer"] == "DETECTION":
+                validate_index_pair(row, event, ack)
+            else:
+                validate_event_pair(event, ack)
+                require(row["gold_sequence_id"] in sequence_map, "Temporal annotation lacks sequence registry")
+                require(
+                    row["ordered_gold_frame_ids"] == event["ordered_gold_frame_ids"] == sequence_map[row["gold_sequence_id"]]["ordered_gold_frame_ids"]
+                    and row["source_video_sha256"] == event["source_video_sha256"] == sequence_map[row["gold_sequence_id"]]["source_video_sha256"]
+                    and row["selection_sha256"] == event["selection_sha256"] == sequence_map[row["gold_sequence_id"]]["selection_sha256"],
+                    "Temporal sequence/event binding mismatch",
+                )
             events_by_hash[row["annotation_event_sha256"]] = event
             require(
                 all(frame_map[row["gold_frame_id"]][k] == row[k] for k in frame_map[row["gold_frame_id"]]),
@@ -444,11 +601,9 @@ class GoldCorpus:
             if row["supersedes_event_sha256"]:
                 event = events_by_hash[row["annotation_event_sha256"]]
                 parent = events_by_hash[row["supersedes_event_sha256"]]
-                require(
-                    event["supersedes_event_sha256"] == parent["event_sha256"]
-                    and event["supersedes_event_id"] == parent["event_id"],
-                    "Event payload supersession mismatch",
-                )
+                require(event["supersedes_event_sha256"] == parent["event_sha256"], "Event payload supersession mismatch")
+                if row["layer"] == "DETECTION":
+                    require(event["supersedes_event_id"] == parent["event_id"], "Detection predecessor ID mismatch")
         active = [r for r in rows if r["status"] == "ACTIVE"]
         stats = manifest["statistics"]
         require(
@@ -461,6 +616,7 @@ class GoldCorpus:
             stats["detection_gold_people"] == sum(r["evaluable_people"] for r in active if r["layer"] == "DETECTION"),
             "Manifest people count mismatch",
         )
+        require(stats.get("temporal_sequences", 0) == len(sequence_rows), "Temporal sequence count mismatch")
         for source in sources:
             self.get(source["source_manifest_sha256"])
             for ref in source["references"]:
@@ -505,15 +661,16 @@ class GoldCorpus:
                 )
                 return frozen
             manifest = self.manifest()
-            active = self.annotations()
+            active = [row for row in self._rows(manifest, "annotation_index") if row["status"] == "ACTIVE"]
             payload = {
                 "schema_version": "fi.gold.release.v1",
                 "release": version,
                 "created_at": utc_now(),
                 "corpus_manifest_sha256": current_sha,
                 "code_commit": code_commit,
-                "frame_hashes": sorted(r["source_frame_sha256"] for r in active),
-                "active_detection_annotation_hashes": sorted(r["annotation_event_sha256"] for r in active),
+                "frame_hashes": sorted(r["source_frame_sha256"] for r in active if r["layer"] == "DETECTION"),
+                "active_detection_annotation_hashes": sorted(r["annotation_event_sha256"] for r in active if r["layer"] == "DETECTION"),
+                "sequence_ids": sorted({r["gold_sequence_id"] for r in active if r["layer"] in ("TRACKLET", "BALL", "MATCH_STATE")}),
                 "schema_hashes": sorted({r[k] for r in active for k in ("event_schema_sha256", "ack_schema_sha256")}),
                 "layer_counts": dict(Counter(r["layer"] for r in active)),
                 "statistics": manifest["statistics"],

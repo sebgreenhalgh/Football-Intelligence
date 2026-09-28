@@ -19,6 +19,14 @@ def main(argv=None):
     ingest.add_argument("decision_root", type=Path)
     ingest.add_argument("--source-manifest", type=Path, required=True)
     ingest.add_argument("--code-commit", required=True)
+    temporal = sub.add_parser("ingest-temporal", help="Later-stage complete sequence ingestion; never drafts")
+    temporal.add_argument("decision_root", type=Path)
+    temporal.add_argument("--selection-manifest", type=Path, required=True)
+    temporal.add_argument("--code-commit", required=True)
+    temporal_detection = sub.add_parser("ingest-temporal-detection", help="Later-stage human DETECTION frames; preserves canonical anchors")
+    temporal_detection.add_argument("decision_root", type=Path)
+    temporal_detection.add_argument("--selection-manifest", type=Path, required=True)
+    temporal_detection.add_argument("--code-commit", required=True)
     evidence = sub.add_parser(
         "register-evidence", help="Preserve legacy provenance without asserting a new active layer"
     )
@@ -35,6 +43,10 @@ def main(argv=None):
         default="DENSE_GOLD_INTERNAL_VALIDATION",
     )
     export.add_argument("--output", type=Path, required=True)
+    export_temporal = sub.add_parser("export-temporal")
+    export_temporal.add_argument("--release", required=True)
+    export_temporal.add_argument("--layer", choices=["TRACKLET", "BALL", "MATCH_STATE"], required=True)
+    export_temporal.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     corpus = GoldCorpus(args.root)
     try:
@@ -44,14 +56,22 @@ def main(argv=None):
             result = corpus.validate(release=args.release)
         elif args.command == "ingest":
             result = corpus.ingest(args.decision_root, args.source_manifest, code_commit=args.code_commit)
+        elif args.command == "ingest-temporal":
+            result = corpus.ingest_temporal(args.decision_root, args.selection_manifest, code_commit=args.code_commit)
+        elif args.command == "ingest-temporal-detection":
+            result = corpus.ingest_temporal_detection(args.decision_root, args.selection_manifest, code_commit=args.code_commit)
         elif args.command == "release":
             result = corpus.create_release(args.version, code_commit=args.code_commit)
         elif args.command == "register-evidence":
             result = corpus.register_evidence(args.source_manifest, code_commit=args.code_commit)
-        else:
+        elif args.command == "export-detection":
             rows = corpus.export_detection(release=args.release, split=None if args.split == "ALL" else args.split)
             immutable_write(args.output, b"".join(canonical(row) for row in rows))
             result = {"exported_frames": len(rows), "output": str(args.output), "production_ready": False}
+        else:
+            rows = corpus.export_temporal(release=args.release, layer=args.layer)
+            immutable_write(args.output, b"".join(canonical(row) for row in rows))
+            result = {"exported_sequences": len(rows), "layer": args.layer, "output": str(args.output), "production_ready": False}
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     except (GoldError, FileNotFoundError, KeyError, ValueError) as exc:

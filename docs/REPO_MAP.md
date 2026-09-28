@@ -4,11 +4,12 @@
 
 ## Git repository: SoccerTrack-v2
 
-- `src/football_intelligence/gold/`: canonical corpus storage, integrity, ingestion, releases, exports and CLI.
+- `src/football_intelligence/gold/`: canonical corpus storage, integrity, ingestion, releases, exports and CLI. `temporal.py`, `temporal_ingest.py`, `temporal_reviewer.py` and `temporal_reviewer_static/` provide additive G7G-A contracts, future ingestion and candidate-blind review; the live corpus still has DETECTION only.
 - `dense_person_gold.py`, `dense_person_reviewer.py`, `calibration_adjudication*.py`, `dg00*_sequence2_reviewer.py`: accepted dense truth/reviewer contracts; their exact frozen bytes are retained.
 - `gold_eval/`: G7F-A R1 point-support evaluation and candidate-run v2 coverage. Not exhaustive detection truth.
 - `detection_forensics.py`, `detection_gold/consolidation.py`, `g7d_b1_foldwise_runtime.py`, `step1_visual_reconstruction/tiled_detection.py`: current development proposal construction/NMS/view logic.
 - `scripts/g7f_*`: retained G7F release/reproduction entry points. Current reviewer manifests bind several of these files exactly. They are an explicit retention exception, not permission to repeat inference or restart annotation.
+- `scripts/g7g_a_*`: frozen source-video selection, temporal-reviewer launcher, and synthetic/TEMP Edge acceptance. They do not authorize real annotation or Gold publication under G7G-A.
 - `core/`, `review_chassis/`, `learning/`, `football_observation_reasoner/`, `step1_visual_reconstruction/`, `step2_visual_continuity/`, `sports_mot/`: reusable contracts and research libraries. Their presence does not approve tracking, identity or model promotion. Historical recipe strings require the recovery tag, not current execution.
 - `replay/portable_detector*.py`, `replay/portable_context.py`: retained checkpoint/configuration validation. Historical replay orchestration has been retired.
 - Other `src/` packages and `baselines/`: upstream source-format, calibration and interoperability references; not the canonical detector or project-state authority. Preserve upstream licenses.
@@ -29,7 +30,7 @@ All paths below are relative to `C:\Users\sebgr\Documents\football-intelligence`
 | `datasets/` | Reusable canonical datasets, especially `gold_corpus/`. Existing dataset registries and frozen splits remain evidence; no sealed membership is opened by this stage. |
 | `experiments/` | Stage workspaces, candidate outputs, reports, benchmark runs, review staging and acceptance evidence. Not the permanent accepted-human-truth database. |
 
-Experiments may produce candidate gold additions, but accepted human truth is ingested into the canonical Gold Corpus.
+Experiments may produce candidate gold additions, but accepted human truth is ingested into the canonical Gold Corpus. The G7G-A Part 9 workspace contains the frozen selection, source-derived review assets, empty real decision root and engineering handoff. Its context clips are not Gold truth.
 
 Original historical decision roots remain unchanged as provenance. Gold ingestion copies exact immutable event/ack bytes; it does not move or rewrite originals.
 

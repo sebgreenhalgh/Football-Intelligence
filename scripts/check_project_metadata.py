@@ -30,6 +30,22 @@ def check(root: Path) -> dict:
     assert re.fullmatch(r"gold-v\d+\.\d+\.\d+", gold["current_release"])
     assert gold["detection_gold_frames"] >= status["annotation_campaign"]["completed_scored_first_pass_frames"]
     assert gold["detection_gold_people"] >= 0
+    if status["current_stage"] == "G7G_A_TEMPORAL_GOLD_CORPUS_AND_SEQUENCE_FOUNDATION_v1":
+        assert status["stage_status"] == "COMPLETE"
+        assert status["last_completed_stage"] == status["current_stage"]
+        assert status["next_authorized_stage"] == "G7G_B_TEMPORAL_GOLD_HUMAN_PILOT_v1_SEPARATE_REQUEST_REQUIRED"
+        assert gold["current_release"] == "gold-v0.1.0"
+        assert gold["detection_gold_frames"] == 16 and gold["detection_gold_people"] == 862
+        assert gold["layers_available"] == ["DETECTION"]
+        temporal = status["temporal_gold"]
+        assert temporal == {
+            "status": "REVIEWER_READY_FOR_HUMAN_PILOT",
+            "primary_sequences": 6,
+            "reserve_sequences": 2,
+            "real_sequences_annotated": 0,
+            "real_temporal_events_created": 0,
+            "candidate_data_used": False,
+        }
     assert status["next_authorized_stage"]
     docs = [root / "README.md", root / "AGENTS.md"] + [root / p for p in status["repository"]["canonical_docs"]]
     for path in docs:

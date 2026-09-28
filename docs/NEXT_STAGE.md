@@ -1,7 +1,7 @@
 # Next authorized action
 
-The next stage requires a separate explicit authorization: `G7G_A_TEMPORAL_GOLD_CORPUS_AND_SEQUENCE_FOUNDATION_v1`. G7F-F has selected and frozen the recall-oriented G7F-B run as an operator-selected provisional detector; G7F-D's formal N010 stopping decision remains CONTINUE.
+The next stage requires separate explicit authorization: `G7G_B_TEMPORAL_GOLD_HUMAN_PILOT_v1`. G7G-A provides a frozen six-PRIMARY/two-RESERVE sequence set, additive temporal contracts and a candidate-blind reviewer. It has not started real annotation or created `gold-v0.2.0`.
 
-That future stage may select short consecutive-frame/video sequences and add TRACKLET, BALL and MATCH_STATE Gold as additive layers in the canonical Gold Corpus. It must preserve DETECTION Gold unchanged, keep player identity distinct from tracklet identity, and defer calibrated pitch coordinates until evidence and authorization support them. It must not create an ad-hoc truth database.
+A future human pilot should review one or a small number of the frozen sequences, use existing anchor DETECTION Gold read-only, annotate new frames independently, and finalize separate DETECTION, TRACKLET, BALL and MATCH_STATE events. An authorized later ingestion/release step may add them to the canonical Gold Corpus after integrity checks. The operator decides whether to continue through all PRIMARY sequences. Tracklet IDs are not roster identity, and pitch coordinates require separately validated calibration.
 
-Do not start temporal annotation under G7F-F. The provisional detector is neither statistically promoted nor sealed-validated, final-promoted or production-ready. `production_ready=false`.
+Do not start the real reviewer or human pilot under G7G-A. The provisional detector is neither statistically promoted nor sealed-validated, final-promoted or production-ready. Its outputs must not prefill human truth. `production_ready=false`.
