@@ -11,6 +11,8 @@ FORBIDDEN_ROOTS = {
     "experiments",
     "matches",
     "models",
+    "outputs",
+    "notebooks",
 }
 FORBIDDEN_PARTS = {
     "action_idempotency",
@@ -34,13 +36,11 @@ FORBIDDEN_SUFFIXES = {
     ".pt",
     ".pth",
     ".safetensors",
+    ".npy",
+    ".npz",
 }
 ALLOWLIST_PREFIXES = ("tests/fixtures/",)
-LEGACY_TRACKED_ALLOWLIST = {
-    "docs/assets/demo-gsr_and_bas.mp4",
-    "docs/assets/demo-minimap.mp4",
-    "docs/assets/demo-tracking.mp4",
-}
+LEGACY_TRACKED_ALLOWLIST: set[str] = set()
 MAX_TRACKED_BYTES = 20 * 1024 * 1024
 
 

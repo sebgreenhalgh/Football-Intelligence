@@ -1,17 +1,11 @@
-SHELL := /bin/bash
-
-DOCS_PORT ?= 8000
-
-.PHONY: help format serve-docs
+.PHONY: help test-gold check-metadata
 
 help:
-	@echo "Targets:"
-	@echo "  make format        - run ruff (autofix) on src/"
-	@echo "  make serve-docs    - serve docs/ at http://localhost:$(DOCS_PORT)"
+	@echo "Use the approved Python environment; see docs/DEVELOPMENT_WORKFLOW.md"
+	@echo "Targets: test-gold, check-metadata"
 
-format:
-	uv run ruff check src --fix
+test-gold:
+	PYTHONPATH=src python -m pytest tests/test_gold_corpus.py -q
 
-serve-docs:
-	@echo "Serving docs/ at http://localhost:$(DOCS_PORT)"
-	@cd docs && python3 -m http.server $(DOCS_PORT)
+check-metadata:
+	python scripts/check_project_metadata.py

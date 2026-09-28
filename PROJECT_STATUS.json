@@ -1,0 +1,51 @@
+{
+  "annotation_campaign": {
+    "completed_scored_evaluable_people": 529,
+    "completed_scored_first_pass_frames": 10,
+    "intentionally_paused": true,
+    "planned_total": 48,
+    "status": "INTENTIONALLY_PAUSED_BY_OPERATOR"
+  },
+  "current_stage": "G7F_E_REPOSITORY_CONSOLIDATION_AND_CANONICAL_GOLD_CORPUS_FOUNDATION_v1",
+  "detection": {
+    "candidate_unblinded": false,
+    "final_promotion": false,
+    "formal_stopping_decision": "CONTINUE_G7F_D_INTERIM_DENSE_GOLD_NEXT_TRANCHE_REQUIRED",
+    "operator_elected_to_move_on": true,
+    "provisional_candidate": null,
+    "status": "OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_FREEZE_PENDING"
+  },
+  "gold_corpus": {
+    "canonical_root": "C:\\Users\\sebgr\\Documents\\football-intelligence\\datasets\\gold_corpus",
+    "current_release": "gold-v0.1.0",
+    "detection_gold_frames": 16,
+    "detection_gold_people": 862,
+    "immutable_dense_annotation_events": 24,
+    "immutable_dense_event_and_ack_objects": 48,
+    "latest_manifest_sha256": "e1352a2708c33e99d8132bcaad177a2ed26ed7672d4f8d02cb5cbd3b795cd0bb",
+    "layers_available": [
+      "DETECTION"
+    ],
+    "legacy_temporal_events_registered": 120,
+    "release_build_code_commit": "78601491bc9db2e382461994ef850e738c5f663a",
+    "release_manifest_sha256": "b5753570fde62ed8ea829ede8b16506c3db1780c7a79adf5f249e546c9818404"
+  },
+  "last_completed_stage": "G7F_E_REPOSITORY_CONSOLIDATION_AND_CANONICAL_GOLD_CORPUS_FOUNDATION_v1",
+  "next_authorized_stage": "FORMAL_OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_DETECTOR_FREEZE_SEPARATE_REQUEST_REQUIRED",
+  "production_ready": false,
+  "project": "Football Intelligence Infrastructure",
+  "repository": {
+    "canonical_branch": "main",
+    "canonical_docs": [
+      "docs/PROJECT_STATE.md",
+      "docs/REPO_MAP.md",
+      "docs/DETECTOR.md",
+      "docs/GOLD_CORPUS.md",
+      "docs/DEVELOPMENT_WORKFLOW.md",
+      "docs/CHANGE_CHECKLIST.md",
+      "docs/NEXT_STAGE.md"
+    ],
+    "recovery_tag": "pre-g7fe-repository-consolidation-2026-09-28"
+  },
+  "stage_status": "COMPLETE"
+}

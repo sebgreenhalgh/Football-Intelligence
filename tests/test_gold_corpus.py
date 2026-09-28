@@ -300,3 +300,15 @@ def test_legacy_registration_does_not_invent_dense_truth(tmp_path, source):
     event.write_bytes(b"altered")
     with pytest.raises(GoldError, match="Provenance reference absent/changed"):
         corpus.validate()
+
+
+def test_compatibility_cli_forwards_nested_help(monkeypatch, capsys):
+    import sys
+
+    from football_intelligence.cli.app import app
+
+    monkeypatch.setattr(sys, "argv", ["fi-pipeline", "gold", "--help"])
+    with pytest.raises(SystemExit) as result:
+        app()
+    assert result.value.code == 0
+    assert "export-detection" in capsys.readouterr().out

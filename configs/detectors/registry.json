@@ -1,0 +1,133 @@
+{
+  "anonymous_label_mapping_disclosed": false,
+  "candidate_unblinded": false,
+  "configurations": [
+    {
+      "candidate_output_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\experiments\\football_observation_reasoner\\part 9\\G7F_B_R1_DETECTION_CANDIDATE_BAKEOFF_v1\\02_CANDIDATE_RUNS\\g7f_b_r1_local_default_rerun.json",
+      "candidate_output_sha256": "306589edad66bed972598fb648d94a3d6e2693123f3608100bcfbdd10ee0e00c",
+      "configuration_id": "g7f_b_r1_local_default_rerun",
+      "format": "candidate-run-v2",
+      "processed_frame_instances": 1080,
+      "promotion_eligible": false,
+      "requires_dense_gold_validation": true,
+      "status": "DEVELOPMENT_CANDIDATE",
+      "unique_source_hashes": 1044
+    },
+    {
+      "candidate_output_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\experiments\\football_observation_reasoner\\part 9\\G7F_B_R1_DETECTION_CANDIDATE_BAKEOFF_v1\\02_CANDIDATE_RUNS\\g7f_b_r1_recall_conf_012.json",
+      "candidate_output_sha256": "7b63f3407ae80b3267361ff67b31e9d853826f92a1259125a6e53821674f1990",
+      "configuration_id": "g7f_b_r1_recall_conf_012",
+      "format": "candidate-run-v2",
+      "processed_frame_instances": 1080,
+      "promotion_eligible": false,
+      "requires_dense_gold_validation": true,
+      "status": "DEVELOPMENT_CANDIDATE",
+      "unique_source_hashes": 1044
+    },
+    {
+      "candidate_output_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\experiments\\football_observation_reasoner\\part 9\\G7F_B_R1_DETECTION_CANDIDATE_BAKEOFF_v1\\02_CANDIDATE_RUNS\\g7f_b_r1_multiplicity_nms_iou_050.json",
+      "candidate_output_sha256": "42070524c4bf1d6b785d773994a2d95d6de0052b340bb2d3742a9c105c209669",
+      "configuration_id": "g7f_b_r1_multiplicity_nms_iou_050",
+      "format": "candidate-run-v2",
+      "processed_frame_instances": 1080,
+      "promotion_eligible": false,
+      "requires_dense_gold_validation": true,
+      "status": "DEVELOPMENT_CANDIDATE",
+      "unique_source_hashes": 1044
+    }
+  ],
+  "final_promotion": false,
+  "gold_export": "fi-gold export-detection --release gold-v0.1.0 --output <external.jsonl>",
+  "model": {
+    "bytes": 52136884,
+    "legacy_source_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\SoccerTrack-v2\\models\\model=yolov8m-imgsz=2048.pt",
+    "operation": "EXACT_COPY_ORIGINAL_PRESERVED",
+    "path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\models\\sha256\\5d\\5d4a90cdc7a21786cc59cd19778e9eafff836df9e2da32524737c7ee6efe4fe5.pt",
+    "production_ready": false,
+    "provenance_file": "C:\\Users\\sebgr\\Documents\\football-intelligence\\SoccerTrack-v2\\models\\model=yolov8m-imgsz=2048.provenance.json",
+    "provenance_sha256": "0a403cdfb349fd5975a7ea70f9f6d38814084cf025036ca7262d963c3232dc76",
+    "schema_version": "fi.model.object.v1",
+    "sha256": "5d4a90cdc7a21786cc59cd19778e9eafff836df9e2da32524737c7ee6efe4fe5"
+  },
+  "model_manifest_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\models\\sha256\\5d\\5d4a90cdc7a21786cc59cd19778e9eafff836df9e2da32524737c7ee6efe4fe5.manifest.json",
+  "model_manifest_sha256": "aea4914b1f3de534643dd6feb308f11a3c48cab7351fab59be38849c00d7cc4f",
+  "operator_elected_to_move_on": true,
+  "predeclared_plan": {
+    "candidate_roles": [
+      {
+        "confidence": 0.22,
+        "consolidation": "IOU_CONNECTED_COMPONENT_055",
+        "detector_nms_iou": 0.7,
+        "expected_direction": "reproducible historical settings",
+        "max_det": 80,
+        "role": "LOCAL_DEFAULT_RERUN",
+        "run_id": "g7f_b_r1_local_default_rerun",
+        "schema_version": "football_intelligence.g7f_a_r1.candidate_run.v2"
+      },
+      {
+        "confidence": 0.12,
+        "consolidation": "IOU_CONNECTED_COMPONENT_055",
+        "detector_nms_iou": 0.7,
+        "expected_direction": "can add candidates by lowering confidence",
+        "max_det": 80,
+        "role": "RECALL_ORIENTED_VARIANT",
+        "run_id": "g7f_b_r1_recall_conf_012",
+        "schema_version": "football_intelligence.g7f_a_r1.candidate_run.v2"
+      },
+      {
+        "confidence": 0.22,
+        "consolidation": "IOU_CONNECTED_COMPONENT_055",
+        "detector_nms_iou": 0.5,
+        "expected_direction": "stronger within-view suppression",
+        "max_det": 80,
+        "role": "MULTIPLICITY_REDUCTION_VARIANT",
+        "run_id": "g7f_b_r1_multiplicity_nms_iou_050",
+        "schema_version": "football_intelligence.g7f_a_r1.candidate_run.v2"
+      }
+    ],
+    "inference_contract": {
+      "agnostic_nms": false,
+      "augment": false,
+      "batch": 1,
+      "classes": [
+        0
+      ],
+      "consolidation": "IOU_CONNECTED_COMPONENT_055",
+      "covered_frame_instances": 1080,
+      "decoder": "OPENCV_4.10.0_EXACT_GLOBAL_FRAME_INDEX",
+      "device": "cuda:0",
+      "frame_hash": "SHA256_RGB24_C_CONTIGUOUS_SOURCE_DIMENSIONS",
+      "half": true,
+      "max_det": 80,
+      "merged_ambiguity_gate": true,
+      "shared_forward_confidence": 0.12,
+      "unique_source_images": 1044,
+      "views": {
+        "S0_FULL_PANORAMA_1280": {
+          "imgsz": 1280
+        },
+        "S3_OVERLAPPING_HIGH_RESOLUTION_TILES": {
+          "imgsz": 1536,
+          "overlap_x": 256,
+          "overlap_y": 0,
+          "tile_height": 720,
+          "tile_width": 1024
+        }
+      }
+    },
+    "path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\experiments\\football_observation_reasoner\\part 9\\G7F_B_R1_DETECTION_CANDIDATE_BAKEOFF_v1\\01_EXPERIMENT_PLAN\\PREDECLARED_EXPERIMENT_PLAN.json",
+    "sha256": "691f0b4b77652ef9935f07239972b039bf17c81dae377e752062fdce9c48d244"
+  },
+  "production_ready": false,
+  "provisional_candidate": null,
+  "runtime_entry_point": "scripts/g7f_b_r1_run_detection_bakeoff.py",
+  "runtime_modules": [
+    "src/football_intelligence/detection_forensics.py",
+    "src/football_intelligence/detection_gold/consolidation.py",
+    "src/football_intelligence/g7d_b1_foldwise_runtime.py",
+    "src/football_intelligence/step1_visual_reconstruction/tiled_detection.py"
+  ],
+  "schema_version": "fi.detector.registry.v1",
+  "status": "OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_FREEZE_PENDING",
+  "stopping_audit_decision": "CONTINUE_G7F_D_INTERIM_DENSE_GOLD_NEXT_TRANCHE_REQUIRED"
+}
