@@ -10,6 +10,7 @@
 - `detection_forensics.py`, `detection_gold/consolidation.py`, `g7d_b1_foldwise_runtime.py`, `step1_visual_reconstruction/tiled_detection.py`: current development proposal construction/NMS/view logic.
 - `scripts/g7f_*`: retained G7F release/reproduction entry points. Current reviewer manifests bind several of these files exactly. They are an explicit retention exception, not permission to repeat inference or restart annotation.
 - `scripts/g7g_a_*`: frozen source-video selection, temporal-reviewer launcher, and synthetic/TEMP Edge acceptance. They do not authorize real annotation or Gold publication under G7G-A.
+- `scripts/g7g_b_*`: one-sequence authorization freeze, lifecycle check/serve/close gate and synthetic/TEMP Edge acceptance. The accepted G7G-A reviewer core is reused unchanged.
 - `core/`, `review_chassis/`, `learning/`, `football_observation_reasoner/`, `step1_visual_reconstruction/`, `step2_visual_continuity/`, `sports_mot/`: reusable contracts and research libraries. Their presence does not approve tracking, identity or model promotion. Historical recipe strings require the recovery tag, not current execution.
 - `replay/portable_detector*.py`, `replay/portable_context.py`: retained checkpoint/configuration validation. Historical replay orchestration has been retired.
 - Other `src/` packages and `baselines/`: upstream source-format, calibration and interoperability references; not the canonical detector or project-state authority. Preserve upstream licenses.
@@ -30,7 +31,7 @@ All paths below are relative to `C:\Users\sebgr\Documents\football-intelligence`
 | `datasets/` | Reusable canonical datasets, especially `gold_corpus/`. Existing dataset registries and frozen splits remain evidence; no sealed membership is opened by this stage. |
 | `experiments/` | Stage workspaces, candidate outputs, reports, benchmark runs, review staging and acceptance evidence. Not the permanent accepted-human-truth database. |
 
-Experiments may produce candidate gold additions, but accepted human truth is ingested into the canonical Gold Corpus. The G7G-A Part 9 workspace contains the frozen selection, source-derived review assets, empty real decision root and engineering handoff. Its context clips are not Gold truth.
+Experiments may produce candidate gold additions, but accepted human truth is ingested into the canonical Gold Corpus. The G7G-A Part 9 workspace contains the frozen selection and source-derived review assets. The G7G-B Part 9 workspace contains the one-sequence authorization manifest, full Gold before-inventory, a junction to G7G-A assets, an empty-at-release real decision root, manual launcher and engineering handoff. Neither stage workspace is permanent accepted truth; context clips are not Gold truth.
 
 Original historical decision roots remain unchanged as provenance. Gold ingestion copies exact immutable event/ack bytes; it does not move or rewrite originals.
 

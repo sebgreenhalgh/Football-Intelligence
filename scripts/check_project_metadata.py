@@ -46,6 +46,22 @@ def check(root: Path) -> dict:
             "real_temporal_events_created": 0,
             "candidate_data_used": False,
         }
+    if status["current_stage"] == "G7G_B_TEMPORAL_GOLD_HUMAN_PILOT_v1":
+        assert status["stage_status"] == "READY_FOR_HUMAN_PILOT"
+        assert status["last_completed_stage"] == "G7G_A_TEMPORAL_GOLD_CORPUS_AND_SEQUENCE_FOUNDATION_v1"
+        assert status["next_authorized_stage"] == "COMPLETE_THE_AUTHORIZED_G7G_B_SINGLE_SEQUENCE_HUMAN_PILOT"
+        assert gold["current_release"] == "gold-v0.1.0"
+        assert gold["detection_gold_frames"] == 16 and gold["detection_gold_people"] == 862
+        assert gold["layers_available"] == ["DETECTION"]
+        assert status["temporal_gold"] == {
+            "status": "SINGLE_SEQUENCE_PILOT_AUTHORIZED",
+            "primary_sequences": 6,
+            "reserve_sequences": 2,
+            "authorized_pilot_sequences": 1,
+            "real_sequences_annotated": 0,
+            "real_temporal_events_created": 0,
+            "candidate_data_used": False,
+        }
     assert status["next_authorized_stage"]
     docs = [root / "README.md", root / "AGENTS.md"] + [root / p for p in status["repository"]["canonical_docs"]]
     for path in docs:

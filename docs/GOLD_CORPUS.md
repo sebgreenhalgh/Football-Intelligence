@@ -51,6 +51,12 @@ Versioned schemas in `schemas/gold/` define separate TRACKLET, BALL and MATCH_ST
 
 Mutable drafts live outside the corpus. The dedicated reviewer uses sequence/frame/layer/revision-bound atomic saves, rejects stale navigation or responses, and makes finalized events read-only. Real annotation must be separately authorized; use the handoff's human-pilot instructions before starting. Never treat the context clip or source metadata as truth.
 
+## G7G-B single-sequence pilot authorization
+
+G7G-B authorizes only the first frozen PRIMARY sequence, `gs-e914de8720aa2b7a6cc9fb6fcd87257ead144a08d3ce3157b42dfab5dc5cdb82` (Match-01). Its G7G-B `PILOT_SEQUENCE_SELECTION_v1.json` preserves the parent sequence row exactly; a stage-local asset junction resolves to G7G-A's frozen media without copying or changing frame bindings. One canonical DETECTION anchor remains read-only; eight neighboring frames await human masks. TRACKLET, BALL and MATCH_STATE each require review of all nine frames. The real staging root is empty at release and is not the Gold Corpus.
+
+The thin `scripts/g7g_b_run_temporal_gold_pilot.py` gate has `check`, `serve` and read-only `close` phases. `check` validates the frozen parent/pilot/reviewer/schema/source hashes, full Gold before-inventory and staged lifecycle (`NOT_STARTED`, `IN_PROGRESS`, `COMPLETE`) without rejecting legitimate partial work. `serve` exposes only the one authorized sequence. `close` returns `G7G_B_PILOT_INCOMPLETE` until eight new DETECTION event/ack pairs, three separate temporal layer pairs and one exact completion receipt are finalized. Even a complete staged pilot does not ingest events or create a release. `gold-v0.1.0` and active DETECTION truth remain unchanged.
+
 ## Additive layer model
 
 | Layer | Human truth |

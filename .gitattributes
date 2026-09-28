@@ -5,4 +5,6 @@ src/football_intelligence/gold/temporal_ingest.py text eol=lf
 src/football_intelligence/gold/temporal_reviewer.py text eol=lf
 src/football_intelligence/gold/temporal_reviewer_static/** text eol=lf
 scripts/g7g_a_* text eol=lf
+scripts/g7g_b_* text eol=lf
 tests/test_g7g_a_* text eol=lf
+tests/test_g7g_b_* text eol=lf
