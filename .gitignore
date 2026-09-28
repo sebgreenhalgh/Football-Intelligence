@@ -83,3 +83,12 @@ _tmp/
 .pytest_tmp_*/
 playwright-report/
 test-results/
+
+# Retired current-tree display/generated material (history is preserved)
+/docs/assets/
+/notebooks/
+*.npy
+*.npz
+.venv-*/
+.ultralytics/
+**/.writer.lock
