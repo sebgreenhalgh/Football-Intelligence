@@ -1,6 +1,6 @@
 {
-  "anonymous_label_mapping_disclosed": false,
-  "candidate_unblinded": false,
+  "anonymous_label_mapping_disclosed": true,
+  "candidate_unblinded": true,
   "configurations": [
     {
       "candidate_output_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\experiments\\football_observation_reasoner\\part 9\\G7F_B_R1_DETECTION_CANDIDATE_BAKEOFF_v1\\02_CANDIDATE_RUNS\\g7f_b_r1_local_default_rerun.json",
@@ -21,7 +21,7 @@
       "processed_frame_instances": 1080,
       "promotion_eligible": false,
       "requires_dense_gold_validation": true,
-      "status": "DEVELOPMENT_CANDIDATE",
+      "status": "OPERATOR_SELECTED_PROVISIONAL",
       "unique_source_hashes": 1044
     },
     {
@@ -52,6 +52,7 @@
   "model_manifest_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\models\\sha256\\5d\\5d4a90cdc7a21786cc59cd19778e9eafff836df9e2da32524737c7ee6efe4fe5.manifest.json",
   "model_manifest_sha256": "aea4914b1f3de534643dd6feb308f11a3c48cab7351fab59be38849c00d7cc4f",
   "operator_elected_to_move_on": true,
+  "operator_decision": "SELECT_CANDIDATE_C_AND_PAUSE_DENSE_ANNOTATION",
   "predeclared_plan": {
     "candidate_roles": [
       {
@@ -119,7 +120,9 @@
     "sha256": "691f0b4b77652ef9935f07239972b039bf17c81dae377e752062fdce9c48d244"
   },
   "production_ready": false,
-  "provisional_candidate": null,
+  "provisional_candidate": "g7f_b_r1_recall_conf_012",
+  "provisional_manifest_path": "C:\\Users\\sebgr\\Documents\\football-intelligence\\models\\detectors\\provisional\\detector-provisional-v0.1.0\\manifest.json",
+  "provisional_manifest_sha256": "4fbe9627608a1cad86ecd8fc8af283496b0dcbc062eedfd4a44e26bff26be4b3",
   "runtime_entry_point": "scripts/g7f_b_r1_run_detection_bakeoff.py",
   "runtime_modules": [
     "src/football_intelligence/detection_forensics.py",
@@ -128,6 +131,7 @@
     "src/football_intelligence/step1_visual_reconstruction/tiled_detection.py"
   ],
   "schema_version": "fi.detector.registry.v1",
-  "status": "OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_FREEZE_PENDING",
+  "sealed_validation": false,
+  "status": "OPERATOR_SELECTED_PROVISIONAL",
   "stopping_audit_decision": "CONTINUE_G7F_D_INTERIM_DENSE_GOLD_NEXT_TRANCHE_REQUIRED"
 }

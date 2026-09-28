@@ -6,8 +6,8 @@ G7F-E establishes the consolidated repository and canonical Gold Corpus. `gold-v
 
 The 48-image scored annotation campaign is intentionally paused by the operator. Ten scored frames are finalized; the remaining 38 are not fabricated or ingested as completed gold.
 
-The formal G7F-D N010 audit decision remains `CONTINUE_G7F_D_INTERIM_DENSE_GOLD_NEXT_TRANCHE_REQUIRED`. The operator's choice to move on does not change that scientific stopping result. Candidate identities remain sealed, no candidate is formally selected here, and no detector is promoted.
+G7F-F records the operator's explicit engineering selection of blinded Candidate C, unblinds the original frozen mapping and freezes the recall-oriented G7F-B run (`g7f_b_r1_recall_conf_012`) as `OPERATOR_SELECTED_PROVISIONAL`. The formal G7F-D N010 audit decision remains `CONTINUE_G7F_D_INTERIM_DENSE_GOLD_NEXT_TRANCHE_REQUIRED`: the preregistered stopping rule did not pass. The operator's decision does not rewrite that scientific result. Blind-repeat image identities remain sealed; no final detector promotion or sealed validation occurred.
 
-Next: a separately authorized operator-selection/unblind/provisional-freeze stage. See [NEXT_STAGE.md](NEXT_STAGE.md). This stage does not launch it.
+Next: a separately authorized temporal Gold Corpus and sequence-foundation stage. See [NEXT_STAGE.md](NEXT_STAGE.md). G7F-F does not launch it.
 
-`production_ready=false`, `candidate_unblinded=false`, `final_promotion=false`. No temporal tracking, player identity, ball or match-state annotation is started.
+`production_ready=false`, `candidate_unblinded=true`, `sealed_validation=false`, `final_promotion=false`. No temporal tracking, player identity, ball or match-state annotation is started.

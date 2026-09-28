@@ -14,6 +14,17 @@ def check(root: Path) -> dict:
     assert status["repository"]["canonical_branch"] == "main"
     for key in ("candidate_unblinded", "final_promotion", "provisional_candidate"):
         assert status["detection"][key] == registry[key], f"Detector metadata disagreement: {key}"
+    assert status["detection"]["status"] == registry["status"] == "OPERATOR_SELECTED_PROVISIONAL"
+    assert status["detection"]["formal_stopping_decision"] == registry["stopping_audit_decision"] == (
+        "CONTINUE_G7F_D_INTERIM_DENSE_GOLD_NEXT_TRANCHE_REQUIRED"
+    )
+    assert status["detection"]["candidate_unblinded"] is True
+    assert status["detection"]["sealed_validation"] is registry["sealed_validation"] is False
+    assert status["detection"]["final_promotion"] is registry["final_promotion"] is False
+    assert registry["anonymous_label_mapping_disclosed"] is True
+    assert registry["provisional_candidate"] in {row["configuration_id"] for row in registry["configurations"]}
+    assert re.fullmatch(r"[0-9a-f]{64}", registry["provisional_manifest_sha256"])
+    assert registry["operator_decision"] == "SELECT_CANDIDATE_C_AND_PAUSE_DENSE_ANNOTATION"
     gold = status["gold_corpus"]
     assert re.fullmatch(r"[0-9a-f]{64}", gold["latest_manifest_sha256"])
     assert re.fullmatch(r"gold-v\d+\.\d+\.\d+", gold["current_release"])

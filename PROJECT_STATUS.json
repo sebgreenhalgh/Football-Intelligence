@@ -6,14 +6,15 @@
     "planned_total": 48,
     "status": "INTENTIONALLY_PAUSED_BY_OPERATOR"
   },
-  "current_stage": "G7F_E_REPOSITORY_CONSOLIDATION_AND_CANONICAL_GOLD_CORPUS_FOUNDATION_v1",
+  "current_stage": "G7F_F_OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_DETECTOR_FREEZE_v1",
   "detection": {
-    "candidate_unblinded": false,
+    "candidate_unblinded": true,
     "final_promotion": false,
     "formal_stopping_decision": "CONTINUE_G7F_D_INTERIM_DENSE_GOLD_NEXT_TRANCHE_REQUIRED",
     "operator_elected_to_move_on": true,
-    "provisional_candidate": null,
-    "status": "OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_FREEZE_PENDING"
+    "provisional_candidate": "g7f_b_r1_recall_conf_012",
+    "sealed_validation": false,
+    "status": "OPERATOR_SELECTED_PROVISIONAL"
   },
   "gold_corpus": {
     "canonical_root": "C:\\Users\\sebgr\\Documents\\football-intelligence\\datasets\\gold_corpus",
@@ -30,8 +31,8 @@
     "release_build_code_commit": "78601491bc9db2e382461994ef850e738c5f663a",
     "release_manifest_sha256": "b5753570fde62ed8ea829ede8b16506c3db1780c7a79adf5f249e546c9818404"
   },
-  "last_completed_stage": "G7F_E_REPOSITORY_CONSOLIDATION_AND_CANONICAL_GOLD_CORPUS_FOUNDATION_v1",
-  "next_authorized_stage": "FORMAL_OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_DETECTOR_FREEZE_SEPARATE_REQUEST_REQUIRED",
+  "last_completed_stage": "G7F_F_OPERATOR_SELECTION_UNBLIND_AND_PROVISIONAL_DETECTOR_FREEZE_v1",
+  "next_authorized_stage": "G7G_A_TEMPORAL_GOLD_CORPUS_AND_SEQUENCE_FOUNDATION_v1_SEPARATE_REQUEST_REQUIRED",
   "production_ready": false,
   "project": "Football Intelligence Infrastructure",
   "repository": {
