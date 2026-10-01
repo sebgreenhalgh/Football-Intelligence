@@ -6,7 +6,7 @@
     "planned_total": 48,
     "status": "INTENTIONALLY_PAUSED_BY_OPERATOR"
   },
-  "current_stage": "G7G_B_TEMPORAL_GOLD_HUMAN_PILOT_v1",
+  "current_stage": "G7G_B_R1_TEMPORAL_REVIEWER_USABILITY_AND_SEQUENTIAL_FLOW_REPAIR_v1",
   "detection": {
     "candidate_unblinded": true,
     "final_promotion": false,
@@ -50,7 +50,7 @@
   },
   "stage_status": "READY_FOR_HUMAN_PILOT",
   "temporal_gold": {
-    "status": "SINGLE_SEQUENCE_PILOT_AUTHORIZED",
+    "status": "SINGLE_SEQUENCE_PILOT_AUTHORIZED_WITH_R2_REVIEWER",
     "primary_sequences": 6,
     "reserve_sequences": 2,
     "authorized_pilot_sequences": 1,

@@ -59,6 +59,10 @@ The thin `scripts/g7g_b_run_temporal_gold_pilot.py` gate has `check`, `serve` an
 
 ## Additive layer model
 
+The G7G-B R1 usability repair releases a separate R2 reviewer and gate, `scripts/g7g_b_r1_run_temporal_gold_pilot.py`. The manual launcher now uses R2. Frame review builds BALL and MATCH_STATE drafts progressively, but each still finalizes exactly one immutable sequence event. Display transforms and wizard state stay in browser storage, never in human events. R1 drafts and finalized events remain readable without migration. The R1 source release, schemas, builders, context derivatives and Gold bytes are preserved. R2 does not display or request context video and cannot expose another sequence.
+
+R2 is staging-only: existing ingestion adapters still pin the R1 reviewer binding. A separately authorized ingestion stage must explicitly accept and verify the frozen R2 provenance; it must not relax unknown-release rejection. The real root remained empty during this repair and the active corpus is still DETECTION-only.
+
 | Layer | Human truth |
 | --- | --- |
 | DETECTION | A frame's individually evaluable visible-human masks, relevance and ignore regions. |
