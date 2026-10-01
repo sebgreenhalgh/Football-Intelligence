@@ -12,4 +12,7 @@ src/football_intelligence/gold/temporal_reviewer_r2.py text eol=lf
 src/football_intelligence/gold/temporal_reviewer_r2_static/** text eol=lf
 configs/reviewers/temporal_r2.json text eol=lf
 configs/reviewers/temporal_r2_launch_v2.json text eol=lf
+configs/reviewers/temporal_r3.json text eol=lf
+src/football_intelligence/gold/temporal_reviewer_r3.py text eol=lf
+src/football_intelligence/gold/temporal_reviewer_r3_static/** text eol=lf
 tests/g7g_b_r1_view_test.js text eol=lf
