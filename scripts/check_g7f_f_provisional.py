@@ -70,6 +70,7 @@ def check() -> dict:
         "G7G_B_R1_TEMPORAL_REVIEWER_USABILITY_AND_SEQUENTIAL_FLOW_REPAIR_v1",
         "G7G_B_R2_FAST_LAUNCH_GATE_AND_GOLD_VALIDATION_PERFORMANCE_REPAIR_v1",
         "G7G_B_R3_TEMPORAL_REVIEWER_HIGH_MAGNIFICATION_ZOOM_REPAIR_v1",
+        "G7G_B_R4_FAST_FRAME_ASSET_LAUNCH_VALIDATION_REPAIR_v1",
     }, "wrong current stage")
     expected_status = "READY_FOR_HUMAN_PILOT" if status["current_stage"].startswith("G7G_B_") else "COMPLETE"
     require(status["stage_status"] == expected_status, "stage status mismatch")
@@ -80,6 +81,7 @@ def check() -> dict:
         "G7G_B_R1_TEMPORAL_REVIEWER_USABILITY_AND_SEQUENTIAL_FLOW_REPAIR_v1": "COMPLETE_THE_AUTHORIZED_G7G_B_SINGLE_SEQUENCE_HUMAN_PILOT",
         "G7G_B_R2_FAST_LAUNCH_GATE_AND_GOLD_VALIDATION_PERFORMANCE_REPAIR_v1": "COMPLETE_THE_AUTHORIZED_G7G_B_SINGLE_SEQUENCE_HUMAN_PILOT",
         "G7G_B_R3_TEMPORAL_REVIEWER_HIGH_MAGNIFICATION_ZOOM_REPAIR_v1": "COMPLETE_THE_AUTHORIZED_G7G_B_SINGLE_SEQUENCE_HUMAN_PILOT",
+        "G7G_B_R4_FAST_FRAME_ASSET_LAUNCH_VALIDATION_REPAIR_v1": "COMPLETE_THE_AUTHORIZED_G7G_B_SINGLE_SEQUENCE_HUMAN_PILOT",
     }[status["current_stage"]]
     require(status["next_authorized_stage"] == expected_next, "wrong next stage")
     require(status["annotation_campaign"]["status"] == "INTENTIONALLY_PAUSED_BY_OPERATOR", "annotation pause changed")

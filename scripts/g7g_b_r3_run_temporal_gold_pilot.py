@@ -11,8 +11,6 @@ import json
 import sys
 import time
 from pathlib import Path
-import cv2
-import numpy as np
 from football_intelligence.calibration_adjudication import editable_document
 from football_intelligence.dense_person_gold import ACK_SCHEMA as DENSE_ACK, EVENT_SCHEMA as DENSE_EVENT, build_final_event
 from football_intelligence.gold.corpus import GoldCorpus, canonical, file_hash, require
@@ -29,7 +27,9 @@ R2_RELEASE = "G7G_B_TEMPORAL_GOLD_REVIEWER_R2"
 R2_BUNDLE_SHA = "aeef4e75ce0afb9291db78ec9a966c0d5d6b5ca9c0d9ff5607472954bd54fef0"
 ORIGINAL_RELEASE_CONFIG = REPO / "configs/reviewers/temporal_r2.json"
 ORIGINAL_RELEASE_CONFIG_SHA = "23c9b380f48b3f85eb44c425de39b44a2d9d0662db61737093340365c1f30c8c"
-RELEASE_CONFIG = REPO / "configs/reviewers/temporal_r3.json"
+PREVIOUS_RELEASE_CONFIG = REPO / "configs/reviewers/temporal_r3.json"
+PREVIOUS_RELEASE_CONFIG_SHA = "022169140351ff6a664afca5059bdec6b4059eead42d6ba5497994a72d51ddf9"
+RELEASE_CONFIG = REPO / "configs/reviewers/temporal_r3_launch_v2.json"
 RUNNER_PATH = "scripts/g7g_b_r3_run_temporal_gold_pilot.py"
 EXPECTED_GOLD_COUNTS = (16, 862)
 PILOT_SEQUENCE_ID = "gs-e914de8720aa2b7a6cc9fb6fcd87257ead144a08d3ce3157b42dfab5dc5cdb82"
@@ -65,17 +65,16 @@ def validate_launch_binding():
     predecessor = REPO / "configs/reviewers/temporal_r2_launch_v2.json"
     predecessor_sha = "14b17e557cc7a5e0e77c92e4d6db608205a407f4baa5a105a05cbf789496b42f"
     require(file_hash(predecessor) == predecessor_sha, "Frozen R2 launch binding changed")
-    old = json.loads(predecessor.read_bytes())
+    require(file_hash(PREVIOUS_RELEASE_CONFIG) == PREVIOUS_RELEASE_CONFIG_SHA, "Frozen R3 release binding changed")
+    old = json.loads(PREVIOUS_RELEASE_CONFIG.read_bytes())
     require(file_hash(ORIGINAL_RELEASE_CONFIG) == ORIGINAL_RELEASE_CONFIG_SHA, "Original R2 config changed")
     binding = json.loads(RELEASE_CONFIG.read_bytes())
-    require(binding["supersedes_config_sha256"] == predecessor_sha, "R3 predecessor changed")
+    require(binding["supersedes_config_sha256"] == PREVIOUS_RELEASE_CONFIG_SHA, "R3 launch predecessor changed")
     require(binding["reviewer_release"] == RELEASE, "Wrong R3 release")
-    new_paths = {RUNNER_PATH, "src/football_intelligence/gold/temporal_reviewer_r3.py",
-                 *("src/football_intelligence/gold/temporal_reviewer_r3_static/" + name
-                   for name in ("app.js", "index.html", "styles.css", "view.js"))}
-    require(set(binding["source_sha256"]) == set(old["source_sha256"]) | new_paths, "R3 source set changed")
+    require(set(binding["source_sha256"]) == set(old["source_sha256"]), "R3 source set changed")
+    require(binding["reviewer_sha256"] == old["reviewer_sha256"], "Frozen R3 bundle binding changed")
     for relative, sha in binding["source_sha256"].items():
-        require(relative not in old["source_sha256"] or sha == old["source_sha256"][relative], "Frozen R2 source binding changed")
+        require(relative == RUNNER_PATH or sha == old["source_sha256"][relative], "Frozen non-launch source binding changed")
         path = (REPO / relative).resolve(strict=True)
         require(path.is_relative_to(REPO) and file_hash(path) == sha, "R3 source hash changed: " + relative)
     require(binding["pilot_selection_sha256"] == old["pilot_selection_sha256"] == r1.PILOT_SHA, "Pilot binding changed")
@@ -110,19 +109,19 @@ def validate_release():
     require(all(anchor[key] == event[key] == value for key, value in expected.items()), "Anchor event/index/source-frame binding changed")
     for frame in frames:
         asset = r1.PILOT.parent / frame["asset_path"]
-        require(file_hash(asset) == frame["asset_sha256"], "Pilot frame asset hash changed")
-        pixels = cv2.imdecode(np.frombuffer(asset.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
-        require(pixels is not None and pixels.shape[:2] == (sequence["source_height"], sequence["source_width"]), "Pilot frame dimensions changed")
-        require(hashlib.sha256(cv2.cvtColor(pixels, cv2.COLOR_BGR2RGB).tobytes()).hexdigest() == frame["source_rgb_sha256"], "Pilot source RGB hash changed")
-    # Constructor still verifies its nine assets and small frozen context derivative.
-    # No source video is opened and no unrelated sequence asset is inspected.
+        require(not Path(frame["asset_path"]).is_absolute() and asset.resolve().is_relative_to(asset_link.resolve()), "Pilot frame asset path escaped frozen assets")
+        require(asset.is_file(), "Pilot frame asset missing")
+    # The unchanged constructor hashes each of the nine PNG files once and the
+    # small context derivative. Exact manifest/file bytes bind dimensions/RGB.
+    # No image decode, source-video read, or unrelated sequence asset inspection.
     reviewer = TemporalReviewer(r1.PILOT, r1.REAL, gold_root=r1.GOLD)
     require(reviewer.reviewer_sha256 == binding["reviewer_sha256"], "R3 bundle hash changed")
     boot = reviewer.bootstrap()
     require(boot["candidate_blind"] and boot["context_video_ui"] is False and len(boot["sequences"]) == 1, "R3 scope/blindness changed")
     reviewer.fast_integrity = {**integrity, "validation_mode": "FROZEN_FAST_INTEGRITY",
         "gold_deep_geometry_revalidation": False, "historical_mask_rerasterizations": 0,
-        "frame_assets_decoded": len(frames), "full_source_videos_hashed": 0,
+        "frame_asset_file_hashes": len(frames), "frame_asset_decode_validation": False,
+        "frame_assets_decoded": 0, "full_source_videos_hashed": 0,
         "release_validation_elapsed_seconds": time.perf_counter() - start}
     return reviewer, sequence
 
@@ -223,35 +222,70 @@ def check():
             **validate_lifecycle(reviewer, sequence)}
 
 
+def audit_frame_pixels(sequence):
+    """Deliberate decode audit only; hash and decode the same bytes."""
+    import cv2
+    import numpy as np
+
+    start = time.perf_counter()
+    checked = 0
+    for frame in sequence["annotation_frames"]:
+        data = (r1.PILOT.parent / frame["asset_path"]).read_bytes()
+        require(hashlib.sha256(data).hexdigest() == frame["asset_sha256"], "Pilot frame asset hash changed")
+        pixels = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        require(pixels is not None and pixels.shape[:2] == (sequence["source_height"], sequence["source_width"]), "Pilot frame dimensions changed")
+        require(hashlib.sha256(cv2.cvtColor(pixels, cv2.COLOR_BGR2RGB).tobytes()).hexdigest() == frame["source_rgb_sha256"], "Pilot source RGB hash changed")
+        checked += 1
+    require(checked == 9, "Deep asset audit must cover exactly nine frames")
+    return {"assets_checked": checked, "assets_decoded": checked,
+            "rgb_hashes_verified": checked, "frame_asset_decode_validation": True,
+            "frame_assets_decoded": checked,
+            "asset_decode_audit_elapsed_seconds": time.perf_counter() - start}
+
+
+def audit_assets():
+    print("Performing explicit deep frame-asset audit: decoding nine PNGs and verifying dimensions/RGB hashes.", flush=True)
+    start = time.perf_counter()
+    reviewer, sequence = validate_release()
+    result = audit_frame_pixels(sequence)
+    require(file_hash(r1.PILOT) == r1.PILOT_SHA, "Pilot changed during asset audit")
+    return {**reviewer.fast_integrity, **result, "status": "G7G_B_R3_FRAME_ASSET_AUDIT_VALID",
+            "validation_mode": "DEEP_FRAME_ASSET_AUDIT", "reviewer_release": RELEASE,
+            "candidate_blind": True, "production_ready": False,
+            "audit_elapsed_seconds": time.perf_counter() - start}
+
+
 def audit():
     print("Performing expensive deep Gold semantic audit; masks and source provenance will be revalidated.", flush=True)
     start = time.perf_counter()
     result = check()
+    sequence = json.loads(r1.PILOT.read_bytes())["sequences"][0]
+    assets = audit_frame_pixels(sequence)
     gold = GoldCorpus(r1.GOLD).validate()
     # Rebind after the audit too, rejecting any intervening byte change.
     _, integrity = validate_frozen_gold_fast()
-    return {**result, **integrity, "status": "G7G_B_R3_FULL_AUDIT_VALID", "validation_mode": "FULL_GOLD_SEMANTIC_AUDIT",
+    return {**result, **integrity, **assets, "status": "G7G_B_R3_FULL_AUDIT_VALID", "validation_mode": "FULL_GOLD_SEMANTIC_AUDIT",
             "gold_deep_geometry_revalidation": True, "historical_mask_rerasterizations": "performed_by_unchanged_full_validator",
             "deep_gold_result": gold, "audit_elapsed_seconds": time.perf_counter() - start}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("check", "serve", "close", "audit"))
+    parser.add_argument("phase", choices=("check", "serve", "close", "audit", "audit-assets"))
     parser.add_argument("--port", type=int, default=8793)
     args = parser.parse_args()
-    if args.phase == "audit":
+    if args.phase in ("audit", "audit-assets"):
         try:
-            print(json.dumps(audit(), indent=2, sort_keys=True), flush=True)
+            print(json.dumps(audit_assets() if args.phase == "audit-assets" else audit(), indent=2, sort_keys=True), flush=True)
             return 0
         except KeyboardInterrupt:
-            print("AUDIT_INTERRUPTED", flush=True)
+            print("FRAME_ASSET_AUDIT_INTERRUPTED" if args.phase == "audit-assets" else "AUDIT_INTERRUPTED", flush=True)
             return 130
     result = check()
     if args.phase == "close":
         result["status"] = "COMPLETE_STAGED_NOT_INGESTED" if result["lifecycle_state"] == "COMPLETE" else "PILOT_INCOMPLETE"
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
-    print(f"reviewer_release={RELEASE}\nvalidation_mode=FROZEN_FAST_INTEGRITY\ngold_deep_geometry_revalidation=false\ncandidate_blind=true\nproduction_ready=false", flush=True)
+    print(f"reviewer_release={RELEASE}\nvalidation_mode=FROZEN_FAST_INTEGRITY\ngold_deep_geometry_revalidation=false\nframe_asset_decode_validation=false\nframe_assets_decoded=0\nmaximum_zoom=24x\ncandidate_blind=true\nproduction_ready=false", flush=True)
     if args.phase == "serve":
         print(f'reviewer_release={RELEASE}\nsequence={result["gold_sequence_id"]}\ncandidate_blind=true\ncontext_video_ui=false\nproduction_ready=false\ncanonical_gold_mutation=false\nURL=http://127.0.0.1:{args.port}/', flush=True)
         serve(r1.PILOT, r1.REAL, port=args.port)

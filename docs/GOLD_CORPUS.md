@@ -67,6 +67,8 @@ The G7G-B R2 fast-launch repair separates byte integrity from semantic audit. No
 
 The G7G-B R3 zoom repair is a separate display-only release: 24× maximum relative to FIT, source-pixel image rendering above 8×, unchanged polygon/component/ignore/ball source coordinates. R1/R2 bundles and configs remain immutable. The current R3 gate keeps the exact same fast Gold and pilot-asset checks and accepts authentic staged R1/R2/R3 event provenance. Its lifecycle validation is unchanged except for the additional frozen R2 identity in the accepted release set. R3 is also staging-only: future ingestion requires separately authorized explicit release bindings; no Gold release or real annotation was created by this repair.
 
+The G7G-B R4 launch optimization uses exact audited PNG byte identity instead of decoding immutable panoramas on every launch. The SHA-bound parent/pilot manifests retain all nine ordered frame IDs, paths, dimensions and source RGB hashes; the unchanged R3 constructor checks each PNG file SHA once. Normal check/serve/close decodes zero historical PNGs. Deliberate `audit-assets` independently decodes all nine, checks dimensions and RGB hashes; full `audit` also includes the unchanged Gold semantic validator. New staged DETECTION geometry, acknowledgements and temporal closure remain strictly validated. Direct runner imports of OpenCV/NumPy moved into the asset-audit function; existing frozen truth dependencies still import them transitively. Neither Gold nor annotation contracts were changed.
+
 | Layer | Human truth |
 | --- | --- |
 | DETECTION | A frame's individually evaluable visible-human masks, relevance and ignore regions. |

@@ -51,6 +51,7 @@ def check(root: Path) -> dict:
         "G7G_B_R1_TEMPORAL_REVIEWER_USABILITY_AND_SEQUENTIAL_FLOW_REPAIR_v1",
         "G7G_B_R2_FAST_LAUNCH_GATE_AND_GOLD_VALIDATION_PERFORMANCE_REPAIR_v1",
         "G7G_B_R3_TEMPORAL_REVIEWER_HIGH_MAGNIFICATION_ZOOM_REPAIR_v1",
+        "G7G_B_R4_FAST_FRAME_ASSET_LAUNCH_VALIDATION_REPAIR_v1",
     }:
         assert status["stage_status"] == "READY_FOR_HUMAN_PILOT"
         assert status["last_completed_stage"] == "G7G_A_TEMPORAL_GOLD_CORPUS_AND_SEQUENCE_FOUNDATION_v1"
@@ -59,7 +60,7 @@ def check(root: Path) -> dict:
         assert gold["detection_gold_frames"] == 16 and gold["detection_gold_people"] == 862
         assert gold["layers_available"] == ["DETECTION"]
         assert status["temporal_gold"] == {
-            "status": ("SINGLE_SEQUENCE_PILOT_AUTHORIZED_WITH_R3_REVIEWER" if status["current_stage"].startswith("G7G_B_R3_")
+            "status": ("SINGLE_SEQUENCE_PILOT_AUTHORIZED_WITH_R3_REVIEWER" if status["current_stage"].startswith(("G7G_B_R3_", "G7G_B_R4_"))
                        else "SINGLE_SEQUENCE_PILOT_AUTHORIZED" if status["current_stage"] == "G7G_B_TEMPORAL_GOLD_HUMAN_PILOT_v1"
                        else "SINGLE_SEQUENCE_PILOT_AUTHORIZED_WITH_R2_REVIEWER"),
             "primary_sequences": 6,

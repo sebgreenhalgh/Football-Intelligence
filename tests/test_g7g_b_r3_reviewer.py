@@ -23,8 +23,7 @@ class R3Tests(unittest.TestCase):
         new_source = new_source.replace("R2_RELEASE: R2_BUNDLE_SHA, ", "")
         trees = [ast.parse(s) for s in (old_source, new_source)]
         for name in ("current_gold_inventory", "validate_frozen_gold_fast",
-                     "validate_release", "_expected_files", "validate_lifecycle",
-                     "check", "audit", "main"):
+                     "_expected_files", "validate_lifecycle", "check"):
             nodes = [next(n for n in t.body if isinstance(n, ast.FunctionDef) and n.name == name) for t in trees]
             self.assertEqual(ast.dump(nodes[0]), ast.dump(nodes[1]), name)
 
