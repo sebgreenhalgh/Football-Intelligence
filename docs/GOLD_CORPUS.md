@@ -63,6 +63,8 @@ The G7G-B R1 usability repair releases a separate R2 reviewer and gate, `scripts
 
 R2 is staging-only: existing ingestion adapters still pin the R1 reviewer binding. A separately authorized ingestion stage must explicitly accept and verify the frozen R2 provenance; it must not relax unknown-release rejection. The real root remained empty during this repair and the active corpus is still DETECTION-only.
 
+The G7G-B R2 fast-launch repair separates byte integrity from semantic audit. Normal R2 `check`/`serve`/`close` verifies all 458 frozen Gold files against the SHA-bound before-inventory, both manifest hashes, immutable snapshots and 16-frame/862-person DETECTION-only counts. It verifies the exact authorized nine PNGs, decoded RGB/dimensions and read-only anchor event/index binding, without opening other sequences' assets or full source videos. It does not rasterize historical masks. Strict reconstruction of newly finalized staged events is unchanged. `audit` deliberately calls the unchanged `GoldCorpus.validate()` with full geometry/provenance semantics; `fi-gold validate` also retains its original semantics. Full semantic validation remains required for ingestion, release, migration or integrity investigation. The original R2 config and UI remain immutable; only the launch binding is versioned as `temporal_r2_launch_v2.json`.
+
 | Layer | Human truth |
 | --- | --- |
 | DETECTION | A frame's individually evaluable visible-human masks, relevance and ignore regions. |

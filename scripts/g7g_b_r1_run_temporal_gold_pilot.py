@@ -6,12 +6,17 @@ an existing R1 draft or finalized event is opened with the R2 release.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import sys
+import time
 from pathlib import Path
+import cv2
+import numpy as np
 from football_intelligence.calibration_adjudication import editable_document
 from football_intelligence.dense_person_gold import ACK_SCHEMA as DENSE_ACK, EVENT_SCHEMA as DENSE_EVENT, build_final_event
-from football_intelligence.gold.corpus import canonical, file_hash, require
-from football_intelligence.gold.temporal import SCHEMAS, completion_receipt, validate_ball, validate_event_pair, validate_match_state, validate_tracklet
+from football_intelligence.gold.corpus import GoldCorpus, canonical, file_hash, require
+from football_intelligence.gold.temporal import SCHEMAS, completion_receipt, validate_ball, validate_event_pair, validate_match_state, validate_sequence, validate_tracklet
 from football_intelligence.gold.temporal_ingest import FROZEN_REVIEWER_SHA256, FROZEN_TEMPORAL_SCHEMA_SHA256
 from football_intelligence.gold.temporal_reviewer import RELEASE as R1_RELEASE
 from football_intelligence.gold.temporal_reviewer_r2 import RELEASE, REPO, TemporalReviewer, serve
@@ -20,21 +25,98 @@ try:
 except ModuleNotFoundError:
     import g7g_b_run_temporal_gold_pilot as r1
 
-RELEASE_CONFIG = REPO / "configs/reviewers/temporal_r2.json"
+ORIGINAL_RELEASE_CONFIG = REPO / "configs/reviewers/temporal_r2.json"
+ORIGINAL_RELEASE_CONFIG_SHA = "23c9b380f48b3f85eb44c425de39b44a2d9d0662db61737093340365c1f30c8c"
+RELEASE_CONFIG = REPO / "configs/reviewers/temporal_r2_launch_v2.json"
+RUNNER_PATH = "scripts/g7g_b_r1_run_temporal_gold_pilot.py"
+EXPECTED_GOLD_COUNTS = (16, 862)
+PILOT_SEQUENCE_ID = "gs-e914de8720aa2b7a6cc9fb6fcd87257ead144a08d3ce3157b42dfab5dc5cdb82"
+
+
+def current_gold_inventory():
+    """Same exact path/size/SHA inventory contract as the audited G7G-B anchor."""
+    files = [{"path": p.relative_to(r1.GOLD).as_posix(), "bytes": p.stat().st_size, "sha256": file_hash(p)}
+             for p in sorted(r1.GOLD.rglob("*")) if p.is_file()]
+    lines = [f"{row['path']}|{row['bytes']}|{row['sha256']}" for row in files]
+    tree_sha = hashlib.sha256(("\n".join(lines) + "\n").encode()).hexdigest()
+    return {"schema_version": "football_intelligence.g7g_b.gold_inventory.v1", "canonical_root": str(r1.GOLD),
+            "file_count": len(files), "tree_sha256": tree_sha, "files": files}
+
+
+def validate_frozen_gold_fast():
+    """Prove identity to already audited bytes, without semantic recomputation."""
+    require(file_hash(r1.BEFORE) == r1.BEFORE_SHA, "Frozen Gold before-inventory changed")
+    require(file_hash(r1.GOLD / "corpus_manifest.json") == r1.GOLD_SHA, "Gold corpus manifest changed")
+    require(file_hash(r1.GOLD / "releases/gold-v0.1.0/manifest.json") == r1.RELEASE_SHA, "Gold release manifest changed")
+    inventory = current_gold_inventory()
+    require(inventory == json.loads(r1.BEFORE.read_bytes()), "Frozen Gold inventory mismatch")
+    corpus = GoldCorpus(r1.GOLD)
+    manifest = corpus.manifest()
+    stats = manifest["statistics"]
+    require((stats["detection_gold_frames"], stats["detection_gold_people"]) == EXPECTED_GOLD_COUNTS, "Canonical Gold counts changed")
+    require(manifest["layers_available"] == ["DETECTION"], "Unexpected active Gold layer")
+    return corpus, {"gold_inventory_sha256": inventory["tree_sha256"], "frozen_gold_files_hashed": inventory["file_count"],
+                    "gold_manifest_sha256": r1.GOLD_SHA, "gold_release_manifest_sha256": r1.RELEASE_SHA}
+
+
+def validate_launch_binding():
+    require(file_hash(ORIGINAL_RELEASE_CONFIG) == ORIGINAL_RELEASE_CONFIG_SHA, "Original R2 release config changed")
+    original = json.loads(ORIGINAL_RELEASE_CONFIG.read_bytes())
+    binding = json.loads(RELEASE_CONFIG.read_bytes())
+    require(binding["supersedes_config_sha256"] == ORIGINAL_RELEASE_CONFIG_SHA, "Launch binding predecessor changed")
+    require(binding["reviewer_release"] == original["reviewer_release"] == RELEASE, "Wrong R2 release")
+    # Only the launch runner binding may change. The accepted reviewer/UI stays frozen.
+    require(set(binding["source_sha256"]) == set(original["source_sha256"]), "Release source set changed")
+    for relative, sha in binding["source_sha256"].items():
+        require(relative == RUNNER_PATH or sha == original["source_sha256"][relative], "Non-launch source binding changed")
+        path = (REPO / relative).resolve(strict=True)
+        require(path.is_relative_to(REPO) and file_hash(path) == sha, "R2 source hash changed: " + relative)
+    require(binding["reviewer_sha256"] == original["reviewer_sha256"], "Accepted R2 bundle binding changed")
+    require(binding["pilot_selection_sha256"] == original["pilot_selection_sha256"] == r1.PILOT_SHA, "R2 pilot binding changed")
+    for layer, name in r1.SCHEMA_NAMES.items():
+        require(file_hash(r1.SCHEMA_ROOT / name) == FROZEN_TEMPORAL_SCHEMA_SHA256[layer], "Frozen temporal schema changed")
+    return binding
 
 
 def validate_release():
-    _, sequence = r1.validate_release()  # Frozen R1, source assets, scope and full Gold inventory.
-    binding = json.loads(RELEASE_CONFIG.read_bytes())
-    require(binding["reviewer_release"] == RELEASE, "Wrong R2 release")
-    for relative, sha in binding["source_sha256"].items():
-        path = (REPO / relative).resolve(strict=True)
-        require(path.is_relative_to(REPO) and file_hash(path) == sha, "R2 source hash changed: " + relative)
+    start = time.perf_counter()
+    require(file_hash(r1.PARENT) == r1.PARENT_SHA and file_hash(r1.PILOT) == r1.PILOT_SHA, "Frozen parent/pilot selection changed")
+    require(r1.REAL.is_dir(), "Authorized real decision root missing")
+    asset_link = r1.STAGE / "sequence_assets"
+    require(asset_link.is_dir() and asset_link.resolve() == (r1.PARENT.parent / "sequence_assets").resolve(), "Pilot asset binding changed")
+    corpus, integrity = validate_frozen_gold_fast()
+    binding = validate_launch_binding()
+    parent, pilot = json.loads(r1.PARENT.read_bytes()), json.loads(r1.PILOT.read_bytes())
+    require(parent["candidate_data_used"] is False and pilot["candidate_data_used"] is False, "Candidate-exposed selection")
+    sequence = next(row for row in parent["sequences"] if row["role"] == "PRIMARY")
+    require(pilot["pilot_sequence_count"] == 1 and pilot["sequences"] == [sequence], "Pilot is not exact first PRIMARY subset")
+    require(sequence["gold_sequence_id"] == PILOT_SEQUENCE_ID, "Unauthorized pilot sequence")
+    require(pilot["parent_selection_path"] == str(r1.PARENT) and pilot["parent_selection_sha256"] == r1.PARENT_SHA and pilot["selection_method"] == "FROZEN_MANIFEST_FIRST_PRIMARY", "Pilot provenance changed")
+    require(pilot["gold_corpus_manifest_sha256"] == r1.GOLD_SHA and pilot["gold_release_manifest_sha256"] == r1.RELEASE_SHA and pilot["gold_release"] == "gold-v0.1.0", "Pilot Gold binding changed")
+    frames = validate_sequence(pilot, sequence)
+    require(sum(f["detection_read_only"] is True for f in frames) == 1 and sum(f["detection_read_only"] is False for f in frames) == 8, "Pilot anchor coverage changed")
+    anchors = [row for row in corpus.annotations(layer="DETECTION") if row["gold_frame_id"] == sequence["anchor_gold_frame_id"]]
+    require(len(anchors) == 1 and anchors[0]["annotation_event_sha256"] == sequence["anchor_detection_event_sha256"], "Canonical anchor event/index mismatch")
+    anchor = anchors[0]
+    event = json.loads(corpus.get(sequence["anchor_detection_event_sha256"]))
+    expected = {"source_frame_sha256": frames[4]["source_rgb_sha256"], "source_width": sequence["source_width"], "source_height": sequence["source_height"]}
+    require(all(anchor[key] == event[key] == value for key, value in expected.items()), "Anchor event/index/source-frame binding changed")
+    for frame in frames:
+        asset = r1.PILOT.parent / frame["asset_path"]
+        require(file_hash(asset) == frame["asset_sha256"], "Pilot frame asset hash changed")
+        pixels = cv2.imdecode(np.frombuffer(asset.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+        require(pixels is not None and pixels.shape[:2] == (sequence["source_height"], sequence["source_width"]), "Pilot frame dimensions changed")
+        require(hashlib.sha256(cv2.cvtColor(pixels, cv2.COLOR_BGR2RGB).tobytes()).hexdigest() == frame["source_rgb_sha256"], "Pilot source RGB hash changed")
+    # Constructor still verifies its nine assets and small frozen context derivative.
+    # No source video is opened and no unrelated sequence asset is inspected.
     reviewer = TemporalReviewer(r1.PILOT, r1.REAL, gold_root=r1.GOLD)
     require(reviewer.reviewer_sha256 == binding["reviewer_sha256"], "R2 bundle hash changed")
     boot = reviewer.bootstrap()
     require(boot["candidate_blind"] and boot["context_video_ui"] is False and len(boot["sequences"]) == 1, "R2 scope/blindness changed")
-    require(binding["pilot_selection_sha256"] == reviewer.selection_sha256 == r1.PILOT_SHA, "R2 pilot binding changed")
+    reviewer.fast_integrity = {**integrity, "validation_mode": "FROZEN_FAST_INTEGRITY",
+        "gold_deep_geometry_revalidation": False, "historical_mask_rerasterizations": 0,
+        "frame_assets_decoded": len(frames), "full_source_videos_hashed": 0,
+        "release_validation_elapsed_seconds": time.perf_counter() - start}
     return reviewer, sequence
 
 
@@ -130,18 +212,39 @@ def check():
     return {"status": "G7G_B_R2_PILOT_CHECK_VALID", "reviewer_release": RELEASE,
             "reviewer_sha256": reviewer.reviewer_sha256, "context_video_ui": False,
             "pilot_selection_sha256": reviewer.selection_sha256, "authorized_sequences": 1,
+            **reviewer.fast_integrity,
             **validate_lifecycle(reviewer, sequence)}
+
+
+def audit():
+    print("Performing expensive deep Gold semantic audit; masks and source provenance will be revalidated.", flush=True)
+    start = time.perf_counter()
+    result = check()
+    gold = GoldCorpus(r1.GOLD).validate()
+    # Rebind after the audit too, rejecting any intervening byte change.
+    _, integrity = validate_frozen_gold_fast()
+    return {**result, **integrity, "status": "G7G_B_R2_FULL_AUDIT_VALID", "validation_mode": "FULL_GOLD_SEMANTIC_AUDIT",
+            "gold_deep_geometry_revalidation": True, "historical_mask_rerasterizations": "performed_by_unchanged_full_validator",
+            "deep_gold_result": gold, "audit_elapsed_seconds": time.perf_counter() - start}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("check", "serve", "close"))
+    parser.add_argument("phase", choices=("check", "serve", "close", "audit"))
     parser.add_argument("--port", type=int, default=8793)
     args = parser.parse_args()
+    if args.phase == "audit":
+        try:
+            print(json.dumps(audit(), indent=2, sort_keys=True), flush=True)
+            return 0
+        except KeyboardInterrupt:
+            print("AUDIT_INTERRUPTED", flush=True)
+            return 130
     result = check()
     if args.phase == "close":
         result["status"] = "COMPLETE_STAGED_NOT_INGESTED" if result["lifecycle_state"] == "COMPLETE" else "PILOT_INCOMPLETE"
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
+    print(f"reviewer_release={RELEASE}\nvalidation_mode=FROZEN_FAST_INTEGRITY\ngold_deep_geometry_revalidation=false\ncandidate_blind=true\nproduction_ready=false", flush=True)
     if args.phase == "serve":
         print(f'reviewer_release={RELEASE}\nsequence={result["gold_sequence_id"]}\ncandidate_blind=true\ncontext_video_ui=false\nproduction_ready=false\ncanonical_gold_mutation=false\nURL=http://127.0.0.1:{args.port}/', flush=True)
         serve(r1.PILOT, r1.REAL, port=args.port)

@@ -1,0 +1,43 @@
+{
+  "bundle_source_sha256": {
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2.py": "2d06808a7adaf53f2431217bae2c0c1d6881704a6c3f30be612a3b251bbbcee1",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\app.js": "6444d3532f93d6ef6416ab4277042a1f177c7bdc7710d2b188ae1015ba6b0d5b",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\index.html": "aa4d3f88188a77925d2e3cadba77836d50174e47e1ae205e042ba5f61e9f0c9d",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\styles.css": "17d68270c67484942a69959fd243b9e34d63324269f613edd8680498e468baf3",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\view.js": "be639fa9f4be82fd5662577dcb37fbf0c1fb3dd188d300ea4b66e0a06f00b830"
+  },
+  "candidate_blind": true,
+  "canonical_gold_mutation": false,
+  "context_video_ui": false,
+  "gold_adapters_changed": false,
+  "pilot_selection_sha256": "2499484bf32206b9769c271c0b36d577a708ae87588d7d2d75cdfd279549f196",
+  "production_ready": false,
+  "r1_reviewer_sha256": "147e28c8844b53387be5f9fc9cb87bf34dd6431d98deace0882f15d6b3aafd3f",
+  "reviewer_release": "G7G_B_TEMPORAL_GOLD_REVIEWER_R2",
+  "reviewer_sha256": "aeef4e75ce0afb9291db78ec9a966c0d5d6b5ca9c0d9ff5607472954bd54fef0",
+  "schema_version": "football_intelligence.g7g_b.reviewer_release.v2",
+  "source_sha256": {
+    "schemas/gold/ball_sequence.v1.json": "6e7710b731f2a383cefd8c49d5146c73f4da4722dd324aa24c0f60c450eb6631",
+    "schemas/gold/match_state_sequence.v1.json": "d2c8782da7e12bd9ea5e6d6a491855b6681c77caab859937d3d7ee5e877e90c1",
+    "schemas/gold/temporal_acknowledgement.v1.json": "d2f1d6d15a298d1140322a08ad1654f8c8b17917a94f6ad8fee6f1674f61f406",
+    "schemas/gold/tracklet_sequence.v1.json": "6257dfae0bd87a7cd5d30adbf0452ae9df2ac6429d4b4af5a22c75c2cf6cce35",
+    "scripts/g7g_b_r1_run_temporal_gold_pilot.py": "86ab59f44e47ea5be602c611800be5092f98dae4815876479c80cee0386c1048",
+    "scripts/g7g_b_run_temporal_gold_pilot.py": "b2f1de0bbce163677c54a2c5ec363e84eb76e78b3feacb6bf942fef2665636ba",
+    "src/football_intelligence/gold/temporal.py": "b6800928a4e147d0788db277c7f622be418cd1abf054ad204f3add091de3cd58",
+    "src/football_intelligence/gold/temporal_ingest.py": "9d252d836612eae9dd8d7ffefa6355ab6dc7e375f310e8d9885091423f4203bc",
+    "src/football_intelligence/gold/temporal_reviewer.py": "9b0317fe9b650166a6d26b886eba0b37986a2745898b9c1aef8eecebb9ea444d",
+    "src/football_intelligence/gold/temporal_reviewer_static/app.js": "3ad7060fe7470b9e86bf57dfe47f80b9b79b459b0c6533a6714134aa45b5225f",
+    "src/football_intelligence/gold/temporal_reviewer_static/index.html": "384cd30d6a57bd14878c5fe997f839e534da246b95ad0f5dcad86e082df5e1d7",
+    "src/football_intelligence/gold/temporal_reviewer_static/styles.css": "9a6dc73f326fbfa9f38124f87e133f328cd14593f861bd5e0cd4bd061ed34a8b",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2.py": "2d06808a7adaf53f2431217bae2c0c1d6881704a6c3f30be612a3b251bbbcee1",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\app.js": "6444d3532f93d6ef6416ab4277042a1f177c7bdc7710d2b188ae1015ba6b0d5b",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\index.html": "aa4d3f88188a77925d2e3cadba77836d50174e47e1ae205e042ba5f61e9f0c9d",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\styles.css": "17d68270c67484942a69959fd243b9e34d63324269f613edd8680498e468baf3",
+    "src\\football_intelligence\\gold\\temporal_reviewer_r2_static\\view.js": "be639fa9f4be82fd5662577dcb37fbf0c1fb3dd188d300ea4b66e0a06f00b830"
+  },
+  "starting_code_commit": "48df70256b12dd0b89f7a0c9043474d1417368b6",
+  "truth_builders_changed": false,
+  "truth_schemas_changed": false,
+  "supersedes_config_sha256": "23c9b380f48b3f85eb44c425de39b44a2d9d0662db61737093340365c1f30c8c",
+  "launch_binding_version": 2
+}
